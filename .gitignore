@@ -1,0 +1,72 @@
+.codegraph/
+.git.codex-baseline/
+.DS_Store
+.env.local
+
+# 运行日志、日志轮转文件和日志目录
+*.log
+*.log.*
+log/
+logs/
+
+# 编译、打包和测试产物
+# 无扩展名可执行文件统一输出到这些目录；Git 无法仅按文件权限通用区分源码和二进制
+bin/
+build/
+dist/
+out/
+release/
+target/
+obj/
+coverage/
+cmake-build-*/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+*.obj
+*.bin
+*.out
+*.test
+*.test.exe
+*.prof
+coverage.out
+
+# Go、TypeScript 和其他语言工具链缓存
+*.tsbuildinfo
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.cache/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+.gradle/
+CMakeFiles/
+
+# 临时文件和编辑器交换文件
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.#*
+*.pid
+*.pid.lock
+Thumbs.db
+
+# gsrdemo 本地 workspace 与私密配置
+/go.work
+/go.work.sum
+.env
+.env.*
+!.env.example
+/configs/*.local.json
+/configs/*.local.yaml

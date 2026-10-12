@@ -1,0 +1,10 @@
+go 1.24.0
+
+use (
+	./common
+	./nodes/access
+	./nodes/login
+	./nodes/mole
+	./nodes/online
+	./nodes/settlement
+)

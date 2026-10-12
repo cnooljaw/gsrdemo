@@ -1,0 +1,21 @@
+{
+  "name": "gsrdemo-typeclient",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "check": "tsc --project tsconfig.json --noEmit",
+    "build": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.15.0"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "1.73.0",
+    "@bufbuild/protoc-gen-es": "2.15.0",
+    "@types/node": "22.20.3",
+    "typescript": "5.9.3"
+  }
+}
