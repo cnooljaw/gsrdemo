@@ -1,10 +1,10 @@
-# GSR 业务验证项目方案（修订版）
+# GSR Demo 业务设计
 
-日期：2026-10-12。本文是实施方案；尚未通过运行验证。恢复策略等新增取舍按本文建议实施，不把它们作为 GSR 框架契约。
+本文记录业务设计、实施验收与参考基线。当前只完成诊断通信；登录、多人玩法、数据库结算及恢复仍待实现。全部消息与字段集中在 [协议规划](PROTOCOL.md)，工作规则见 [AGENTS.md](../AGENTS.md)。
 
 ## 1. 范围与边界
 
-主目录为 `gsrdemo`，一个 Git 仓库管理多个独立项目：每个节点角色一个 Go module，共享代码放独立 `common` module，`typeclient` 是独立 TypeScript 项目。同角色的多个节点实例共用项目，以配置区分。节点依赖 `github.com/cnooljaw/gsr` 和 common，不导入其他节点的实现包。`../gsr`、`../../skynet_bt/nbgameserver` 与 `../GoServerActorFsm` 严格只读；源码、协议、配置和生成结果全部放在本项目。GSR 1.0 为本地完成基线，尚未发布；每个节点 go.mod 以占位版本 v0.0.0 加本地 replace 引用只读 ../gsr。本地 go.work 只组装本仓库 module，关闭 workspace 也沿用各节点的本地依赖声明。依赖及参考 revision 见 [REFERENCES.md](REFERENCES.md)。本地 replace 不冻结源码，GSR checkout 变化需核对基线；以后正式发布再改为固定发布版本。
+一个 Git 仓库管理多个独立项目：每节点角色一个 Go module，同角色多实例用配置区分；common 为共享 Go module，typeclient 为独立 TypeScript 项目。节点依赖 GSR/common，不导入彼此 internal。common 按实际调用提取值对象、命令及协议，不放 Service、SQL、可变游戏状态或宿主组装。三个参考目录严格只读，本地 GSR 依赖及阅读来源见本文末尾。
 
 首版仅使用整数积分，不涉及真钱。先用 TypeScript 命令行客户端和机器人，完成“用户名密码登录 → 打地鼠 → 持久化积分 → 故障恢复”，再加入三人斗地主。Redis 不进入首版闭环。
 
@@ -16,9 +16,9 @@
 
 | 节点 | 内部运行单元 | 职责 |
 | --- | --- | --- |
-| access-01 | Gate、每连接一个 Agent | 唯一客户端接入、连接状态机、协议准入、认证身份、已确认位置/阶段快照、客户端写回 |
+| access-01 | Gate、每连接一个 Agent | 唯一客户端接入、已确认会话、协议准入、待确认操作、位置/阶段快照、客户端写回 |
 | login-01 | 少量有界 AuthService | 账号校验、第三方验证、身份映射 |
-| online-01 | OnlineService | 用户位置与迁移状态机、绑定/进入/离开协调、房间阶段投影 |
+| online-01 | OnlineService | 用户位置、待确认操作、绑定/进入/离开协调、房间阶段投影 |
 | mole-01 | RoomDirectory、每组一个 MoleRoomService、SettlementRecoveryService | 分组与座位、共享地鼠、个人计分、持久化全组局末结果、恢复结算 |
 | landlord-01 | RoomDirectory、每房间一个 LandlordRoomService、SettlementRecoveryService | 房间创建、座位/手牌/回合、持久化局末结果、恢复结算 |
 | settlement-01 | SettlementService | 积分、结算记录、幂等账本 |
@@ -31,7 +31,7 @@ MainService 显式创建并命名 Service，开放 Cluster/Gate。RoomDirectory 
 
 | owner | 权威状态 | 禁止承担的职责 |
 | --- | --- | --- |
-| Agent | 本连接 UserID、LoginID、连接状态机；持有已确认位置、游戏路由和房间阶段快照 | 积分余额、手牌、命中判定、自行确认位置变化 |
+| Agent | 本连接已确认会话及待确认操作；持有位置、游戏路由和房间阶段快照 | 积分余额、手牌、命中判定、自行确认位置变化 |
 | Login | 账号和第三方身份到 UserID 的映射 | 在线目录、游戏状态 |
 | Online | 当前接入/大厅/房间位置、进行中的位置迁移；持有房间阶段的版本投影 | 游戏阶段自行推进、游戏规则、积分修改 |
 | RoomService | 该房间全部游戏状态、玩家当前 LoginID/推送地址、绑定令牌、回合和状态版本 | 持久化积分余额修改 |
@@ -40,11 +40,15 @@ MainService 显式创建并命名 Service，开放 Cluster/Gate。RoomDirectory 
 
 MySQL 是外部依赖；`*sql.DB` 连接池由进程宿主管理，在 Runtime 停止后关闭。连接池可以并发使用，业务对象和可变游戏状态不能跨 Service 共享。跨消息传递的是独占快照。
 
-Online 记录包含：UserID、LoginID、接入 Node/AgentName、大厅/房间位置、游戏 Node/RoomID/RoomName、BindingToken、LocationVersion、房间阶段及 RoomStateVersion、连接状态、目录操作 OperationID、流程状态。RoomID 跨重启不复用；RoomName 含 RoomID，不能让旧路由命中新建房间。
+Online 保存已确认身份/接入、可选房间路由、位置版本、可选阶段快照、Connected 和一条可选 PendingOperation。没有房间路由即大厅，不另存流程状态枚举。字段及版本规则见 [协议规划](PROTOCOL.md)。RoomID 跨重启不复用，RoomName 含 RoomID，旧路由不能命中新建房间。
 
 LoginID 是随机且不可复用的业务登录关联标识，不是 Core Session，也不向 Runtime 引入 epoch/lease。绑定令牌是 RoomService 的业务比较并更新凭据，不是 ServiceID。
 
-用户是有状态的。客户端始终只连 access，Agent 依据连接状态、已确认位置及房间阶段决定准入协议，再由 Room 验证业务操作。Online 协调位置变化并持有低频阶段投影；两者通过有版本的快照同步，不共同修改一份可变 User 对象。状态、允许协议表、消息同步及失败用例见 [用户状态契约](USER-SESSION.md)。
+用户只分未登录、大厅、房间，由已确认会话/路由推导；Online 不存未登录连接。房间只分等待、进行、结束，两个游戏各自显式迁移；新局创建新 RoomID。认证、RPC 等待、保存和结算步骤不增加状态，也不以重复布尔值重建复杂状态机。客户端始终只连 access，Agent/Online 按同一位置策略准入协议，Room 再验证业务条件。
+
+PendingOperation 存在时只允许本连接查询/核对原操作，已确认位置保留不动；处理中和结果未知使用同一规则，确定结果后才清除记录。断线只更新 Connected，保留房间、未确认操作及结算资格。关闭由 Agent 生命周期处理，登录后换账号需建立新连接。排队请求在 Handler 实际处理时检查当前数据，不为同步 Call 等待增设状态。
+
+Online 是位置唯一 owner，Room 是游戏阶段唯一 owner。access/Online 的阶段只是有版本的观察值，可能滞后；Room 的阶段 Send 不修改 Agent 路由。Online 有界分批核对阶段，Agent 可直接向当前 Room 查询快照；缺少观察时先同步，再开放游戏写操作。Room 再检查实际阶段，结束后仍显示进行中的旧缓存不能让命中/出牌生效。
 
 ## 4. 登录、进房与连接切换
 
@@ -64,17 +68,17 @@ LoginID 是随机且不可复用的业务登录关联标识，不是 Core Sessio
 
 控制链路为：`Agent → Online → 游戏节点 RoomDirectory/RoomService → Online 确认 → Agent`。这是对原方案调用链的细化：Online 协调低频的位置变化，热点游戏命令仍从 Agent 直达房间。
 
-同一用户最多一个未完成的位置变化。流程状态至少区分 `active`、`transitioning`、`uncertain`、`disconnected`。每次操作保存旧位置、目标位置和 OperationID，收到可确认结果后才切换为 active。
+同一用户最多一条 PendingOperation，记录 OperationID、操作内容、目标位置及比较绑定信息。已确认位置在操作期间保留不动；有记录就拒绝另一位置操作，只允许查询原操作。处理中和结果未知采用同一规则，不另设流程枚举。收到确定成功才安装目标位置，明确拒绝则保留原位置，再清除待确认记录并保留有界确定结果。
 
-RoomService 提供业务 `CompareAndBind`：请求包含 RoomID、UserID、OperationID、ExpectedBindingToken、目标 LoginID 和推送地址。只在当前令牌匹配时替换玩家绑定，同时产生新令牌。同一 OperationID、相同内容重试不重复应用；内容不同返回冲突。
+RoomService 的 CompareAndBind 只在当前绑定令牌匹配时替换玩家连接，同时产生新令牌。同一操作、相同内容重试不重复应用，改内容返回冲突；具体载荷见协议规划。
 
 初次入座也使用房间分配的令牌；移除玩家后仍保留对应代次信息或操作墓碑，不能简单重置为空而允许迟到请求重新匹配。房间销毁后新房间使用新 RoomID。幂等记录有明确保留范围，过期操作被拒绝，不能重新执行。
 
 例如 A→B 已完成，随后 B→C 已完成，迟到的 A→B 请求因旧令牌不匹配不能把 C 改回 B。不能把“LoginID 不同就覆盖”作为重连规则。
 
-Call 超时后，Online 保留该用户的 uncertain 操作，查询目标房间实际绑定/操作结果，或以相同令牌和 OperationID 重试；确认结果后才允许下一次位置变化。一次“尚未找到”不能证明先前请求不会迟到执行。其他用户可以继续绑定，每次 Handler 的外部等待必须有有限预算。
+Call 超时后，Online 保留该用户的 PendingOperation，查询目标房间实际绑定/操作结果，或以相同令牌和 OperationID 重试；确定结果后才允许下一次位置变化。一次“尚未找到”不能证明先前请求不会迟到执行。其他用户可以继续绑定，每次 Handler 的外部等待必须有有限预算。
 
-离开也通过 Online 协调：房间移除确认后再清理目录，Agent 收到确定结果才返回大厅并移除游戏路由。首个完整 demo 只在 filling、settled 阶段允许离开；进行中及未完成结算阶段保留本局位置。斗地主断线只标记 disconnected，保留座位并按游戏规则托管。位置清理是带 LoginID/操作令牌条件的更新，禁止无条件按 UserID 删除。
+离开也通过 Online 协调：房间移除确认后再清理目录，Agent 收到确定结果才返回大厅并移除游戏路由。首版 filling 允许离开，running 拒绝离开；ended 统一接受离开请求，再由 Room 检查匹配的到账回执，未确认时返回待结算且不移除成员。断线只将 Connected 标记为 false，保留座位、待确认操作和结算资格。位置清理是带 LoginID/操作令牌条件的更新，禁止无条件按 UserID 删除。
 
 ### 4.3 旧连接与操作授权
 
@@ -96,27 +100,13 @@ Online 不可用时拒绝新绑定、进房、跨房间迁移和重连绑定；�
 
 保留房间的 Online 在线重建是后续可用性改进，需要冻结位置迁移、隔离旧在途命令、枚举权威房间绑定并处理期间变更；首版不把“启动后拉取一次列表”当成完整重建。
 
-## 6. 游戏命令、幂等和推送
+## 6. 游戏调用与推送
 
 热点链路：`Client → Agent → Cluster.Call(RoomName, Command) → Agent 回复`。
 
 广播链路：`RoomService → Cluster.Send(access Node, AgentName, Push Command) → Agent.Handle → protocolDispatcher.Push → Client`。RoomService 不逐个 Call Agent；推送请求带目标 LoginID，Agent 拒绝不匹配的旧推送。
 
-Agent 在协议 Handler 调用业务节点前，按 [状态与协议表](USER-SESSION.md) 默认拒绝不适用的消息。Room 阶段由 Room 推进，向 Agent 推送可见状态、向 Online Send 低频投影；两处接收者匹配 LoginID/RoomID/BindingToken，再比较房间版本。Room 推送不能改变 Agent 的位置路由。阶段可能暂时滞后，快照查询必须始终保留；Room 再检查当前阶段，保证结束后的命中/出牌不生效。Online 不进入每次命中/出牌的热点链路。
-
-每条写命令定义自己的重复语义：
-
-| 命令 | 去重/过期依据 | 超时后的处理 |
-| --- | --- | --- |
-| Bind / Enter / Leave / Reconnect | OperationID、内容、绑定令牌 | 查询操作结果；原 ID 条件重试 |
-| StartRound（打地鼠为服务端满员触发） | RoomID、成员集合、当前局状态 | 客户端查询快照；不重新触发第二局 |
-| Hit | UserID、RoundID、MoleInstanceID、HitOperationID | 原 ID 查询/重试；每实例最多记分一次 |
-| Play / Pass / Ready | RoundID、TurnID/准备版本、OperationID | 查询结果和快照；拒绝旧回合，不改写为新回合命令 |
-| SubmitSettlement | SettlementID、规范化结果内容 | 查结算；原 ID 重试 |
-
-协议 Envelope.request_id 只关联客户端响应，不作为跨重连业务幂等键。操作结果缓存有界；局结束或窗口结束后仍拒绝旧局号/旧回合，不因缓存淘汰再次执行。只读查询可重试。
-
-快照和推送带 RoomID、RoundID、StateVersion；版本在权威状态变化时单调增加。客户端在新快照后丢弃旧版本，发现增量缺口时请求快照；首版优先发小型可独立应用的完整可见状态。响应和推送到达顺序不作为业务正确性的依据。重连清空旧客户端待处理操作，以新快照恢复。
+Agent 在协议 Handler 中先做状态准入，Room 再校验绑定与游戏条件。Room 阶段变化向 Agent Send 完整可见状态、向 Online Send 低频投影，不在每次命中/出牌更新目录。消息、版本过滤、超时/重复操作和准入表统一见 [协议规划](PROTOCOL.md)。
 
 斗地主的公共状态与私人手牌分别生成，各 Agent 只收到本人可见内容，不能广播全部手牌后交给客户端隐藏。
 
@@ -159,11 +149,11 @@ GSR After 是一次性触发，Mailbox 满时触发可能丢失。因此：
 
 ### 7.4 全组结算
 
-组状态为 `filling → running → result_unsaved → settlement_pending → settled`。同一局只冻结一次全组结果、产生一个 SettlementID；包含所有开局参与者（包括零分及已断线成员），按 UserID 排序记录每人的最终积分增量。
+组阶段只保留 `filling → running → ended`。结束后在同一 ended 阶段保存结果、提交结算和查询到账，不为这些步骤增加阶段。同一局只冻结一次全组结果、产生一个 SettlementID；包含所有开局参与者（包括零分及已断线成员），按 UserID 排序记录每人的最终积分增量。
 
 MoleRoomService 持久化一份全组 pending 结果，Recovery 提交同一份冻结结果，Settlement 在一个事务中更新全组积分账户及账本。部分玩家到账、另一部分未到账不能被作为已完成结果；同一组重复提交不重复加分。个人增量为本局合法命中累计奖励，打地鼠奖励总和不要求为零。
 
-保存或提交尚未确认时，客户端只能看到未保存/待结算状态，不宣称积分到账。成功后按每人结果推送，并允许查询同一 SettlementID 下的本人到账结果。持久化、幂等冲突及恢复边界沿用第 9 节，不能因为多人玩法最小化而省略。
+保存确认和 Settlement 回执放在冻结结果记录中，客户端从记录得到未保存/待结算/已到账进度，不另建结算状态机。保存或提交尚未确认时不宣称积分到账；获得匹配回执后按每人结果推送，并允许查询同一 SettlementID 下的本人到账结果。持久化、幂等冲突及恢复边界沿用第 9 节，不能因为阶段合并而省略。
 
 ## 8. 三人斗地主
 
@@ -198,14 +188,14 @@ RoomService 校验手牌实际拥有、多重集合数量、当前轮次、当�
 
 ### 9.2 流程与提交边界
 
-1. RoomService 冻结局末结果，生成一次 SettlementID，进入 `result_unsaved`。
+1. RoomService 冻结局末结果，生成一次 SettlementID，进入 `ended`；后续保存、结算和到账都保留这一阶段。
 2. 使用有限数据库等待写入 pending_settlements，保存局结果与同一 SettlementID；重复保存也验证内容。提交结果不明时查询同一记录，禁止另造 ID。
-3. 保存确认后进入 `settlement_pending`，客户端可看到“局已结束、积分待结算”。此时不宣称积分已到账。
+3. 保存确认写入结果记录，客户端可看到“局已结束、积分待结算”。Room 仍为 ended，此时不宣称积分已到账。
 4. SettlementRecoveryService 启动先扫描持久化记录，之后分批周期扫描；Send 唤醒只用于降低延迟，唤醒丢失不影响恢复。
 5. 恢复 Service 通过有限 Call 提交冻结结果。SettlementService 校验合法字段、重复用户、整数溢出及游戏对应约束，在一个事务内插入结算、按稳定 UserID 顺序锁定/更新账户、插入账本，全部提交后才返回成功。
 6. 相同 ID、相同规范内容返回原始已提交结果；相同 ID、不同内容返回 `settlement.conflict`。同局不同 ID 也拒绝再次记账，不能仅靠调用者承诺只生成一次 ID。
 7. Call/Commit 超时或回复丢失时，恢复 Service 查询 SettlementID；尚无记录可能只是原事务仍在途，继续使用原 ID 提交，由唯一约束和事务防止重复记账。
-8. 已确认提交后才把 pending 标记为已提交。此标记失败可继续重试，同一结算不会重复加分。客户端可按 SettlementID 查询完成结果，推送不是唯一完成凭据。
+8. 已确认提交后才把 pending 标记为已提交，并向尚存活的 Room 提供匹配的 Settlement 回执。此标记失败可继续重试，同一结算不会重复加分；Room 阶段仍为 ended。回执通知丢失时 Room 可按 SettlementID 核对本节点持久化的完成确认，再允许移除成员。客户端可按 SettlementID 查询完成结果，推送不是唯一完成凭据。
 
 规范内容包括协议/规则版本、GameKind、RoundID、按 UserID 排序的积分增量及决定结果的必要字段；不包含 LoginID、推送地址、重试次数和临时连接信息。保存规范字节并比较完整内容，摘要只作为辅助。无序集合、浮点数或随重试改变的时间戳不能造成伪冲突。
 
@@ -226,7 +216,7 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 - Go main 通过 `gsr.Run` 启动，业务只使用当前 `self.Cluster()/Logger()`；不手工注入 Runtime 或 ClusterClient。
 - Service 显式实现 Handle，具名持有 gsr.Dispatcher；Agent 的 HandleClientMessage 使用 protocol.Dispatcher，两种入口共用一个 runner。
 - 当前 Cluster ValueCodec 不直接恢复业务 Go struct。跨节点边界使用规范标量或业务 Protobuf `[]byte`；本项目建议复杂命令统一编码为 `[]byte`，普通函数处理领域结构体，Handler 显式解码/校验，响应同样编码。不扩展 GSR codec。
-- CommandID 与客户端 msg_id 分开定义，业务目录不占用框架 ErrorResponse 的 9001。业务拒绝、未确认和已完成状态有明确业务响应，不把所有错误包装成 internal。
+- 消息方向、编号、载荷及业务错误统一遵循协议规划，不把状态拒绝转换成通用 internal。
 - Cluster 入站的 Source 不能证明远端 Agent/UserID 身份。内部 Cluster 仅开放在受信任网络；认证身份由受信任 access 传入，Room 再检查当前业务绑定。客户端提供的 UserID/LoginID 不作为凭据。
 - 等待链不能成环：Agent→Online→Room、Agent→Room、Recovery→Settlement；Room 不 Call Online/Agent，Settlement 不 Call Room。业务 Service 不启动 goroutine，不保存 Handler 上下文做异步工作。
 - 任一外部 Call/SQL 都有有限预算；配置整个流程的总预算，避免多次子调用各自耗尽一次完整客户端等待。返回超时不等于操作没有执行。
@@ -234,7 +224,7 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 
 ## 11. 第三方登录
 
-阶段 4 只接一个真实提供商，具体提供商在实施该切片前选定。按提供商协议验证凭据，不能相信客户端直接上报的身份。若采用 OIDC，验证签名、issuer、audience、有效期及相应流程的 nonce 等要求，身份以 issuer/subject 映射。参考 [OIDC ID Token Validation](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation)。
+第三方登录切片只接一个真实提供商，实施前选定。按提供商协议验证凭据，不能相信客户端直接上报的身份。若采用 OIDC，验证签名、issuer、audience、有效期及相应流程的 nonce 等要求，身份以 issuer/subject 映射。参考 [OIDC ID Token Validation](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation)。
 
 若要求同一人的密码登录和第三方登录返回同一 UserID，必须提供由已认证账号发起的关联流程，并验证新第三方凭据。不能按同名/邮箱猜测并自动合并；第三方身份唯一约束防止并发关联到两个账号。
 
@@ -245,8 +235,8 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 | 阶段 | 交付 | 必须通过的验证 |
 | --- | --- | --- |
 | 0 | 多 module 工程、显式启动组装、typeclient 诊断 CLI | 多进程命名 Call 和 Agent Push 真实接线；gsr 无修改 |
-| 1 | 密码登录、Online、最小多人同组打地鼠状态切片 | 四进程、至少三客户端同组；满员开局；竞争命中只奖励一人；不同组隔离；错误登录无房间；重复/过期目标不加分。此阶段尚无结算，不算完整 demo |
-| 2 | MySQL 积分、待结算保存、恢复 Service；首轮完整 demo | 五进程、多客户端从分组登录到全组同事务结算到账闭环；重复/冲突、提交后丢回复、进程强杀、MySQL 故障无假成功 |
+| 1 | 密码登录、Online、最小多人同组打地鼠状态切片 | 未登录/跨游戏协议拒绝，迁移未确认不切路由，旧推送无效，缓存滞后可同步；四进程至少三客户端同组，满员开局，竞争命中只奖励一人，不同组隔离，重复/过期目标不加分。此阶段尚无结算，不算完整 demo |
+| 2 | MySQL 积分、待结算保存、恢复 Service；首轮完整 demo | 五进程从登录分组到全组同事务到账；含零分/断线成员；待结算离开不移除，回执丢失可查；重复/冲突、提交后丢回复、进程强杀、MySQL 故障无假成功 |
 | 3 | access-02、跨接入重连、目录时序 | 竞争登录、旧断线/旧命令/迟到绑定无效；Online 超时与协调重启规则 |
 | 4 | 三人斗地主 | 三个 TS 客户端跑完一局；非法操作不改变权威状态；私人手牌不泄露 |
 | 5 | 一家第三方登录及账号关联 | 真实验证；正确关联同一 UserID；错误签名/issuer/audience/过期拒绝 |
@@ -256,8 +246,16 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 
 负载报告区分客户端请求、推送、Cluster 消息及结算事务吞吐；约 10,000 条/秒是待测目标，先测真实业务比例，不人为凑 20% 跨节点。报告 p50/p95/p99、MailboxFull、CPU、GC、内存、出站积压和待结算数量/最老等待时间，不能只报成功消息计数。
 
-## 13. 当前通信切片
+先做阶段 1 的最小纵向切片：协议准入与比较绑定失败用例 → 登录/位置查询/进房 → 满组共享时间线和命中 → 局末冻结。随后完成阶段 2 的真实 MySQL 事务和恢复，才是第一轮完整 demo。阶段 3 控制消息投递/释放时序，不依赖随机 sleep；阶段 4 前固定斗地主规则表和积分公式。纯业务测试留在所属 package，跨进程/MySQL 验收显式启用且有总超时。
 
-切片 A 使用独立 demo.diagnostic.v1 协议验证接线；各角色当前暴露命名 Probe Service，access Agent 接收客户端请求后用总计 2 秒预算依次 Call login/online/mole/settlement。复杂请求和返回值均为 Protobuf bytes；mole 使用客户端不可指定的连接私有地址和令牌向 Agent Send Push。Agent 的普通 Command 和客户端协议共用 Mailbox，响应 request_id 与主动 Push request_id=0 分开。
+## 13. 参考基线
 
-Probe 的 ok 只代表四个诊断 Handler 返回，不代表业务成功或 Send 送达；CLI 另等实际 Push，且校验 operation_id/text/node。空输入返回 invalid，远端等待/调用失败返回 unavailable 和 failed_node。当前只有开发 Plain Gate，不提供认证或游戏接口；本节不改变第 4～9 节未来业务契约。
+| 来源 | 基线与阅读位置 | 采用范围 |
+| --- | --- | --- |
+| ../gsr | 本地 1.0，尚未发布；依赖/阅读 revision d5531a6ba413415f3ab65b8100f894750c44dcd4 | gsr.Run、Service、Gate/Protocol、Cluster 和 SQL 宿主边界；公开 API 以 CONTEXT.md、docs/API-DESIGN.md 为准 |
+| ../../skynet_bt/nbgameserver | gameofhlddz/（main、baseattackd、attackd1、roomd1）；gameofshrew/（main、roomd、agent） | 三人斗地主优先 gameofhlddz，不选四人 gameofsrddz；打地鼠仅补充流程问题，不照搬概率/倍率/计费或协议 |
+| ../GoServerActorFsm | 阅读 HEAD ecbb971534b429643a704dfa05410687da611d9b，阅读时有用户未提交改动；internal/room、internal/gamelogic/shrew_timeline.go、internal/fsm/player.go、docs/client-sync-contract.md | 分组/座位、共享目标时间线、广播/快照和简单状态迁移；不移植 Actor/PlayerActor/FSM 框架、旧 Envelope 或地图动画 |
+
+GSR 的 require v0.0.0 是占位版本。各节点 replace ../../../gsr，common replace ../../gsr；本地 go.work 只组装 gsrdemo，关闭 workspace 仍使用 module 的 replace。它不冻结源码，GSR checkout 变化需核对基线；正式发布后再固定发布依赖。Go 编码规范及 .gitignore 初始化来源为旧 revision b2a9f16ae78da0bade541eabbb39a9144d5e04d2，规范仅调整标题和入口，工作约定提取到 AGENTS.md。
+
+GoServerActorFsm 默认容量 10、至少 3 人开始，demo 默认三人满员开始；所读实现的命中回包不构成全组持久化记账/恢复证据。本项目另行实现结算。三个目录均只读，参考实现不是兼容目标，不在其中执行生成、安装、格式化或测试。

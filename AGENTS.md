@@ -6,25 +6,24 @@
 
 - gsrdemo 是唯一开发主目录，是一个 Git 仓库管理的多项目工作区。每个节点角色一个独立 Go module；同角色的多个实例共用项目、分别配置。common 是共享 Go module，typeclient 是独立 TypeScript 项目。
 - `../gsr`、`../../skynet_bt/nbgameserver` 和 `../GoServerActorFsm` 严格只读；gsr 同时是本地框架依赖，另两个目录提供业务知识参考。不修改源码、文档、配置、依赖或生成结果，不在其中执行会写入文件的生成、格式化、安装或验证命令。
-- GSR 1.0 指本地 ../gsr 基线，尚未发布；节点 go.mod 通过 replace 引用只读 GSR。参考 revision 记录在 docs/REFERENCES.md；本地源码变化需核对并更新基线，不当作已经锁定的发布包。
+- GSR 1.0 指本地 ../gsr 基线，尚未发布；节点 go.mod 通过 replace 引用只读 GSR。参考 revision 记录在 docs/DESIGN.md 的参考基线一节；本地源码变化需核对并更新基线，不当作已经锁定的发布包。
 - 游戏业务、协议、配置、生成结果和运行产物都写在 gsrdemo 中。
 - 参考实现不构成兼容目标；采用哪些行为由本项目文档、用户要求及实际需求决定。
 
 ## 文档入口
 
 - [README.md](README.md)：工程结构、准备与当前进度。
-- [docs/DESIGN.md](docs/DESIGN.md)：业务设计与行为契约。
-- [docs/USER-SESSION.md](docs/USER-SESSION.md)：用户状态机、位置、协议准入及状态同步。
-- [docs/REVIEW-AND-IMPLEMENTATION.md](docs/REVIEW-AND-IMPLEMENTATION.md)：实施顺序及验收。
+- [docs/DESIGN.md](docs/DESIGN.md)：业务设计、状态所有权、实施验收与参考基线。
+- [docs/PROTOCOL.md](docs/PROTOCOL.md)：全部协议规划、字段、路由、准入及生成说明。
 - [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)：Go 编码与评审规则。
-- [docs/DEVELOPMENT-WORKFLOW.md](docs/DEVELOPMENT-WORKFLOW.md)：修改、验证、审查与提交。
-- [docs/REFERENCES.md](docs/REFERENCES.md)：只读参考来源与差异。
 
-代码、测试、文档不一致时先确认预期行为，同步更新对应契约，不静默选择一份。重要取舍可写 ADR，不把 AGENTS.md 扩成架构百科。
+代码、测试、文档不一致时先确认预期行为，同步更新对应契约，不静默选择一份。重要取舍写入对应设计文档，不按每次讨论新增文件，也不把 AGENTS.md 扩成架构百科。
 
 ## 基本工作约定
 
 - 先完成最小、可验证的业务纵向切片，不提前搭建没有调用者的通用框架。
+- 业务状态尽量少，优先合并行为相同的状态；处理步骤用必要的操作/结果记录表达，不为 RPC、重试和存储步骤增加状态，也不以重复布尔值重建复杂状态机。
+- 同一契约只维护一个文档入口，不创建空目录说明或重复 README；协议规划集中在 docs/PROTOCOL.md，具体 .proto 用到时再拆分。
 - 只修改当前任务范围，不顺手重构；保留用户已有的无关改动。
 - Go 代码遵守编码规范并经过 gofmt；自然语言注释尽量中文。每个 Test 函数前说明它保护的可观察行为。
 - 优先标准库；引入第三方依赖时说明具体用途和标准库不足之处。
