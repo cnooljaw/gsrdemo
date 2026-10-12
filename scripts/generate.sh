@@ -16,6 +16,6 @@ cp -R "$project_root/../gsr/protocol/proto/." "$proto_input/"
 cp -R "$project_root/common/proto/." "$proto_input/"
 export PATH="$project_root/bin/tools:$project_root/typeclient/node_modules/.bin:$PATH"
 cd "$project_root"
-buf generate "$proto_input" --template scripts/buf.gen.go.yaml --path "$proto_input/demo/diagnostic/v1/diagnostic.proto"
+buf generate "$proto_input" --template scripts/buf.gen.go.yaml --path "$proto_input/demo"
 buf generate "$proto_input" --template scripts/buf.gen.ts.yaml
 node scripts/normalize-generated.mjs

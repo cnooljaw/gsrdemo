@@ -1,2 +1,2 @@
-// Package mole 实现本节点的宿主组装与通信探测；对应业务在后续切片加入。
+// Package mole 实现房间分配、三人共享目标和全组局末冻结。
 package mole

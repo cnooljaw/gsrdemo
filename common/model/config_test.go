@@ -12,6 +12,8 @@ func TestDecodeNodeConfigRejectsUnsafeOrAmbiguousInput(t *testing.T) {
 		`{"instance":"login-01","listen":"login","log_directory":"logs/login-01","nodes":{"login":"0.0.0.0:19002"}}`,
 		`{"instance":"login-01","listen":"login","log_directory":"logs/login-01","nodes":{"login":"127.0.0.1:19002"}} {}`,
 		`{"instance":"login-01","listen":"online","log_directory":"logs/login-01","nodes":{"online":"127.0.0.1:19002"}}`,
+		`{"instance":"login-01","listen":"login","log_directory":"logs/login-01","nodes":{"login":"127.0.0.1:19002"},"mole":{"group_size":3}}`,
+		`{"instance":"login-01","listen":"login","log_directory":"logs/login-01","nodes":{"login":"127.0.0.1:19002"},"enable_probe":true}`,
 	}
 	for _, input := range cases {
 		if _, err := DecodeNodeConfig(strings.NewReader(input), "login"); err == nil {

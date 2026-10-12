@@ -14,6 +14,7 @@ import (
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/command"
+	businesspb "github.com/cnooljaw/gsrdemo/common/gen/demo/business/v1"
 	diagnosticpb "github.com/cnooljaw/gsrdemo/common/gen/demo/diagnostic/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -24,6 +25,11 @@ type agent struct {
 	commandDispatcher  *gsr.Dispatcher
 	name               cluster.ServiceName
 	token              string
+	enableProbe        bool
+	identity           *businesspb.Identity
+	session            *businesspb.SessionRecord
+	pending            *businesspb.PositionCommand
+	lastAuth           time.Time
 }
 
 var (
@@ -31,11 +37,18 @@ var (
 	_ gsr.ClientMessageHandler = (*agent)(nil)
 )
 
-func newAgent(client gate.ClientSession, registry *protocol.Registry) *agent {
-	service := &agent{client: client}
-	service.commandDispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{command.ProbePush: service.handlePush})
+func newAgent(client gate.ClientSession, registry *protocol.Registry, enableProbe bool) *agent {
+	service := &agent{client: client, enableProbe: enableProbe}
+	service.commandDispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{command.ProbePush: service.handlePush, command.RoomState: service.handleRoomState, command.Replaced: service.handleReplaced})
 	service.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, map[uint32]any{
 		uint32(diagnosticpb.MsgId_C2S_PROBE_REQUEST): service.handleProbe,
+		uint32(businesspb.MsgId_C2S_PASSWORD_LOGIN):  service.handleLogin,
+		uint32(businesspb.MsgId_C2S_QUERY_SESSION):   service.handleQuerySession,
+		uint32(businesspb.MsgId_C2S_QUERY_OPERATION): service.handleQueryOperation,
+		uint32(businesspb.MsgId_C2S_ENTER_MOLE):      service.handleEnter,
+		uint32(businesspb.MsgId_C2S_LEAVE_ROOM):      service.handleLeave,
+		uint32(businesspb.MsgId_C2S_MOLE_SNAPSHOT):   service.handleSnapshot,
+		uint32(businesspb.MsgId_C2S_MOLE_HIT):        service.handleHit,
 	})
 	return service
 }
@@ -47,6 +60,7 @@ func (service *agent) OnStart(_ context.Context, _ gsr.ServiceContext) error {
 // Handle 与客户端入口共用 Mailbox；Push 不复用旧客户端请求上下文。
 func (service *agent) Handle(self gsr.CommandContext, id runtime.CommandID, args ...any) (any, error) {
 	if id == gate.ClientDisconnectedCommand {
+		service.disconnect(self)
 		self.Exit()
 		return nil, nil
 	}
@@ -54,11 +68,21 @@ func (service *agent) Handle(self gsr.CommandContext, id runtime.CommandID, args
 }
 
 func (service *agent) HandleClientMessage(self gsr.CommandContext, frame []byte) error {
-	return service.protocolDispatcher.HandleFrame(self, frame)
+	err := service.protocolDispatcher.HandleFrame(self, frame)
+	if err != nil {
+		service.disconnect(self)
+		self.Exit()
+		return errors.Join(err, service.client.Close())
+	}
+	return nil
 }
 
 func (service *agent) handleProbe(self gsr.CommandContext, client protocol.Context, request *diagnosticpb.ProbeRequest) error {
 	response := &diagnosticpb.ProbeResponse{OperationId: request.GetOperationId(), Text: request.GetText(), Code: "ok"}
+	if !service.enableProbe {
+		response.Code = "disabled"
+		return client.Response(uint32(diagnosticpb.MsgId_S2C_PROBE_RESPONSE), response)
+	}
 	if request.GetOperationId() == "" || len(request.GetOperationId()) > 64 || request.GetText() == "" || len(request.GetText()) > 256 {
 		response.Code = "invalid"
 		return client.Response(uint32(diagnosticpb.MsgId_S2C_PROBE_RESPONSE), response)
@@ -108,7 +132,7 @@ func (service *agent) register(self gsr.CommandContext) error {
 		return err
 	}
 	value := hex.EncodeToString(token)
-	name := cluster.ServiceName("probe-agent/" + value)
+	name := cluster.ServiceName("agent/" + value)
 	// 只在 Running Handler 中注册，名字与令牌不跨连接复用。
 	if err := self.Register(name, self.Self()); err != nil {
 		return err
@@ -130,6 +154,7 @@ func (service *agent) handlePush(self gsr.CommandContext, payload []byte) error 
 		return errors.New("empty probe push")
 	}
 	if err := service.protocolDispatcher.Push(uint32(diagnosticpb.MsgId_S2C_PROBE_PUSH), request.GetPush()); err != nil {
+		service.disconnect(self)
 		self.Exit()
 		return errors.Join(err, service.client.Close())
 	}

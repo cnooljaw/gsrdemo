@@ -1,2 +1,2 @@
-// Package online 实现本节点的宿主组装与通信探测；对应业务在后续切片加入。
+// Package online 串行协调已确认用户位置和一条可选的待确认操作。
 package online

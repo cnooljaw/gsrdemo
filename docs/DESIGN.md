@@ -1,6 +1,6 @@
 # GSR Demo 业务设计
 
-本文记录业务设计、实施验收与参考基线。当前只完成诊断通信；登录、多人玩法、数据库结算及恢复仍待实现。全部消息与字段集中在 [协议规划](PROTOCOL.md)，工作规则见 [AGENTS.md](../AGENTS.md)。
+本文记录业务设计、实施验收与参考基线。当前已实现诊断通信、密码登录、位置协调和多人地鼠状态切片；MySQL 结算及恢复仍待实现。全部消息与字段集中在 [协议规划](PROTOCOL.md)，工作规则见 [AGENTS.md](../AGENTS.md)。
 
 ## 1. 范围与边界
 
@@ -55,7 +55,7 @@ Online 是位置唯一 owner，Room 是游戏阶段唯一 owner。access/Online 
 ### 4.1 登录
 
 1. 客户端始终只连接 access 的 Gate，由 Agent 调用 login 节点验证用户名密码，取得统一 UserID；进房、游戏和结算查询不切换客户端连接目标。
-2. Agent 在已经 Running 的协议 Handler 中生成 LoginID，注册连接私有名称，例如 `agent/<LoginID>`；注册成功后才发布推送地址。不在 Agent.OnStart 中提前注册。
+2. Agent 在已经 Running 的协议 Handler 中生成 LoginID，注册连接私有名称，例如 `agent/<随机连接标识>`；注册成功后才发布推送地址。不在 Agent.OnStart 中提前注册。
 3. Agent 调用 Online.Bind，携带由服务端产生的 UserID、LoginID、接入地址和 OperationID。
 4. Online 串行决定该用户的切换顺序。尚未进房的绑定可直接完成；已有房间的绑定必须先完成房间连接替换，再确认新绑定。
 5. Agent 收到已确认结果后进入可操作状态；超时只表示结果未知，使用同一 OperationID 查询或重试，不能自行当成失败并重新创建一次迁移。
@@ -176,7 +176,7 @@ RoomService 校验手牌实际拥有、多重集合数量、当前轮次、当�
 | 表 | 写入 owner | 关键约束 |
 | --- | --- | --- |
 | accounts | Login | UserID 主键、规范化用户名唯一、密码哈希 |
-| external_identities（阶段 4） | Login | provider/issuer/subject 唯一，映射到 UserID |
+| external_identities（第三方登录切片） | Login | provider/issuer/subject 唯一，映射到 UserID |
 | pending_settlements | 对应游戏节点业务 | SettlementID 主键、(GameKind, RoundID) 唯一、冻结结果、待提交/已提交标记 |
 | settlements | Settlement | SettlementID 主键、(GameKind, RoundID) 唯一、规范结果及已提交结果 |
 | point_accounts | Settlement | UserID 主键、整数积分 |
@@ -259,3 +259,5 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 GSR 的 require v0.0.0 是占位版本。各节点 replace ../../../gsr，common replace ../../gsr；本地 go.work 只组装 gsrdemo，关闭 workspace 仍使用 module 的 replace。它不冻结源码，GSR checkout 变化需核对基线；正式发布后再固定发布依赖。Go 编码规范及 .gitignore 初始化来源为旧 revision b2a9f16ae78da0bade541eabbb39a9144d5e04d2，规范仅调整标题和入口，工作约定提取到 AGENTS.md。
 
 GoServerActorFsm 默认容量 10、至少 3 人开始，demo 默认三人满员开始；所读实现的命中回包不构成全组持久化记账/恢复证据。本项目另行实现结算。三个目录均只读，参考实现不是兼容目标，不在其中执行生成、安装、格式化或测试。
+
+当前阶段 1 实现边界：密码账号由离线 bin/account 写入 configs/accounts.local.json，login 启动读入，不提供注册/账号数据库；mole 每组一个 RoomService，Directory 负责预留和满组分配，房间 Timer 与目录巡检分别推进，Online 低频有界核对阶段。结果在 ended 中冻结全部成员增量、包括断线和零分成员，progress=unpersisted；未保存结果不退出房间，容量到限拒绝新组。阶段 2 再加入 MySQL 账号/结果保存、同事务到账、恢复和按确认释放，仍保留三个房间阶段。

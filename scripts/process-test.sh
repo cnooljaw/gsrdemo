@@ -12,6 +12,7 @@ elif [[ "$#" -eq 1 && "$1" == "--race" ]]; then
     for role in access login online mole settlement; do
         (cd "$project_root/nodes/$role" && go build -race -o "$GSR_NODE_BIN/$role" "./cmd/$role")
     done
+    (cd "$project_root/nodes/login" && go build -race -o "$GSR_NODE_BIN/account" ./cmd/account)
     npm --prefix "$project_root/typeclient" run build
     race=true
 else
@@ -19,4 +20,4 @@ else
     exit 2
 fi
 cd "$project_root/tests/process"
-GSR_PROCESS_TEST=1 go test -race="$race" -run '^TestFiveNodeProbe$' -timeout=1m -v
+GSR_PROCESS_TEST=1 go test -race="$race" -run '^Test(FiveNodeProbe|MultiplayerMole)$' -timeout=1m -v

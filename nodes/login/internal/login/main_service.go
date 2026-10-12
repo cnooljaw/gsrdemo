@@ -18,7 +18,7 @@ type mainService struct {
 
 var _ gsr.Service = (*mainService)(nil)
 
-// NewMain 显式组装 login 节点；当前只提供通信探测，不表示业务已实现。
+// NewMain 显式组装 login 节点的业务 Service 和诊断入口。
 func NewMain(cfg model.NodeConfig, output io.Writer) gsr.Service {
 	return &mainService{cfg: cfg, output: output}
 }
@@ -29,6 +29,17 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		return err
 	}
 	if err := self.Register("login", id); err != nil {
+		return err
+	}
+	auth, err := newAuthService(service.cfg.AccountsFile)
+	if err != nil {
+		return err
+	}
+	authID, err := self.CreateService(ctx, auth)
+	if err != nil {
+		return err
+	}
+	if err := self.Register("auth", authID); err != nil {
 		return err
 	}
 	if err := self.Cluster().Open(cluster.NodeID(service.cfg.Listen)); err != nil {

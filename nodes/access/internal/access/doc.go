@@ -1,2 +1,2 @@
-// Package access 实现本节点的宿主组装与通信探测；对应业务在后续切片加入。
+// Package access 持有连接已确认位置并执行客户端协议准入和游戏路由。
 package access

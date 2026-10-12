@@ -10,6 +10,7 @@ import (
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	businesspb "github.com/cnooljaw/gsrdemo/common/gen/demo/business/v1"
 	diagnosticpb "github.com/cnooljaw/gsrdemo/common/gen/demo/diagnostic/v1"
 	"github.com/cnooljaw/gsrdemo/common/model"
 )
@@ -21,13 +22,13 @@ type mainService struct {
 
 var _ gsr.Service = (*mainService)(nil)
 
-// NewMain 组装诊断 Gate 和连接 Agent，不提供认证或游戏行为。
+// NewMain 显式组装 access 节点的业务 Service 和诊断入口。
 func NewMain(cfg model.NodeConfig, output io.Writer) gsr.Service {
 	return &mainService{cfg: cfg, output: output}
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	registry, err := protocol.NewRegistry(diagnosticpb.MessageCatalogDemoDiagnosticV1Diagnostic)
+	registry, err := protocol.NewRegistry(diagnosticpb.MessageCatalogDemoDiagnosticV1Diagnostic, businesspb.MessageCatalogDemoBusinessV1Demo)
 	if err != nil {
 		return err
 	}
@@ -38,7 +39,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		Protocol: gate.ProtocolPlain, Address: service.cfg.GateAddress,
 		MaxConnections: 128, MaxFrameBytes: 4096, MaxOutboundQueueBytes: 64 << 10,
 		NewAgent: func(client gate.ClientSession) gsr.Service {
-			return newAgent(client, registry)
+			return newAgent(client, registry, service.cfg.EnableProbe)
 		},
 	})
 	if err != nil {

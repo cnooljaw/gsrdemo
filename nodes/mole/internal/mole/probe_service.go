@@ -43,7 +43,7 @@ func (service *probeService) handleProbe(self gsr.CommandContext, payload []byte
 	if probe.GetOperationId() == "" || len(probe.GetOperationId()) > 64 || probe.GetText() == "" || len(probe.GetText()) > 256 {
 		return nil, errors.New("invalid probe")
 	}
-	if request.GetAccessNode() != "access" || len(request.GetAgentToken()) != 32 || request.GetAgentName() != "probe-agent/"+request.GetAgentToken() {
+	if request.GetAccessNode() != "access" || len(request.GetAgentToken()) != 32 || request.GetAgentName() != "agent/"+request.GetAgentToken() {
 		return nil, errors.New("invalid probe callback")
 	}
 	push, err := proto.Marshal(&diagnosticpb.AgentProbePush{

@@ -7,4 +7,6 @@ require (
 	google.golang.org/protobuf v1.36.1
 )
 
+require github.com/gorilla/websocket v1.5.3 // indirect
+
 replace github.com/cnooljaw/gsr => ../../gsr

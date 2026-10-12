@@ -32,4 +32,5 @@ if [[ ! -d "$project_root/typeclient/node_modules" ]]; then
     echo "缺少客户端依赖，请在 typeclient 执行 npm ci 后重试。" >&2
     exit 1
 fi
+(cd "$project_root/nodes/login" && go build -o "$project_root/bin/account" ./cmd/account)
 npm --prefix "$project_root/typeclient" run build

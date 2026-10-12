@@ -1,2 +1,2 @@
-// Package login 实现本节点的宿主组装与通信探测；对应业务在后续切片加入。
+// Package login 验证本地测试账号的密码哈希，不拥有在线位置。
 package login

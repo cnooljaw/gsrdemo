@@ -8,5 +8,6 @@
     "mole": "127.0.0.1:19004",
     "settlement": "127.0.0.1:19005"
   },
-  "log_directory": "logs/login-01"
+  "log_directory": "logs/login-01",
+  "accounts_file": "configs/accounts.local.json"
 }

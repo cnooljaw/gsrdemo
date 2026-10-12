@@ -17,6 +17,22 @@ type NodeConfig struct {
 	Nodes        map[string]string `json:"nodes"`
 	LogDirectory string            `json:"log_directory"`
 	GateAddress  string            `json:"gate_address,omitempty"`
+	EnableProbe  bool              `json:"enable_probe,omitempty"`
+	AccountsFile string            `json:"accounts_file,omitempty"`
+	Mole         MoleConfig        `json:"mole,omitempty"`
+}
+
+// MoleConfig 只配置组容量和服务端时间，不接收客户端奖励参数。
+type MoleConfig struct {
+	GroupSize int `json:"group_size"`
+	RoundMS   int `json:"round_ms"`
+	WindowMS  int `json:"window_ms"`
+	GapMS     int `json:"gap_ms"`
+}
+
+// DefaultMoleConfig 是最小三人同组玩法的默认时间线。
+func DefaultMoleConfig() MoleConfig {
+	return MoleConfig{GroupSize: 3, RoundMS: 15000, WindowMS: 1000, GapMS: 500}
 }
 
 // LoadNodeConfig 读取并校验单个 JSON 配置文件；路径按进程工作目录解释。
@@ -54,6 +70,23 @@ func DecodeNodeConfig(reader io.Reader, role string) (NodeConfig, error) {
 	}
 	if role != "access" && cfg.GateAddress != "" {
 		return cfg, errors.New("only access may open Gate")
+	}
+	if role != "access" && cfg.EnableProbe {
+		return cfg, errors.New("only access may enable diagnostic client protocols")
+	}
+	if role != "login" && cfg.AccountsFile != "" {
+		return cfg, errors.New("only login may load accounts")
+	}
+	if role == "mole" {
+		if cfg.Mole == (MoleConfig{}) {
+			cfg.Mole = DefaultMoleConfig()
+		}
+		if cfg.Mole.GroupSize < 2 || cfg.Mole.GroupSize > 8 || cfg.Mole.RoundMS < 3000 || cfg.Mole.RoundMS > 60000 || cfg.Mole.WindowMS < 100 || cfg.Mole.WindowMS > 5000 || cfg.Mole.GapMS < 100 || cfg.Mole.GapMS > 5000 {
+			return cfg, errors.New("invalid bounded mole configuration")
+		}
+	}
+	if role != "mole" && cfg.Mole != (MoleConfig{}) {
+		return cfg, errors.New("only mole may configure gameplay")
 	}
 	if role == "access" {
 		if err := validateAddress(cfg.GateAddress); err != nil {

@@ -34,63 +34,8 @@ func TestFiveNodeProbe(t *testing.T) {
 	if os.Getenv("GSR_PROCESS_TEST") != "1" {
 		t.Skip("通过 scripts/process-test.sh 显式启用真实进程验收")
 	}
-	root, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	binDirectory := os.Getenv("GSR_NODE_BIN")
-	if binDirectory == "" {
-		binDirectory = filepath.Join(root, "bin")
-	}
-	for _, name := range []string{"login", "online", "mole", "settlement", "access"} {
-		if _, err := os.Stat(filepath.Join(binDirectory, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
-	t.Cleanup(cancel)
-	routes := make(map[string]string)
-	reservations := make(map[string]net.Listener)
-	for _, name := range []string{"login", "online", "mole", "settlement", "access", "gate"} {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		reservations[name] = listener
-		routes[name] = listener.Addr().String()
-	}
-	t.Cleanup(func() {
-		for _, listener := range reservations {
-			_ = listener.Close()
-		}
-	})
-	directory := t.TempDir()
-	children := make(map[string]*child)
-	for _, name := range []string{"login", "online", "mole", "settlement", "access"} {
-		_ = reservations[name].Close()
-		if name == "access" {
-			_ = reservations["gate"].Close()
-		}
-		cfg := map[string]any{
-			"instance": name + "-test", "listen": name,
-			"log_directory": filepath.Join(directory, "logs", name),
-			"nodes":         map[string]string{"login": routes["login"], "online": routes["online"], "mole": routes["mole"], "settlement": routes["settlement"], "access": routes["access"]},
-		}
-		if name == "access" {
-			cfg["gate_address"] = routes["gate"]
-		}
-		path := filepath.Join(directory, name+".json")
-		content, err := json.Marshal(cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, content, 0600); err != nil {
-			t.Fatal(err)
-		}
-		process := startNode(t, ctx, root, binDirectory, name, path)
-		children[name] = process
-	}
-	url := "ws://" + routes["gate"] + "/ws"
+	fixture := startCluster(t, false)
+	ctx, root, url, children := fixture.ctx, fixture.root, fixture.url, fixture.children
 	// 两个同时活跃的连接应分别收到自己的响应和推送，不能串到另一个 Agent。
 	type clientResult struct {
 		text   string
@@ -196,4 +141,125 @@ func runClient(ctx context.Context, root, url, text string) (string, error) {
 	command.Dir = root
 	output, err := command.CombinedOutput()
 	return string(output), err
+}
+
+type clusterFixture struct {
+	ctx         context.Context
+	root        string
+	url         string
+	children    map[string]*child
+	clientsFile string
+}
+
+func startCluster(t *testing.T, business bool) clusterFixture {
+	t.Helper()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDirectory := os.Getenv("GSR_NODE_BIN")
+	if binDirectory == "" {
+		binDirectory = filepath.Join(root, "bin")
+	}
+	for _, name := range []string{"login", "online", "mole", "settlement", "access"} {
+		if _, err := os.Stat(filepath.Join(binDirectory, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	t.Cleanup(cancel)
+	routes := make(map[string]string)
+	reservations := make(map[string]net.Listener)
+	for _, name := range []string{"login", "online", "mole", "settlement", "access", "gate"} {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		reservations[name] = listener
+		routes[name] = listener.Addr().String()
+	}
+	t.Cleanup(func() {
+		for _, listener := range reservations {
+			_ = listener.Close()
+		}
+	})
+	directory := t.TempDir()
+	accountsFile := filepath.Join(directory, "accounts.local.json")
+	clientsFile := filepath.Join(directory, "clients.local.json")
+	if business {
+		credentials := make([]map[string]string, 0, 4)
+		for _, username := range []string{"player1", "player2", "player3", "player4"} {
+			admin := exec.CommandContext(ctx, filepath.Join(binDirectory, "account"), "-file", accountsFile, "-username", username)
+			admin.Dir = root
+			admin.Stdin = strings.NewReader("process-test-password\n")
+			output, err := admin.CombinedOutput()
+			if err != nil {
+				t.Fatalf("create fixture account: %v; %s", err, output)
+			}
+			credentials = append(credentials, map[string]string{"username": username, "password": "process-test-password"})
+		}
+		encoded, err := json.Marshal(credentials)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(clientsFile, encoded, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	children := make(map[string]*child)
+	for _, name := range []string{"login", "online", "mole", "settlement", "access"} {
+		if business && name == "settlement" {
+			continue
+		}
+		_ = reservations[name].Close()
+		if name == "access" {
+			_ = reservations["gate"].Close()
+		}
+		cfg := map[string]any{
+			"instance": name + "-test", "listen": name,
+			"log_directory": filepath.Join(directory, "logs", name),
+			"nodes":         map[string]string{"login": routes["login"], "online": routes["online"], "mole": routes["mole"], "settlement": routes["settlement"], "access": routes["access"]},
+		}
+		if name == "access" {
+			cfg["gate_address"] = routes["gate"]
+			cfg["enable_probe"] = !business
+		}
+		if business && name == "login" {
+			cfg["accounts_file"] = accountsFile
+		}
+		if business && name == "mole" {
+			cfg["mole"] = map[string]int{"group_size": 3, "round_ms": 6000, "window_ms": 1000, "gap_ms": 500}
+		}
+		path := filepath.Join(directory, name+".json")
+		content, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+		process := startNode(t, ctx, root, binDirectory, name, path)
+		children[name] = process
+	}
+	url := "ws://" + routes["gate"] + "/ws"
+	return clusterFixture{ctx: ctx, root: root, url: url, children: children, clientsFile: clientsFile}
+}
+
+// TestMultiplayerMole 保护真实四节点登录、协议准入、三人分组、重连和全组局末冻结。
+func TestMultiplayerMole(t *testing.T) {
+	if os.Getenv("GSR_PROCESS_TEST") != "1" {
+		t.Skip("通过 scripts/process-test.sh 显式启用真实进程验收")
+	}
+	fixture := startCluster(t, true)
+	events, err := runClient(fixture.ctx, fixture.root, fixture.url, "disabled-probe")
+	if err == nil || !strings.Contains(events, `"code":"disabled"`) {
+		t.Fatalf("business Gate enabled diagnostic: %v; %s", err, events)
+	}
+	client := exec.CommandContext(fixture.ctx, "node", "typeclient/dist/mole.js", "--url", fixture.url, "--accounts", fixture.clientsFile)
+	client.Dir = fixture.root
+	output, err := client.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `"event":"complete"`) || !strings.Contains(string(output), `"participants":3`) || !strings.Contains(string(output), `"progress":"unpersisted"`) {
+		t.Fatalf("multiplayer chain: %v; %s", err, output)
+	}
+	t.Log(strings.TrimSpace(string(output)))
 }
