@@ -1,3 +1,3 @@
 # Go 生成代码
 
-业务协议生成目标目录。尚无 schema，不放手写的生成代码占位。
+包含诊断 Protobuf 类型与 GSR 消息目录。修改 common/proto 后从根目录运行 scripts/generate.sh，不手改生成结果。

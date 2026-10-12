@@ -1,0 +1,8 @@
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: common
+    opt: [module=github.com/cnooljaw/gsrdemo/common]
+  - local: protoc-gen-gsr-registry
+    out: common
+    opt: [module_path=github.com/cnooljaw/gsrdemo/common]

@@ -1,2 +1,2 @@
-// Package command 用于跨节点业务命令契约。具体定义随首个业务调用加入。
+// Package command 定义跨节点命令契约，当前包含通信探测及 Agent 主动通知入口。
 package command

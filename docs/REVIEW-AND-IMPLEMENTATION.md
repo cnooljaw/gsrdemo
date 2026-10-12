@@ -4,7 +4,7 @@
 
 ## 评审结论
 
-方案可以进入首个业务切片开发。六种节点角色足够；第一轮完整闭环只需要五个进程。工程骨架现已初始化，业务代码、真实节点进程及数据库尚未实施或启动；以下结论仍是方案评审，不是业务运行验收结果。
+方案可以进入首个业务切片开发。六种节点角色足够；第一轮完整闭环只需要五个进程。工程与切片 A 通信接线已实现，真实认证、游戏规则及数据库结算尚未实现；本文件的架构评审仍不代表完整业务运行验收。
 
 补充并再次修订后，未发现要求增加框架 API 或新节点角色的阻断项。方案已经覆盖关键安全边界；实现是否满足这些边界仍须通过时序和崩溃测试验证。
 
@@ -53,19 +53,23 @@ scripts/ + tests/      # 工程操作及真实进程/数据库验收
 
 根目录 go.work 只组装本仓库 module，示例纳入 Git；GSR 使用只读 ../gsr 的本地 1.0 基线，节点 go.mod 自身声明 replace，不依赖未发布的远端版本。关闭 workspace 验证独立 module 的本地依赖接线。节点之间不导入彼此实现；SQL 留在拥有数据的节点内，不先抽通用 persistence 或 Repository 框架。业务协议从 common/proto 同时生成 Go 与 TypeScript 类型，输出只在 gsrdemo 内。
 
-工程初始化只交付可编译包骨架和工具链，不代表切片 A 的真实通信验收完成。各节点实际 main、配置和 readiness 在通信接线时实现，不启动空服务冒充业务。Go 风格和 .gitignore 从 GSR 复制，AGENTS.md 仅提取工作习惯，三个参考仓库均严格只读。
+工程初始化之后已接入五个实际 main、配置、readiness 及诊断 Service/Agent。诊断协议明确标注为 Probe，用于真实 Call/Push 验收，不冒充登录、房间或结算行为。Go 风格和 .gitignore 从 GSR 复制，AGENTS.md 仅提取工作习惯，三个参考仓库均严格只读。
 
 斗地主目录等到对应切片再建。宿主组装具体 Service，注入配置/连接池等明确资源；不搭依赖注入容器。启动脚本为每节点使用独立日志目录，等待 readiness，失败时收回自己启动的子进程。
 
-先跑 access→login、access→online、access→room 的真实 Cluster Call，以及 room→Agent 的 Push，确认业务 Protobuf bytes 和 GSR Envelope 接线。复杂 payload 不直接传 Go struct。只使用回环或可信内网开发配置。
+切片 A 已接入 access→login/online/mole/settlement 的真实 Cluster Call，以及 mole→Agent→客户端的 Push，载荷为业务 Protobuf bytes，客户端外层为 GSR Envelope。两个同时活跃的 TS 客户端校验关联与隔离；还验证非法输入和对端退出错误。最终命令及结果见本轮验收记录。复杂 payload 不直接传 Go struct。只使用回环或可信内网开发配置。
 
 ### 切片 B：登录与打地鼠状态
 
 打地鼠实现最小多人同组完整玩法；借鉴 GoServerActorFsm 的分组、共享目标时间线、组内广播和快照，不移植它的 Actor/FSM 框架，也不完整复刻 gameofshrew 的概率、倍率和计费。此切片为中间验收，必须继续完成切片 C 的持久化结算才能交付首轮完整 demo。
 
-先写纯业务验证：人数阈值、座位与满组分配、组间隔离、多人竞争同一实例只奖励一人、目标窗口/重复操作、全组局末只冻结一次、旧 Timer 无效。再接 Agent、Online、每组一个 MoleRoomService 和四进程、多 TS 客户端；满员后才启动共同时间线。
+先落实 [用户状态与协议准入](USER-SESSION.md)：Agent 连接状态机、Online 位置状态机、已确认位置/阶段快照和默认拒绝的协议策略。先保护未登录/错误游戏协议拒绝、迁移未确认不开新路由、迟到推送不能恢复旧位置；登录、位置查询、进房、游戏和返回大厅全部使用同一 access 连接。auth/session/mole 的 proto 随这一纵向切片生成，不先铺设未使用协议。
+
+再写纯业务验证：人数阈值、座位与满组分配、组间隔离、多人竞争同一实例只奖励一人、目标窗口/重复操作、全组局末只冻结一次、旧 Timer 无效。接 Agent、Online、每组一个 MoleRoomService 和四进程、多 TS 客户端；满员后才启动共同时间线。验收 Agent/Online 阶段投影滞后后的同步，以及 Room 对非法阶段操作的再次拒绝。
 
 同一轮建立 LoginID 和比较绑定的最小协议，不能先做无条件覆盖登录以后再补。测试正常路径和超时路径；对尚未加入的恢复能力，返回明确不支持或待确认状态，不能假成功。
+
+状态机使用业务枚举和显式迁移函数，外部 Call/Send 留在 owner 的 Handler 内。实际被 access/Online 共用的位置快照与协议策略放 common；不建立通用 FSM 框架，不把用户位置与命中/出牌细节揉成一个跨节点可变对象。
 
 完成纯函数边界与真实接线后再扩展整个受影响 package 测试，不重复验证 GSR 的底层 Mailbox/来源机制。应用测试保护玩家行为和分数。
 
@@ -103,3 +107,9 @@ scripts/ + tests/      # 工程操作及真实进程/数据库验收
 - 每个切片先建立关键失败用例，再实现；测试复杂度以新增业务契约为边界，不复制整套框架测试。
 - 开发期间跑最小相关验证；跨 package/module 切片完成后通过 scripts/verify.sh 枚举业务 module 全测与 vet；根目录 go test ./... 不能代替多 module 验证。涉及状态、资源生命周期的包在切片收尾跑 race，真进程/真 MySQL 测试显式开启并设总超时。
 - 交付说明包括启动方法、通过的命令、故障注入断言和未覆盖范围。没有实际启动 MySQL/多进程，就不能写“恢复与幂等已验证”。
+
+## 切片 A 验收记录
+
+实现：节点可执行文件、配置加载、生成协议/registry、连接私有 Agent 路由、四节点 Call、mole 主动 Push、TS CLI、前台启动与本轮进程清理。scripts/process-test.sh 显式启用真实进程；race 模式连同节点一起检测。认证、Online 绑定、多人玩法、数据库和结算恢复仍未实施，不属于此验收结果。
+
+已通过：scripts/process-test.sh --race，真实五节点加两个同时活跃的 TS 连接，含非法输入、login 停止及有序清理，用例耗时约 7 秒。scripts/verify.sh 的全部模块测试、vet 和 TS 类型检查已通过。scripts/run-local.sh 已实际启动五节点，并验证 Ctrl-C 后回收本轮进程。

@@ -14,6 +14,7 @@
 
 - [README.md](README.md)：工程结构、准备与当前进度。
 - [docs/DESIGN.md](docs/DESIGN.md)：业务设计与行为契约。
+- [docs/USER-SESSION.md](docs/USER-SESSION.md)：用户状态机、位置、协议准入及状态同步。
 - [docs/REVIEW-AND-IMPLEMENTATION.md](docs/REVIEW-AND-IMPLEMENTATION.md)：实施顺序及验收。
 - [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)：Go 编码与评审规则。
 - [docs/DEVELOPMENT-WORKFLOW.md](docs/DEVELOPMENT-WORKFLOW.md)：修改、验证、审查与提交。

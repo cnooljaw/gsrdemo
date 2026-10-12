@@ -1,13 +1,16 @@
 # TypeScript 客户端
 
-独立 npm 项目，用于 CLI 和机器人，不是 Go module。工具链版本与 GSR WebSocket 示例一致，package-lock.json 已锁定；无需在只读参考目录安装依赖。
+独立 npm 项目，当前提供切片 A 的通信探测 CLI。工具链沿用 GSR WebSocket 示例并由 package-lock.json 锁定：protobuf 用于编解码，Buf/protoc-gen-es 用于生成，TypeScript/Node 类型用于编译检查；原生 WebSocket 不额外引入客户端网络库。
 
 ```sh
 npm ci
 npm run check
 npm run build
+npm run client -- --url ws://127.0.0.1:7888/ws --text "hello demo"
 ```
 
-当前只建立工具链和 source 目录，没有可运行的游戏客户端。后续从 common/proto 生成 src/gen 类型，接入 GSR Envelope 与 Gate，再实现多客户端登录、分组入座、满员开局、竞争命中、共享快照与计分板、局末状态及查询每人结算到账；同一 CLI/机器人将用于三个玩家的斗地主验收。
+先在根目录执行 scripts/run-local.sh。CLI 使用统一 GSR Envelope 和生成的诊断类型：验证响应 request_id、operation_id、text、节点集合；Push 必须 request_id=0 且来自 mole。两者均到达才打印 complete，不能把 Send admission 当成送达。空文本及节点不可用打印响应并以非零状态退出，5 秒等待预算与关闭预算限制进程寿命。
 
-node_modules 与 dist 不提交。当前依赖用途：protobuf 用于消息编解码；Buf/protoc-gen-es 用于协议生成；TypeScript 和 Node 类型用于编译检查。protoc-gen-go 版本见 common/proto/README.md。
+诊断请求不是登录或游戏请求。后续在同一工程接入多人分组、满员开局、共享地鼠、个人计分与全组结算查询，机器人随对应业务增加。
+
+运行 npm run generate（或根目录 scripts/generate.sh）更新 Go/TS/registry 生成结果，输出只在 gsrdemo。生成代码及锁文件纳入 Git，node_modules/dist 不提交。当前只支持本地 Plain Gate，MAC/WSS 客户端接入在对应切片验证。

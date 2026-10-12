@@ -7,7 +7,9 @@
   },
   "scripts": {
     "check": "tsc --project tsconfig.json --noEmit",
-    "build": "tsc --project tsconfig.json"
+    "build": "tsc --project tsconfig.json",
+    "client": "npm run build && node dist/index.js",
+    "generate": "../scripts/generate.sh"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.15.0"

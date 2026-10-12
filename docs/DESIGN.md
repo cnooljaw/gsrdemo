@@ -16,9 +16,9 @@
 
 | 节点 | 内部运行单元 | 职责 |
 | --- | --- | --- |
-| access-01 | Gate、每连接一个 Agent | 接入、协议、认证身份、缓存业务路由、客户端写回 |
+| access-01 | Gate、每连接一个 Agent | 唯一客户端接入、连接状态机、协议准入、认证身份、已确认位置/阶段快照、客户端写回 |
 | login-01 | 少量有界 AuthService | 账号校验、第三方验证、身份映射 |
-| online-01 | OnlineService | 在线位置目录、每用户绑定/进入/离开流程的协调 |
+| online-01 | OnlineService | 用户位置与迁移状态机、绑定/进入/离开协调、房间阶段投影 |
 | mole-01 | RoomDirectory、每组一个 MoleRoomService、SettlementRecoveryService | 分组与座位、共享地鼠、个人计分、持久化全组局末结果、恢复结算 |
 | landlord-01 | RoomDirectory、每房间一个 LandlordRoomService、SettlementRecoveryService | 房间创建、座位/手牌/回合、持久化局末结果、恢复结算 |
 | settlement-01 | SettlementService | 积分、结算记录、幂等账本 |
@@ -31,24 +31,26 @@ MainService 显式创建并命名 Service，开放 Cluster/Gate。RoomDirectory 
 
 | owner | 权威状态 | 禁止承担的职责 |
 | --- | --- | --- |
-| Agent | 本连接 UserID、LoginID、认证状态、已确认的游戏路由 | 积分余额、手牌、命中判定 |
+| Agent | 本连接 UserID、LoginID、连接状态机；持有已确认位置、游戏路由和房间阶段快照 | 积分余额、手牌、命中判定、自行确认位置变化 |
 | Login | 账号和第三方身份到 UserID 的映射 | 在线目录、游戏状态 |
-| Online | 当前登录位置、房间位置、进行中的目录迁移 | 游戏规则、积分修改 |
+| Online | 当前接入/大厅/房间位置、进行中的位置迁移；持有房间阶段的版本投影 | 游戏阶段自行推进、游戏规则、积分修改 |
 | RoomService | 该房间全部游戏状态、玩家当前 LoginID/推送地址、绑定令牌、回合和状态版本 | 持久化积分余额修改 |
 | SettlementRecoveryService | 待结算任务的提交、退避、状态查询和本地完成标记 | 重新计算结果、修改余额 |
 | SettlementService | 持久化积分、已提交结算和账本 | 决定胜负、接受客户端奖励值 |
 
 MySQL 是外部依赖；`*sql.DB` 连接池由进程宿主管理，在 Runtime 停止后关闭。连接池可以并发使用，业务对象和可变游戏状态不能跨 Service 共享。跨消息传递的是独占快照。
 
-Online 记录包含：UserID、LoginID、接入 Node/AgentName、游戏 Node/RoomID/RoomName、连接状态、目录操作 OperationID、流程状态。RoomID 跨重启不复用；RoomName 含 RoomID，不能让旧路由命中新建房间。
+Online 记录包含：UserID、LoginID、接入 Node/AgentName、大厅/房间位置、游戏 Node/RoomID/RoomName、BindingToken、LocationVersion、房间阶段及 RoomStateVersion、连接状态、目录操作 OperationID、流程状态。RoomID 跨重启不复用；RoomName 含 RoomID，不能让旧路由命中新建房间。
 
 LoginID 是随机且不可复用的业务登录关联标识，不是 Core Session，也不向 Runtime 引入 epoch/lease。绑定令牌是 RoomService 的业务比较并更新凭据，不是 ServiceID。
+
+用户是有状态的。客户端始终只连 access，Agent 依据连接状态、已确认位置及房间阶段决定准入协议，再由 Room 验证业务操作。Online 协调位置变化并持有低频阶段投影；两者通过有版本的快照同步，不共同修改一份可变 User 对象。状态、允许协议表、消息同步及失败用例见 [用户状态契约](USER-SESSION.md)。
 
 ## 4. 登录、进房与连接切换
 
 ### 4.1 登录
 
-1. 客户端只连接 Gate，由 Agent 调用 login 节点验证用户名密码，取得统一 UserID。
+1. 客户端始终只连接 access 的 Gate，由 Agent 调用 login 节点验证用户名密码，取得统一 UserID；进房、游戏和结算查询不切换客户端连接目标。
 2. Agent 在已经 Running 的协议 Handler 中生成 LoginID，注册连接私有名称，例如 `agent/<LoginID>`；注册成功后才发布推送地址。不在 Agent.OnStart 中提前注册。
 3. Agent 调用 Online.Bind，携带由服务端产生的 UserID、LoginID、接入地址和 OperationID。
 4. Online 串行决定该用户的切换顺序。尚未进房的绑定可直接完成；已有房间的绑定必须先完成房间连接替换，再确认新绑定。
@@ -72,7 +74,7 @@ RoomService 提供业务 `CompareAndBind`：请求包含 RoomID、UserID、Opera
 
 Call 超时后，Online 保留该用户的 uncertain 操作，查询目标房间实际绑定/操作结果，或以相同令牌和 OperationID 重试；确认结果后才允许下一次位置变化。一次“尚未找到”不能证明先前请求不会迟到执行。其他用户可以继续绑定，每次 Handler 的外部等待必须有有限预算。
 
-离开也通过 Online 协调：房间移除确认后再清理目录。游戏进行中不允许跨房间迁移；斗地主断线只标记 disconnected，保留座位并按游戏规则托管。位置清理是带 LoginID/操作令牌条件的更新，禁止无条件按 UserID 删除。
+离开也通过 Online 协调：房间移除确认后再清理目录，Agent 收到确定结果才返回大厅并移除游戏路由。首个完整 demo 只在 filling、settled 阶段允许离开；进行中及未完成结算阶段保留本局位置。斗地主断线只标记 disconnected，保留座位并按游戏规则托管。位置清理是带 LoginID/操作令牌条件的更新，禁止无条件按 UserID 删除。
 
 ### 4.3 旧连接与操作授权
 
@@ -99,6 +101,8 @@ Online 不可用时拒绝新绑定、进房、跨房间迁移和重连绑定；�
 热点链路：`Client → Agent → Cluster.Call(RoomName, Command) → Agent 回复`。
 
 广播链路：`RoomService → Cluster.Send(access Node, AgentName, Push Command) → Agent.Handle → protocolDispatcher.Push → Client`。RoomService 不逐个 Call Agent；推送请求带目标 LoginID，Agent 拒绝不匹配的旧推送。
+
+Agent 在协议 Handler 调用业务节点前，按 [状态与协议表](USER-SESSION.md) 默认拒绝不适用的消息。Room 阶段由 Room 推进，向 Agent 推送可见状态、向 Online Send 低频投影；两处接收者匹配 LoginID/RoomID/BindingToken，再比较房间版本。Room 推送不能改变 Agent 的位置路由。阶段可能暂时滞后，快照查询必须始终保留；Room 再检查当前阶段，保证结束后的命中/出牌不生效。Online 不进入每次命中/出牌的热点链路。
 
 每条写命令定义自己的重复语义：
 
@@ -240,7 +244,7 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 
 | 阶段 | 交付 | 必须通过的验证 |
 | --- | --- | --- |
-| 0 | 多 module 工程、显式启动组装、typeclient 协议/机器人骨架 | 多进程命名 Call 和 Agent Push 真实接线；gsr 无修改 |
+| 0 | 多 module 工程、显式启动组装、typeclient 诊断 CLI | 多进程命名 Call 和 Agent Push 真实接线；gsr 无修改 |
 | 1 | 密码登录、Online、最小多人同组打地鼠状态切片 | 四进程、至少三客户端同组；满员开局；竞争命中只奖励一人；不同组隔离；错误登录无房间；重复/过期目标不加分。此阶段尚无结算，不算完整 demo |
 | 2 | MySQL 积分、待结算保存、恢复 Service；首轮完整 demo | 五进程、多客户端从分组登录到全组同事务结算到账闭环；重复/冲突、提交后丢回复、进程强杀、MySQL 故障无假成功 |
 | 3 | access-02、跨接入重连、目录时序 | 竞争登录、旧断线/旧命令/迟到绑定无效；Online 超时与协调重启规则 |
@@ -251,3 +255,9 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 必测故障：两次登录竞争、旧断线晚到、旧绑定请求晚到、绑定已执行回复丢失、access 突然退出、跨 access 重连、单 RoomService panic、Online 不可用、Online 重启空目录、游戏节点重启、Settlement/MySQL 不可用、慢客户端、Timer admission 失败、Call 超时但操作已执行。
 
 负载报告区分客户端请求、推送、Cluster 消息及结算事务吞吐；约 10,000 条/秒是待测目标，先测真实业务比例，不人为凑 20% 跨节点。报告 p50/p95/p99、MailboxFull、CPU、GC、内存、出站积压和待结算数量/最老等待时间，不能只报成功消息计数。
+
+## 13. 当前通信切片
+
+切片 A 使用独立 demo.diagnostic.v1 协议验证接线；各角色当前暴露命名 Probe Service，access Agent 接收客户端请求后用总计 2 秒预算依次 Call login/online/mole/settlement。复杂请求和返回值均为 Protobuf bytes；mole 使用客户端不可指定的连接私有地址和令牌向 Agent Send Push。Agent 的普通 Command 和客户端协议共用 Mailbox，响应 request_id 与主动 Push request_id=0 分开。
+
+Probe 的 ok 只代表四个诊断 Handler 返回，不代表业务成功或 Send 送达；CLI 另等实际 Push，且校验 operation_id/text/node。空输入返回 invalid，远端等待/调用失败返回 unavailable 和 failed_node。当前只有开发 Plain Gate，不提供认证或游戏接口；本节不改变第 4～9 节未来业务契约。

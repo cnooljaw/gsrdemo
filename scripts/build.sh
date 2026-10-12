@@ -22,6 +22,10 @@ for module_directory in "$project_root/common" "$project_root"/nodes/* "$project
     (
         cd "$module_directory"
         go build ./...
+        if [[ -d "cmd/$(basename "$module_directory")" ]]; then
+            mkdir -p "$project_root/bin"
+            go build -o "$project_root/bin/$(basename "$module_directory")" "./cmd/$(basename "$module_directory")"
+        fi
     )
 done
 if [[ ! -d "$project_root/typeclient/node_modules" ]]; then

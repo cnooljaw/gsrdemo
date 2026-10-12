@@ -1,0 +1,12 @@
+{
+  "instance": "settlement-01",
+  "listen": "settlement",
+  "nodes": {
+    "access": "127.0.0.1:19001",
+    "login": "127.0.0.1:19002",
+    "online": "127.0.0.1:19003",
+    "mole": "127.0.0.1:19004",
+    "settlement": "127.0.0.1:19005"
+  },
+  "log_directory": "logs/settlement-01"
+}

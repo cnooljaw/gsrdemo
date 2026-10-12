@@ -43,9 +43,10 @@
 | 实例与服务端时间窗口 | internal/gamelogic/shrew_timeline.go、shrew_timeline_test.go | RoundID 加实例序号识别目标；服务端验证点击窗口，旧实例无效 |
 | 同组广播与快照 | internal/room/attack_actor.go、docs/client-sync-contract.md | 向本组 Agent 推送共享状态，重连读取权威快照，版本过滤乱序消息 |
 | 简单命中奖励 | internal/gamelogic/kick.go | 首版固定每次合法命中 10 积分；只接受服务端已验证的单个目标 |
+| 用户状态迁移 | internal/fsm/player.go | 借鉴业务枚举与显式迁移表；demo 按 USER-SESSION 分开连接、位置和房间阶段，补充认证/迁移未知及协议准入 |
 
 参考当前默认配置为容量 10、至少 3 人开始；demo 为缩小流程默认三人一组且满员开始，组人数可配置。参考的 RoomActor → AttackActor → PlayerActor 链不直接移植：GSR 中组状态和个人本局分数由同一个 MoleRoomService 拥有，连接及认证由已有 Agent 承担。旧 Envelope、ActorRef、reply channel、自研 FSM 和地图动画不引入本项目。
 
 参考中的“命中结算”是规则计算及回包；当前所读文件没有全组局末结果持久化、积分账本同事务提交或结算恢复的实现证据。本项目必须另行实现这些流程，不能据其演示已能命中就省略完整结算。
 
-本轮在 gsrdemo 的临时检查 module 中编译了本地 GSR 依赖，未修改或运行参考仓库测试；五个节点的 GSR 替换路径均确认指向 ../gsr，关闭 workspace 的统一骨架检查及 TypeScript 类型检查通过。当前尚未实现 GSR 启动或业务通信；这些检查不能代表真实接线、结算或恢复已经验收。
+当前切片已实际运行 GSR 节点宿主和诊断通信，GSR 仍从本地只读目录构建，参考源码未修改。真实五节点 Call/Push 及退出已通过 race 进程测试；认证、多人玩法、数据库结算和恢复未实现，不能据此宣称完整业务验收。
