@@ -5,7 +5,7 @@ import "gsr/protocol/v1/options.proto";
 
 option go_package = "github.com/cnooljaw/gsrdemo/common/gen/demo/business/v1;businesspb";
 
-// 当前业务协议集中在一处，后续按实际调用拆分。
+// 当前客户端业务协议集中在一处，后续按实际调用拆分。
 enum MsgId {
   MSG_ID_UNSPECIFIED = 0;
   C2S_PASSWORD_LOGIN = 1101 [(gsr.protocol.v1.message_route) = {
@@ -191,69 +191,3 @@ message MoleStatePush {
   MoleSnapshot snapshot = 1;
 }
 message SessionReplacedPush {}
-
-// 以下载荷仅用于内部命令，不进入客户端目录。
-message Identity {
-  string user_id = 1;
-  string login_id = 2;
-  string access_node = 3;
-  string agent_name = 4;
-  uint64 location_version = 5;
-}
-message RoomBinding {
-  Identity identity = 1;
-  string room_id = 2;
-  string binding_token = 3;
-}
-message SessionRecord {
-  Identity identity = 1;
-  RoomBinding room = 2;
-  MoleSnapshot snapshot = 3;
-}
-message AuthRequest {
-  string username = 1;
-  string password = 2;
-}
-message AuthReply {
-  string code = 1;
-  string user_id = 2;
-}
-message PositionCommand {
-  string operation_id = 1;
-  string kind = 2;
-  Identity identity = 3;
-  string room_id = 4;
-}
-message PositionReply {
-  string code = 1;
-  string operation_id = 2;
-  SessionRecord confirmed = 3;
-  string pending_operation_id = 4;
-  bool refreshed = 5;
-}
-message AllocateRequest {
-  string operation_id = 1;
-  Identity identity = 2;
-}
-message RoomRequest {
-  string operation_id = 1;
-  RoomBinding binding = 2;
-  Identity target = 3;
-  bool connected = 4;
-}
-message RoomReply {
-  string code = 1;
-  RoomBinding binding = 2;
-  MoleSnapshot snapshot = 3;
-}
-message HitCommand {
-  RoomBinding binding = 1;
-  MoleHitRequest hit = 2;
-}
-message RoomNotice {
-  RoomBinding binding = 1;
-  MoleSnapshot snapshot = 2;
-}
-message ReplacedNotice {
-  string login_id = 1;
-}

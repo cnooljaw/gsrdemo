@@ -7,8 +7,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/command"
-	businesspb "github.com/cnooljaw/gsrdemo/common/gen/demo/business/v1"
-	"google.golang.org/protobuf/proto"
 )
 
 type authService struct {
@@ -42,24 +40,21 @@ func (service *authService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *authService) handleAuth(_ gsr.CommandContext, payload []byte) ([]byte, error) {
-	request := &businesspb.AuthRequest{}
-	if err := proto.Unmarshal(payload, request); err != nil {
-		return nil, err
-	}
+// 认证只传两个字符串；返回 GSR 支持的映射，不额外定义内部 Protobuf。
+func (service *authService) handleAuth(_ gsr.CommandContext, username, password string) (map[string]any, error) {
 	if len(service.accounts) == 0 {
-		return proto.Marshal(&businesspb.AuthReply{Code: "authentication_unavailable"})
+		return map[string]any{"code": "authentication_unavailable"}, nil
 	}
 	now := time.Now()
 	service.tokens = min(8, service.tokens+now.Sub(service.updated).Seconds()*8)
 	service.updated = now
 	if service.tokens < 1 {
-		return proto.Marshal(&businesspb.AuthReply{Code: "rate_limited"})
+		return map[string]any{"code": "rate_limited"}, nil
 	}
 	service.tokens--
-	userID := authenticate(service.accounts, request.Username, request.Password)
+	userID := authenticate(service.accounts, username, password)
 	if userID == "" {
-		return proto.Marshal(&businesspb.AuthReply{Code: "invalid_credentials"})
+		return map[string]any{"code": "invalid_credentials"}, nil
 	}
-	return proto.Marshal(&businesspb.AuthReply{Code: "ok", UserId: userID})
+	return map[string]any{"code": "ok", "user_id": userID}, nil
 }

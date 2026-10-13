@@ -8,14 +8,12 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/command"
-	businesspb "github.com/cnooljaw/gsrdemo/common/gen/demo/business/v1"
 	"github.com/cnooljaw/gsrdemo/common/model"
-	"google.golang.org/protobuf/proto"
 )
 
 type allocation struct {
-	request *businesspb.AllocateRequest
-	reply   *businesspb.RoomReply
+	request allocateRequest
+	reply   model.RoomReply
 	roomID  string
 }
 type directory struct {
@@ -48,34 +46,36 @@ func (service *directory) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *directory) handleAllocate(self gsr.CommandContext, payload []byte) ([]byte, error) {
-	request := &businesspb.AllocateRequest{}
-	if err := proto.Unmarshal(payload, request); err != nil {
-		return nil, err
+func (service *directory) handleAllocate(self gsr.CommandContext, operationID string, fields map[string]any) (map[string]any, error) {
+	identity, ok := model.ReadIdentity(fields)
+	if !ok || !model.ValidOperationID(operationID) {
+		return (model.RoomReply{Code: "invalid"}).Values(), nil
 	}
-	if !model.ValidOperationID(request.OperationId) || request.GetIdentity().GetUserId() == "" {
-		return proto.Marshal(&businesspb.RoomReply{Code: "invalid"})
-	}
+	request := allocateRequest{OperationID: operationID, Identity: identity}
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	key := request.Identity.UserId + "/" + request.OperationId
+	key := request.Identity.UserID + "/" + request.OperationID
 	if previous, ok := service.allocations[key]; ok {
-		if !proto.Equal(previous.request, request) {
-			return proto.Marshal(&businesspb.RoomReply{Code: "operation_conflict"})
+		if previous.request != request {
+			return (model.RoomReply{Code: "operation_conflict"}).Values(), nil
 		}
-		if previous.reply != nil {
-			return proto.Marshal(previous.reply)
+		if previous.reply.Code != "" {
+			return previous.reply.Values(), nil
 		}
-		return service.reserve(ctx, self, key, previous)
+		reply, err := service.reserve(ctx, self, key, previous)
+		if err != nil {
+			return nil, err
+		}
+		return reply.Values(), nil
 	}
 	if len(service.allocations) >= 1024 {
-		return proto.Marshal(&businesspb.RoomReply{Code: "capacity"})
+		return (model.RoomReply{Code: "capacity"}).Values(), nil
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		if service.waiting == "" {
 			// 本切片未保存结果，结束房间仍保留冻结记录；上限到达后拒绝新组。
 			if len(service.rooms) >= 64 {
-				return proto.Marshal(&businesspb.RoomReply{Code: "capacity"})
+				return (model.RoomReply{Code: "capacity"}).Values(), nil
 			}
 			roomID, err := model.NewID()
 			if err != nil {
@@ -91,15 +91,11 @@ func (service *directory) handleAllocate(self gsr.CommandContext, payload []byte
 			service.waiting = roomID
 			service.rooms = append(service.rooms, roomID)
 		}
-		pending := allocation{request: proto.Clone(request).(*businesspb.AllocateRequest), roomID: service.waiting}
+		pending := allocation{request: request, roomID: service.waiting}
 		// 先记目标再等待，未知结果重试必须仍去原房间。
 		service.allocations[key] = pending
-		encoded, err := service.reserve(ctx, self, key, pending)
+		reply, err := service.reserve(ctx, self, key, pending)
 		if err != nil {
-			return nil, err
-		}
-		reply := &businesspb.RoomReply{}
-		if err := proto.Unmarshal(encoded, reply); err != nil {
 			return nil, err
 		}
 		if reply.Code == "room_full" {
@@ -107,31 +103,24 @@ func (service *directory) handleAllocate(self gsr.CommandContext, payload []byte
 			service.waiting = ""
 			continue
 		}
-		return encoded, nil
+		return reply.Values(), nil
 	}
-	return proto.Marshal(&businesspb.RoomReply{Code: "capacity"})
+	return (model.RoomReply{Code: "capacity"}).Values(), nil
 }
 
-func (service *directory) reserve(ctx context.Context, self gsr.CommandContext, key string, pending allocation) ([]byte, error) {
-	payload, err := proto.Marshal(pending.request)
+func (service *directory) reserve(ctx context.Context, self gsr.CommandContext, key string, pending allocation) (model.RoomReply, error) {
+	request := pending.request
+	result, err := self.CallName(ctx, cluster.ServiceName("mole/"+pending.roomID), command.ReserveSeat, request)
 	if err != nil {
-		return nil, err
+		return model.RoomReply{}, err
 	}
-	result, err := self.CallName(ctx, cluster.ServiceName("mole/"+pending.roomID), command.ReserveSeat, payload)
-	if err != nil {
-		return nil, err
+	reply, ok := result.(model.RoomReply)
+	if !ok || reply.Code == "" {
+		return model.RoomReply{Code: "unavailable"}, nil
 	}
-	encoded, ok := result.([]byte)
-	if !ok {
-		return proto.Marshal(&businesspb.RoomReply{Code: "unavailable"})
-	}
-	reply := &businesspb.RoomReply{}
-	if err := proto.Unmarshal(encoded, reply); err != nil {
-		return nil, err
-	}
-	pending.reply = proto.Clone(reply).(*businesspb.RoomReply)
+	pending.reply = reply
 	service.allocations[key] = pending
-	return encoded, nil
+	return reply, nil
 }
 
 func (service *directory) handleSweep(self gsr.CommandContext) error {

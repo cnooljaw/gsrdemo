@@ -12,26 +12,31 @@ func TestProtocolAdmissionFollowsConfirmedLocation(t *testing.T) {
 	hit := uint32(businesspb.MsgId_C2S_MOLE_HIT)
 	enter := uint32(businesspb.MsgId_C2S_ENTER_MOLE)
 	login := uint32(businesspb.MsgId_C2S_PASSWORD_LOGIN)
-	session := &businesspb.SessionRecord{Identity: &businesspb.Identity{UserId: "u", LoginId: "l"}}
-	if !slices.Contains(Allowed(nil, ""), login) || slices.Contains(Allowed(nil, ""), hit) {
+	session := SessionRecord{Identity: Identity{UserID: "u", LoginID: "l"}}
+	if !slices.Contains(Allowed(SessionRecord{}, ""), login) || slices.Contains(Allowed(SessionRecord{}, ""), hit) {
 		t.Fatal("guest admission")
 	}
 	if !slices.Contains(Allowed(session, ""), enter) || slices.Contains(Allowed(session, ""), login) {
 		t.Fatal("lobby admission")
 	}
-	session.Room = &businesspb.RoomBinding{RoomId: "r"}
+	session.Room = RoomBinding{RoomID: "r"}
+	session.GameKind = "mole"
 	if slices.Contains(Allowed(session, ""), hit) {
 		t.Fatal("unknown phase admitted hit")
 	}
-	session.Snapshot = &businesspb.MoleSnapshot{Phase: "running"}
+	session.RoomPhase = "running"
 	if !slices.Contains(Allowed(session, ""), hit) || slices.Contains(Allowed(session, ""), enter) {
 		t.Fatal("room admission")
 	}
 	if slices.Contains(Allowed(session, "pending"), hit) {
 		t.Fatal("unconfirmed operation admitted hit")
 	}
-	session.Snapshot.Phase = "ended"
+	session.RoomPhase = "ended"
 	if slices.Contains(Allowed(session, ""), hit) {
 		t.Fatal("ended admitted hit")
+	}
+	session.GameKind = "unknown"
+	if slices.Contains(Allowed(session, ""), uint32(businesspb.MsgId_C2S_MOLE_SNAPSHOT)) || View(session, "").GameKind != "unknown" {
+		t.Fatal("unknown game treated as mole")
 	}
 }

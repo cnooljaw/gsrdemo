@@ -11,7 +11,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file demo/diagnostic/v1/diagnostic.proto.
  */
 export const file_demo_diagnostic_v1_diagnostic: GenFile = /*@__PURE__*/
-  fileDesc("CiNkZW1vL2RpYWdub3N0aWMvdjEvZGlhZ25vc3RpYy5wcm90bxISZGVtby5kaWFnbm9zdGljLnYxIjIKDFByb2JlUmVxdWVzdBIUCgxvcGVyYXRpb25faWQYASABKAkSDAoEdGV4dBgCIAEoCSJlCg1Qcm9iZVJlc3BvbnNlEhQKDG9wZXJhdGlvbl9pZBgBIAEoCRIMCgR0ZXh0GAIgASgJEgwKBGNvZGUYAyABKAkSEwoLZmFpbGVkX25vZGUYBCABKAkSDQoFbm9kZXMYBSADKAkiPQoJUHJvYmVQdXNoEhQKDG9wZXJhdGlvbl9pZBgBIAEoCRIMCgR0ZXh0GAIgASgJEgwKBG5vZGUYAyABKAkigQEKEE5vZGVQcm9iZVJlcXVlc3QSLwoFcHJvYmUYASABKAsyIC5kZW1vLmRpYWdub3N0aWMudjEuUHJvYmVSZXF1ZXN0EhMKC2FjY2Vzc19ub2RlGAIgASgJEhIKCmFnZW50X25hbWUYAyABKAkSEwoLYWdlbnRfdG9rZW4YBCABKAkiRQoRTm9kZVByb2JlUmVzcG9uc2USFAoMb3BlcmF0aW9uX2lkGAEgASgJEgwKBHRleHQYAiABKAkSDAoEbm9kZRgDIAEoCSJSCg5BZ2VudFByb2JlUHVzaBIrCgRwdXNoGAEgASgLMh0uZGVtby5kaWFnbm9zdGljLnYxLlByb2JlUHVzaBITCgthZ2VudF90b2tlbhgCIAEoCSrnAQoFTXNnSWQSFgoSTVNHX0lEX1VOU1BFQ0lGSUVEEAASQgoRQzJTX1BST0JFX1JFUVVFU1QQ6QcaKoq1GCYKIC5kZW1vLmRpYWdub3N0aWMudjEuUHJvYmVSZXF1ZXN0EAEYARJEChJTMkNfUFJPQkVfUkVTUE9OU0UQ6gcaK4q1GCcKIS5kZW1vLmRpYWdub3N0aWMudjEuUHJvYmVSZXNwb25zZRACGAMSPAoOUzJDX1BST0JFX1BVU0gQ6wcaJ4q1GCMKHS5kZW1vLmRpYWdub3N0aWMudjEuUHJvYmVQdXNoEAIYBEJIWkZnaXRodWIuY29tL2Nub29samF3L2dzcmRlbW8vY29tbW9uL2dlbi9kZW1vL2RpYWdub3N0aWMvdjE7ZGlhZ25vc3RpY3BiYgZwcm90bzM", [file_gsr_protocol_v1_options]);
+  fileDesc("CiNkZW1vL2RpYWdub3N0aWMvdjEvZGlhZ25vc3RpYy5wcm90bxISZGVtby5kaWFnbm9zdGljLnYxIjIKDFByb2JlUmVxdWVzdBIUCgxvcGVyYXRpb25faWQYASABKAkSDAoEdGV4dBgCIAEoCSJlCg1Qcm9iZVJlc3BvbnNlEhQKDG9wZXJhdGlvbl9pZBgBIAEoCRIMCgR0ZXh0GAIgASgJEgwKBGNvZGUYAyABKAkSEwoLZmFpbGVkX25vZGUYBCABKAkSDQoFbm9kZXMYBSADKAkiPQoJUHJvYmVQdXNoEhQKDG9wZXJhdGlvbl9pZBgBIAEoCRIMCgR0ZXh0GAIgASgJEgwKBG5vZGUYAyABKAkq5wEKBU1zZ0lkEhYKEk1TR19JRF9VTlNQRUNJRklFRBAAEkIKEUMyU19QUk9CRV9SRVFVRVNUEOkHGiqKtRgmCiAuZGVtby5kaWFnbm9zdGljLnYxLlByb2JlUmVxdWVzdBABGAESRAoSUzJDX1BST0JFX1JFU1BPTlNFEOoHGiuKtRgnCiEuZGVtby5kaWFnbm9zdGljLnYxLlByb2JlUmVzcG9uc2UQAhgDEjwKDlMyQ19QUk9CRV9QVVNIEOsHGieKtRgjCh0uZGVtby5kaWFnbm9zdGljLnYxLlByb2JlUHVzaBACGARCSFpGZ2l0aHViLmNvbS9jbm9vbGphdy9nc3JkZW1vL2NvbW1vbi9nZW4vZGVtby9kaWFnbm9zdGljL3YxO2RpYWdub3N0aWNwYmIGcHJvdG8z", [file_gsr_protocol_v1_options]);
 
 /**
  * ProbeRequest 发起一次有限的节点探测。
@@ -104,93 +104,6 @@ export type ProbePush = Message<"demo.diagnostic.v1.ProbePush"> & {
  */
 export const ProbePushSchema: GenMessage<ProbePush> = /*@__PURE__*/
   messageDesc(file_demo_diagnostic_v1_diagnostic, 2);
-
-/**
- * NodeProbeRequest 是内部 Protobuf bytes；连接私有推送路由由 access 填写。
- *
- * @generated from message demo.diagnostic.v1.NodeProbeRequest
- */
-export type NodeProbeRequest = Message<"demo.diagnostic.v1.NodeProbeRequest"> & {
-  /**
-   * @generated from field: demo.diagnostic.v1.ProbeRequest probe = 1;
-   */
-  probe?: ProbeRequest | undefined;
-
-  /**
-   * @generated from field: string access_node = 2;
-   */
-  accessNode: string;
-
-  /**
-   * @generated from field: string agent_name = 3;
-   */
-  agentName: string;
-
-  /**
-   * @generated from field: string agent_token = 4;
-   */
-  agentToken: string;
-};
-
-/**
- * Describes the message demo.diagnostic.v1.NodeProbeRequest.
- * Use `create(NodeProbeRequestSchema)` to create a new message.
- */
-export const NodeProbeRequestSchema: GenMessage<NodeProbeRequest> = /*@__PURE__*/
-  messageDesc(file_demo_diagnostic_v1_diagnostic, 3);
-
-/**
- * NodeProbeResponse 是某个节点完成探测后的编码结果。
- *
- * @generated from message demo.diagnostic.v1.NodeProbeResponse
- */
-export type NodeProbeResponse = Message<"demo.diagnostic.v1.NodeProbeResponse"> & {
-  /**
-   * @generated from field: string operation_id = 1;
-   */
-  operationId: string;
-
-  /**
-   * @generated from field: string text = 2;
-   */
-  text: string;
-
-  /**
-   * @generated from field: string node = 3;
-   */
-  node: string;
-};
-
-/**
- * Describes the message demo.diagnostic.v1.NodeProbeResponse.
- * Use `create(NodeProbeResponseSchema)` to create a new message.
- */
-export const NodeProbeResponseSchema: GenMessage<NodeProbeResponse> = /*@__PURE__*/
-  messageDesc(file_demo_diagnostic_v1_diagnostic, 4);
-
-/**
- * AgentProbePush 带连接私有令牌，避免旧连接通知改变新连接。
- *
- * @generated from message demo.diagnostic.v1.AgentProbePush
- */
-export type AgentProbePush = Message<"demo.diagnostic.v1.AgentProbePush"> & {
-  /**
-   * @generated from field: demo.diagnostic.v1.ProbePush push = 1;
-   */
-  push?: ProbePush | undefined;
-
-  /**
-   * @generated from field: string agent_token = 2;
-   */
-  agentToken: string;
-};
-
-/**
- * Describes the message demo.diagnostic.v1.AgentProbePush.
- * Use `create(AgentProbePushSchema)` to create a new message.
- */
-export const AgentProbePushSchema: GenMessage<AgentProbePush> = /*@__PURE__*/
-  messageDesc(file_demo_diagnostic_v1_diagnostic, 5);
 
 /**
  * MsgId 只用于工程通信验收，不表示认证、玩法或到账成功。

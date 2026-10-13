@@ -3,17 +3,14 @@ package mole
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/command"
-	diagnosticpb "github.com/cnooljaw/gsrdemo/common/gen/demo/diagnostic/v1"
-	"google.golang.org/protobuf/proto"
 )
 
-// probeService 只验证字节协议和跨进程调用，不提供 mole 业务。
+// probeService 只验证原生参数和跨进程调用，不提供 mole 业务。
 type probeService struct {
 	dispatcher *gsr.Dispatcher
 }
@@ -34,30 +31,18 @@ func (service *probeService) Handle(self gsr.CommandContext, id runtime.CommandI
 	return service.dispatcher.Handle(self, id, args...)
 }
 
-func (service *probeService) handleProbe(self gsr.CommandContext, payload []byte) ([]byte, error) {
-	request := &diagnosticpb.NodeProbeRequest{}
-	if err := proto.Unmarshal(payload, request); err != nil {
-		return nil, fmt.Errorf("decode mole probe: %w", err)
-	}
-	probe := request.GetProbe()
-	if probe.GetOperationId() == "" || len(probe.GetOperationId()) > 64 || probe.GetText() == "" || len(probe.GetText()) > 256 {
+func (service *probeService) handleProbe(self gsr.CommandContext, operationID, text, accessNode, agentName, agentToken string) (map[string]any, error) {
+	if operationID == "" || len(operationID) > 64 || text == "" || len(text) > 256 {
 		return nil, errors.New("invalid probe")
 	}
-	if request.GetAccessNode() != "access" || len(request.GetAgentToken()) != 32 || request.GetAgentName() != "agent/"+request.GetAgentToken() {
+	if accessNode != "access" || len(agentToken) != 32 || agentName != "agent/"+agentToken {
 		return nil, errors.New("invalid probe callback")
 	}
-	push, err := proto.Marshal(&diagnosticpb.AgentProbePush{
-		Push:       &diagnosticpb.ProbePush{OperationId: probe.GetOperationId(), Text: probe.GetText(), Node: "mole"},
-		AgentToken: request.GetAgentToken(),
-	})
-	if err != nil {
-		return nil, err
-	}
 	// Send 成功只代表本地接纳，最终送达由客户端看到 Push 验证。
-	if err := self.Cluster().Send(cluster.NodeID(request.GetAccessNode()), cluster.ServiceName(request.GetAgentName()), command.ProbePush, push); err != nil {
+	if err := self.Cluster().Send(cluster.NodeID(accessNode), cluster.ServiceName(agentName), command.ProbePush, agentToken, operationID, text, "mole"); err != nil {
 		return nil, err
 	}
-	return proto.Marshal(&diagnosticpb.NodeProbeResponse{OperationId: probe.GetOperationId(), Text: probe.GetText(), Node: "mole"})
+	return map[string]any{"operation_id": operationID, "text": text, "node": "mole"}, nil
 }
 
 func (service *probeService) OnStop(_ context.Context) error {

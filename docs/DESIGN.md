@@ -12,7 +12,7 @@
 
 ## 2. 节点与 Service
 
-每个进程一个 Runtime、一个 Cluster。六种节点角色足够，按阶段启动实际需要的角色。
+每个进程一个 Runtime、一个 Cluster。六种节点角色足够，按阶段启动实际需要的角色。当前大厅只是用户位置，由 Online 保存、Access 准入，不增加独立 lobby 节点；独立大厅业务出现后再决定其运行单元。
 
 | 节点 | 内部运行单元 | 职责 |
 | --- | --- | --- |
@@ -40,7 +40,7 @@ MainService 显式创建并命名 Service，开放 Cluster/Gate。RoomDirectory 
 
 MySQL 是外部依赖；`*sql.DB` 连接池由进程宿主管理，在 Runtime 停止后关闭。连接池可以并发使用，业务对象和可变游戏状态不能跨 Service 共享。跨消息传递的是独占快照。
 
-Online 保存已确认身份/接入、可选房间路由、位置版本、可选阶段快照、Connected 和一条可选 PendingOperation。没有房间路由即大厅，不另存流程状态枚举。字段及版本规则见 [协议规划](PROTOCOL.md)。RoomID 跨重启不复用，RoomName 含 RoomID，旧路由不能命中新建房间。
+Online 保存已确认身份/接入、可选房间绑定、位置版本、GameKind/RoundID/RoomPhase/RoomStateVersion、Connected 和一条可选 PendingOperation，不保存目标、计分板等游戏快照。Room 的完整状态可随位置确认或查询结果转交 Agent；Agent 的游戏缓存与会话记录分开。后台已完成的位置操作恢复时，Agent 在原调用预算内直接向当前 Room 补取缺失或滞后的游戏快照；补取失败保留确认位置，客户端可继续 Snapshot 同步。没有房间路由即大厅，不另存流程状态枚举。字段及版本规则见 [协议规划](PROTOCOL.md)。RoomID 跨重启不复用，RoomName 含 RoomID，旧路由不能命中新建房间。
 
 LoginID 是随机且不可复用的业务登录关联标识，不是 Core Session，也不向 Runtime 引入 epoch/lease。绑定令牌是 RoomService 的业务比较并更新凭据，不是 ServiceID。
 
@@ -215,7 +215,7 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 
 - Go main 通过 `gsr.Run` 启动，业务只使用当前 `self.Cluster()/Logger()`；不手工注入 Runtime 或 ClusterClient。
 - Service 显式实现 Handle，具名持有 gsr.Dispatcher；Agent 的 HandleClientMessage 使用 protocol.Dispatcher，两种入口共用一个 runner。
-- 当前 Cluster ValueCodec 不直接恢复业务 Go struct。跨节点边界使用规范标量或业务 Protobuf `[]byte`；本项目建议复杂命令统一编码为 `[]byte`，普通函数处理领域结构体，Handler 显式解码/校验，响应同样编码。不扩展 GSR codec。
+- 调用与发送直接使用 GSR，不另包通用 Call/Send。所有跨节点参数/返回值直接使用规范标量、map[string]any 和 []any，由默认 ValueCodec 编码；不为内部命令定义 Protobuf 载荷或扩展 Codec。身份/绑定/操作记录为可复制、可比较的 Go 值，跨节点只组装业务字段。Directory→Room 的 ReserveSeat 用本地 CallName 传普通 Go 值；快照每次新建全部集合，客户端 Protobuf 视图在 access 出口组装。具体签名集中在协议规划。
 - 消息方向、编号、载荷及业务错误统一遵循协议规划，不把状态拒绝转换成通用 internal。
 - Cluster 入站的 Source 不能证明远端 Agent/UserID 身份。内部 Cluster 仅开放在受信任网络；认证身份由受信任 access 传入，Room 再检查当前业务绑定。客户端提供的 UserID/LoginID 不作为凭据。
 - 等待链不能成环：Agent→Online→Room、Agent→Room、Recovery→Settlement；Room 不 Call Online/Agent，Settlement 不 Call Room。业务 Service 不启动 goroutine，不保存 Handler 上下文做异步工作。
@@ -252,11 +252,11 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 
 | 来源 | 基线与阅读位置 | 采用范围 |
 | --- | --- | --- |
-| ../gsr | 本地 1.0，尚未发布；依赖/阅读 revision d5531a6ba413415f3ab65b8100f894750c44dcd4 | gsr.Run、Service、Gate/Protocol、Cluster 和 SQL 宿主边界；公开 API 以 CONTEXT.md、docs/API-DESIGN.md 为准 |
+| ../gsr | 本地 1.0，尚未发布；依赖/阅读 revision 286ea6f62b7398c432ba9e42fb70a0e619b6d1d8 | gsr.Run、Service、Gate/Protocol、Cluster 和 SQL 宿主边界；公开 API 以 CONTEXT.md、docs/API-DESIGN.md 为准；Cluster 调用参考 docs/CLUSTER-CALL-TUTORIAL.md |
 | ../../skynet_bt/nbgameserver | gameofhlddz/（main、baseattackd、attackd1、roomd1）；gameofshrew/（main、roomd、agent） | 三人斗地主优先 gameofhlddz，不选四人 gameofsrddz；打地鼠仅补充流程问题，不照搬概率/倍率/计费或协议 |
 | ../GoServerActorFsm | 阅读 HEAD ecbb971534b429643a704dfa05410687da611d9b，阅读时有用户未提交改动；internal/room、internal/gamelogic/shrew_timeline.go、internal/fsm/player.go、docs/client-sync-contract.md | 分组/座位、共享目标时间线、广播/快照和简单状态迁移；不移植 Actor/PlayerActor/FSM 框架、旧 Envelope 或地图动画 |
 
-GSR 的 require v0.0.0 是占位版本。各节点 replace ../../../gsr，common replace ../../gsr；本地 go.work 只组装 gsrdemo，关闭 workspace 仍使用 module 的 replace。它不冻结源码，GSR checkout 变化需核对基线；正式发布后再固定发布依赖。Go 编码规范及 .gitignore 初始化来源为旧 revision b2a9f16ae78da0bade541eabbb39a9144d5e04d2，规范仅调整标题和入口，工作约定提取到 AGENTS.md。
+本轮核对 GSR 新基线与上一基线的差异仅为 Cluster 参数教程及相关文档/测试，生产 API 未变化。GSR 的 require v0.0.0 是占位版本。各节点 replace ../../../gsr，common replace ../../gsr；本地 go.work 只组装 gsrdemo，关闭 workspace 仍使用 module 的 replace。它不冻结源码，GSR checkout 变化需核对基线；正式发布后再固定发布依赖。Go 编码规范及 .gitignore 初始化来源为旧 revision b2a9f16ae78da0bade541eabbb39a9144d5e04d2，规范仅调整标题和入口，工作约定提取到 AGENTS.md。
 
 GoServerActorFsm 默认容量 10、至少 3 人开始，demo 默认三人满员开始；所读实现的命中回包不构成全组持久化记账/恢复证据。本项目另行实现结算。三个目录均只读，参考实现不是兼容目标，不在其中执行生成、安装、格式化或测试。
 

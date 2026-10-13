@@ -23,6 +23,8 @@
 
 节点依赖 common 和 gsr，节点之间只通过命令契约通信，不导入对方实现。共享代码按真实需求提取，不建立通用 GameService 基类。
 
+阅读 access 时从 [agent.go](nodes/access/internal/access/agent.go) 看连接和固定分发入口，再看 login.go（认证与连接替换）、position.go（已确认位置与进出房）、mole.go（地鼠协议）、probe.go（诊断）。这些都是同一个 Agent 的方法，共用 Mailbox；会话记录只保存身份、绑定和房间阶段，游戏快照单独缓存。common/command 只定义命令编号；内部调用直接用 GSR 的原生参数/map/list，Protobuf 只用于客户端协议。
+
 ## 准备与验证
 
 Go 1.24 或更新、Node.js 22.15 或更新、npm；当前工具版本沿用只读 GSR 示例并锁定。从根目录执行：

@@ -35,14 +35,3 @@ message ProbeResponse {
 }
 // ProbePush 是 mole 经 Cluster Send 返回当前 Agent 的主动通知。
 message ProbePush { string operation_id = 1; string text = 2; string node = 3; }
-// NodeProbeRequest 是内部 Protobuf bytes；连接私有推送路由由 access 填写。
-message NodeProbeRequest {
-  ProbeRequest probe = 1;
-  string access_node = 2;
-  string agent_name = 3;
-  string agent_token = 4;
-}
-// NodeProbeResponse 是某个节点完成探测后的编码结果。
-message NodeProbeResponse { string operation_id = 1; string text = 2; string node = 3; }
-// AgentProbePush 带连接私有令牌，避免旧连接通知改变新连接。
-message AgentProbePush { ProbePush push = 1; string agent_token = 2; }

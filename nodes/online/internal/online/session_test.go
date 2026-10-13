@@ -3,56 +3,81 @@ package online
 import (
 	"testing"
 
-	businesspb "github.com/cnooljaw/gsrdemo/common/gen/demo/business/v1"
-	"google.golang.org/protobuf/proto"
+	"github.com/cnooljaw/gsrdemo/common/model"
 )
 
 // TestPositionStaysConfirmedUntilRoomAcknowledges 保护待确认迁移不切路由、一次只保留一条操作及重试冲突。
 func TestPositionStaysConfirmedUntilRoomAcknowledges(t *testing.T) {
 	service := newSessionService()
-	identity := &businesspb.Identity{UserId: "u", LoginId: "l", AccessNode: "access", AgentName: "agent"}
-	bind := &businesspb.PositionCommand{OperationId: "login", Kind: "bind", Identity: identity}
+	identity := model.Identity{UserID: "u", LoginID: "l", AccessNode: "access", AgentName: "agent"}
+	bind := model.PositionCommand{OperationID: "login", Kind: "bind", Identity: identity}
 	user, reply := service.begin(bind)
 	if reply != nil {
 		t.Fatal(reply)
 	}
-	service.complete(user, &businesspb.RoomReply{Code: "ok"})
-	confirmed := proto.Clone(user.confirmed).(*businesspb.SessionRecord)
-	enter := &businesspb.PositionCommand{OperationId: "enter", Kind: "enter", Identity: confirmed.Identity}
+	service.complete(user, model.RoomReply{Code: "ok"})
+	confirmed := user.confirmed
+	enter := model.PositionCommand{OperationID: "enter", Kind: "enter", Identity: confirmed.Identity}
 	_, reply = service.begin(enter)
-	if reply != nil || !proto.Equal(user.confirmed, confirmed) || user.pending == nil {
+	if reply != nil || user.confirmed != confirmed || user.pending == nil {
 		t.Fatal("unconfirmed route installed")
 	}
-	_, reply = service.begin(&businesspb.PositionCommand{OperationId: "other", Kind: "enter", Identity: confirmed.Identity})
-	if reply.Code != "operation_pending" {
+	_, reply = service.begin(model.PositionCommand{OperationID: "other", Kind: "enter", Identity: confirmed.Identity})
+	if reply["code"] != "operation_pending" {
 		t.Fatal(reply)
 	}
-	changed := proto.Clone(enter).(*businesspb.PositionCommand)
+	changed := enter
 	changed.Kind = "leave"
 	_, reply = service.begin(changed)
-	if reply.Code != "operation_conflict" {
+	if reply["code"] != "operation_conflict" {
 		t.Fatal(reply)
 	}
-	binding := &businesspb.RoomBinding{Identity: user.pending.target.Identity, RoomId: "r", BindingToken: "token"}
-	service.complete(user, &businesspb.RoomReply{Code: "ok", Binding: binding, Snapshot: &businesspb.MoleSnapshot{RoomId: "r", Phase: "filling", StateVersion: 1}})
-	if user.confirmed.Room.RoomId != "r" || user.pending != nil || user.confirmed.Identity.LocationVersion <= confirmed.Identity.LocationVersion {
+	binding := model.RoomBinding{Identity: user.pending.target.Identity, RoomID: "r", BindingToken: "token"}
+	reply = service.complete(user, model.RoomReply{Code: "ok", Binding: binding, Snapshot: map[string]any{"room_id": "r", "round_id": "", "phase": "filling", "state_version": uint64(1)}})
+	if user.confirmed.Room.RoomID != "r" || user.pending != nil || user.confirmed.Identity.LocationVersion <= confirmed.Identity.LocationVersion {
 		t.Fatal("room not confirmed")
+	}
+	if user.confirmed.RoomPhase != "filling" || reply["snapshot"].(map[string]any)["room_id"] != "r" {
+		t.Fatal("confirmed position or forwarded game state lost")
+	}
+}
+
+// TestRoomPhaseFiltersOldBindingsAndVersions 保护原生阶段通知只能推进当前房间，迟到通知不能恢复旧阶段。
+func TestRoomPhaseFiltersOldBindingsAndVersions(t *testing.T) {
+	service := newSessionService()
+	identity := model.Identity{UserID: "u", LoginID: "l", AccessNode: "access", AgentName: "a", LocationVersion: 1}
+	binding := model.RoomBinding{Identity: identity, RoomID: "r", BindingToken: "current"}
+	user := &onlineUser{confirmed: model.SessionRecord{Identity: identity, Room: binding, GameKind: "mole", RoomPhase: "filling", RoomStateVersion: 1}}
+	service.users["u"] = user
+	if err := service.handlePhase(nil, binding.Values(), "round", "running", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.handlePhase(nil, binding.Values(), "old", "filling", 2); err != nil {
+		t.Fatal(err)
+	}
+	old := binding
+	old.BindingToken = "old"
+	if err := service.handlePhase(nil, old.Values(), "other", "ended", 20); err != nil {
+		t.Fatal(err)
+	}
+	if user.confirmed.RoomPhase != "running" || user.confirmed.RoundID != "round" || user.confirmed.RoomStateVersion != 10 {
+		t.Fatal("old notice changed confirmed phase")
 	}
 }
 
 // TestRejectedPositionDoesNotReuseVersion 保护明确拒绝保留原位置，并且不复用已分配的目标代次。
 func TestRejectedPositionDoesNotReuseVersion(t *testing.T) {
 	service := newSessionService()
-	user, _ := service.begin(&businesspb.PositionCommand{OperationId: "login", Kind: "bind", Identity: &businesspb.Identity{UserId: "u", LoginId: "l", AccessNode: "access", AgentName: "agent"}})
-	service.complete(user, &businesspb.RoomReply{Code: "ok"})
-	request := &businesspb.PositionCommand{OperationId: "enter", Kind: "enter", Identity: user.confirmed.Identity}
+	user, _ := service.begin(model.PositionCommand{OperationID: "login", Kind: "bind", Identity: model.Identity{UserID: "u", LoginID: "l", AccessNode: "access", AgentName: "agent"}})
+	service.complete(user, model.RoomReply{Code: "ok"})
+	request := model.PositionCommand{OperationID: "enter", Kind: "enter", Identity: user.confirmed.Identity}
 	service.begin(request)
 	rejectedVersion := user.pending.target.Identity.LocationVersion
-	service.complete(user, &businesspb.RoomReply{Code: "capacity"})
-	if user.confirmed.Room != nil {
+	service.complete(user, model.RoomReply{Code: "capacity"})
+	if user.confirmed.Room.RoomID != "" {
 		t.Fatal("rejected room installed")
 	}
-	request.OperationId = "enter2"
+	request.OperationID = "enter2"
 	service.begin(request)
 	if user.pending.target.Identity.LocationVersion <= rejectedVersion {
 		t.Fatal("reused version")
@@ -62,21 +87,21 @@ func TestRejectedPositionDoesNotReuseVersion(t *testing.T) {
 // TestOldDisconnectCannotMarkPendingReplacementOffline 保护连接替换期间旧断线只更新旧身份，不能污染新连接。
 func TestOldDisconnectCannotMarkPendingReplacementOffline(t *testing.T) {
 	service := newSessionService()
-	old := &businesspb.Identity{UserId: "u", LoginId: "old", AccessNode: "access", AgentName: "old"}
-	user, _ := service.begin(&businesspb.PositionCommand{OperationId: "first", Kind: "bind", Identity: old})
-	service.complete(user, &businesspb.RoomReply{Code: "ok"})
-	old = proto.Clone(user.confirmed.Identity).(*businesspb.Identity)
-	next := proto.Clone(old).(*businesspb.Identity)
-	next.LoginId = "new"
+	old := model.Identity{UserID: "u", LoginID: "old", AccessNode: "access", AgentName: "old"}
+	user, _ := service.begin(model.PositionCommand{OperationID: "first", Kind: "bind", Identity: old})
+	service.complete(user, model.RoomReply{Code: "ok"})
+	old = user.confirmed.Identity
+	next := old
+	next.LoginID = "new"
 	next.AgentName = "new"
-	service.begin(&businesspb.PositionCommand{OperationId: "second", Kind: "bind", Identity: next})
+	service.begin(model.PositionCommand{OperationID: "second", Kind: "bind", Identity: next})
 	service.connectionClosed(old)
 	if !user.pending.connected {
 		t.Fatal("old disconnect marked new candidate offline")
 	}
-	service.complete(user, &businesspb.RoomReply{Code: "ok"})
+	service.complete(user, model.RoomReply{Code: "ok"})
 	service.connectionClosed(old)
-	if !user.connected || user.confirmed.Identity.LoginId != "new" {
+	if !user.connected || user.confirmed.Identity.LoginID != "new" {
 		t.Fatal("new connection offline")
 	}
 }
@@ -84,11 +109,11 @@ func TestOldDisconnectCannotMarkPendingReplacementOffline(t *testing.T) {
 // TestUnknownBindKeepsOriginalPayloadAfterDisconnect 保护结果未知时同操作重试内容不变，断线另行条件清理。
 func TestUnknownBindKeepsOriginalPayloadAfterDisconnect(t *testing.T) {
 	service := newSessionService()
-	user, _ := service.begin(&businesspb.PositionCommand{OperationId: "login", Kind: "bind", Identity: &businesspb.Identity{UserId: "u", LoginId: "l", AccessNode: "access", AgentName: "a"}})
-	reservation := &businesspb.RoomBinding{Identity: user.pending.target.Identity, RoomId: "r", BindingToken: "reserved"}
-	original := proto.Clone(user.pending.bindingRequest(reservation))
+	user, _ := service.begin(model.PositionCommand{OperationID: "login", Kind: "bind", Identity: model.Identity{UserID: "u", LoginID: "l", AccessNode: "access", AgentName: "a"}})
+	reservation := model.RoomBinding{Identity: user.pending.target.Identity, RoomID: "r", BindingToken: "reserved"}
+	original := user.pending.bindingRequest(reservation)
 	service.connectionClosed(user.pending.target.Identity)
-	if user.pending.connected || !proto.Equal(original, user.pending.bindingRequest(reservation)) {
+	if user.pending.connected || original != user.pending.bindingRequest(reservation) {
 		t.Fatal("retry changed the unknown operation")
 	}
 }

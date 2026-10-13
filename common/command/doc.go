@@ -1,2 +1,2 @@
-// Package command 定义跨节点命令契约，当前包含通信探测及 Agent 主动通知入口。
+// Package command 只定义 demo 的 CommandID；发送、调用和分发直接使用 GSR。
 package command

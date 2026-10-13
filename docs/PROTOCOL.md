@@ -17,7 +17,7 @@
 
 ## 2. 消息外层与编号
 
-复用 GSR Envelope 的 msg_id、request_id、payload。Request 的 request_id 非零，Response 回同一编号，Push 为零；request_id 只关联一次响应，不作为跨重连业务幂等键。复杂内部命令及返回值统一编码为 Protobuf bytes，不直接跨节点传业务 Go struct。
+复用 GSR Envelope 的 msg_id、request_id、payload。Request 的 request_id 非零，Response 回同一编号，Push 为零；request_id 只关联一次响应，不作为跨重连业务幂等键。全部内部命令直接使用 GSR 默认 ValueCodec 支持的标量、map 和列表，参数与返回值都由框架编码；业务不手工调用 Protobuf 编解码。Protobuf schema 只定义客户端消息。
 
 当前固定编号如下，斜线分别是 Request/Response；Push 单独列出。9001 是框架 ErrorResponse，业务不得占用，后续编号在实际实现时分配。
 
@@ -34,17 +34,18 @@
 | MoleHit | 1311/1312 |
 | MoleState | 1391 |
 
-客户端 msg_id 全目录唯一；内部 CommandID 在 common/command/business.go 独立定义，不能用作客户端编号。
+客户端 msg_id 全目录唯一；内部 CommandID 在 [commands.go](../common/command/commands.go) 独立定义，不能用作客户端编号。该包只定义编号，调用和发送直接使用 GSR。
 
 Registry 定义类型、方向和 Request/Response/Push，状态策略定义当前连接是否准入。Dispatcher 接线固定，不随状态切换重建。状态拒绝写对应业务 Response，明确返回 not_authenticated、state_mismatch、operation_pending、binding_replaced 等结果；格式/方向/未实现消息由框架错误协议处理。
 
 ## 3. 共用数据与状态准入
 
-下列统一说明数据用途，已实现字段和编号以 demo.proto 为准；斗地主/结算字段用到时补入。
+下列统一说明数据用途；客户端字段和编号以 demo.proto 为准，内部值对象在 common/model，命令签名见第 5 节。斗地主/结算字段用到时补入。
 
 | 数据 | 内容与用途 |
 | --- | --- |
 | SessionView | UserID、用户位置、LocationVersion、可选房间信息（GameKind、RoomID、RoundID、RoomPhase、RoomStateVersion）、待确认 OperationID、allowed_msg_ids；不暴露内部路由或 BindingToken |
+| SessionRecord | 内部身份、房间绑定与上述房间阶段字段；不保存游戏快照。位置返回值的 snapshot 仅转交 Room 结果，Agent 的地鼠缓存单独保存 |
 | PendingOperation | 内部保存 OperationID、操作内容、目标位置/版本和比较绑定信息；客户端只能查询本连接的操作，OperationID 本身不授权 |
 | RoomKey | 客户端可带 RoomID/RoundID 作为预期位置，服务端只做匹配检查；路由始终取 Agent 的已确认位置 |
 | MemberView | 成员 UserID、座位、连接标记；分数/准备/手牌数量按游戏加入，私人手牌不放公共成员数据 |
@@ -98,14 +99,38 @@ Registry 定义类型、方向和 Request/Response/Push，状态策略定义当�
 
 下列统一列出内部载荷。Authenticate→login/auth、Position（bind/enter/leave/query/operation）→online/sessions、AllocateRoom→mole/rooms、ReserveSeat/BindRoom/RemoveMember/Snapshot/Hit→mole/<RoomID> 已接线；其余随结算和斗地主加入。断线、RoomState/RoomPhase/SessionReplaced 都使用条件 Send。
 
+按 [GSR Cluster 教程](../../gsr/docs/CLUSTER-CALL-TUTORIAL.md) 直接调用 `self.Cluster().Call/Send`。以下为当前 Handler 的业务参数（省略 self）：字符串字段均为 string，identity/binding/snapshot 为 map[string]any，列表为 []any；无符号数字用 uint64，有符号数字和毫秒时间用 int64。同节点 ReserveSeat 使用普通 Go 值拷贝，无需传输编码。
+
+| 命令 | 业务参数，按顺序 | 返回值 |
+| --- | --- | --- |
+| Authenticate | username、password | map：code，成功另有 user_id |
+| Position | operation_id、kind、identity、room_id | map：code、operation_id、可选 confirmed、pending_operation_id、refreshed(bool)、可选 snapshot |
+| AllocateRoom | operation_id、identity | RoomReply map |
+| ReserveSeat（本地） | allocateRequest 值：OperationID、Identity | RoomReply 值，仅含 code/binding |
+| BindRoom / RemoveMember | operation_id、binding、target(identity map)、connected(bool) | RoomReply map |
+| RoomSnapshot | binding | RoomReply map |
+| Hit | binding、operation_id、room_id、round_id、instance_id(uint64) | RoomReply map；access 回填客户端 OperationID |
+| Disconnect → Online / Room | identity / binding | 无 |
+| RoomState | binding、snapshot | 无 |
+| RoomPhase | binding、round_id、phase、state_version(uint64) | 无 |
+| Replaced | login_id | 无 |
+| Advance / Sweep（本地） | 无业务参数 | 无 |
+
+identity map：user_id、login_id、access_node、agent_name、location_version(uint64)。binding map：identity、room_id、binding_token。confirmed map：identity、可选 room(binding)、game_kind、round_id、room_phase、room_state_version(uint64)。无 room 表示大厅。
+
+RoomReply map 包含 code、可选 binding、可选 snapshot。snapshot 的字段对应客户端 MoleSnapshot：room_id、round_id、phase、state_version(uint64)、members([]any)、ends_at_ms(int64)、可选 target/result；成员 seat 和目标 hole 使用 uint64，积分 score/delta 与窗口时间使用 int64。每次快照新建所有 map/list，access 校验类型、范围后组装客户端视图；没有第二套二进制编码或自定义 Codec。confirmed 的准入字段与快照分别保存，Online 只转交游戏数据。
+
+下表还包括后续斗地主和结算的业务规划：
+
 | 命令/通知 | 主要请求字段 | 结果或接收规则 |
 | --- | --- | --- |
-| AuthVerify（access → Login） | 用户名密码或第三方提供商凭据（由 Login 验证） | UserID 或认证拒绝；不返回密码哈希，不决定位置 |
+| Authenticate（access → Login） | 用户名密码；第三方验证随对应切片加入 | UserID 或认证拒绝；不返回密码哈希，不决定位置 |
 | Bind / Enter / Leave / QueryOperation（access → Online） | OperationID、服务端身份/接入地址、预期位置版本、游戏/房间操作参数 | 条件协调后的完整位置结果；同用户仅一条待确认操作 |
 | AllocateRoom（Online → RoomDirectory） | OperationID、GameKind、服务端玩家绑定信息 | 可加入房间/座位及首次比较绑定所需信息；满组分配新组 |
+| ReserveSeat（RoomDirectory → Room，同节点） | allocateRequest 值，包含 OperationID 和服务端身份 | RoomReply 值，未知结果按原房间/原操作重试 |
 | CompareAndBind（Online → Room） | RoomID、UserID、OperationID、ExpectedBindingToken、目标 LoginID/Agent 地址 | 新绑定令牌与阶段快照；旧令牌不能覆盖新连接 |
 | Remove / QueryBinding（Online → Room） | RoomID、UserID、LoginID、绑定令牌、OperationID | 条件移除或当前绑定/操作结果；移除仍保留防迟到的代次/墓碑 |
-| Snapshot / Hit / Ready / Play / Pass（Agent → Room） | 服务端绑定信息加客户端操作参数 | 校验当前绑定、局/回合、业务条件和幂等键后的编码结果 |
+| Snapshot / Hit / Ready / Play / Pass（Agent → Room） | 服务端绑定信息加客户端操作参数 | 校验当前绑定、局/回合、业务条件和幂等键后的原生值结果 |
 | RoomState（Room → Agent，Send） | UserID、LoginID、RoomID、BindingToken、RoomStateVersion、本人可见快照 | 先匹配已确认绑定，再比较版本，向客户端 Push |
 | RoomPhase（Room → Online，Send） | 当前玩家绑定、RoomID、RoundID、阶段、RoomStateVersion | 仅更新当前房间的低频阶段投影，不同步每次命中/出牌 |
 | SubmitSettlement（Recovery → Settlement） | SettlementID、协议/规则版本、GameKind、RoomID/RoundID、按 UserID 排序的全组积分增量及必要结果 | 全组同事务回执；同 ID 相同内容返回原结果，改内容/同局换 ID 冲突 |
@@ -116,7 +141,7 @@ Registry 定义类型、方向和 Request/Response/Push，状态策略定义当�
 
 ## 6. 关联、版本与重复操作
 
-- LoginID 是服务端生成且不复用的登录关联标识，BindingToken 是房间比较绑定凭据；客户端不能自行选择。待确认 RoomRequest 的载荷在首次发送前冻结，断线不改变同 ID 重试内容，而是对确认后的绑定条件清理。旧连接通知、操作及离开均按条件检查。
+- LoginID 是服务端生成且不复用的登录关联标识，BindingToken 是房间比较绑定凭据；客户端不能自行选择。待确认 RoomRequest 的参数在首次发送前冻结，断线不改变同 ID 重试内容，而是对确认后的绑定条件清理。旧连接通知、操作及离开均按条件检查。
 - LocationVersion 由 Online 为每用户单调分配，确认身份/路由变化才安装新版本。目标版本拒绝后也不复用；Connected 和命中不推进位置版本。同位置版本的身份/路由必须一致。
 - RoomStateVersion 在同 RoomID 内单调增加，不随新局重置；RoundID 单独识别局。状态消息先匹配当前绑定，再比较房间版本；新快照后忽略旧版本，缺口可查询快照。
 - 位置操作用 OperationID/内容/比较令牌；命中用 UserID/RoomID/RoundID/实例/OperationID；出牌与准备还检查回合或准备版本。缓存有界，但淘汰不能让旧局/旧回合重新执行。
@@ -127,7 +152,7 @@ Registry 定义类型、方向和 Request/Response/Push，状态策略定义当�
 
 当前 schema 为 [diagnostic.proto](../common/proto/demo/diagnostic/v1/diagnostic.proto)。ProbeRequest 为 operation_id/text；ProbeResponse 为 operation_id/text/code/failed_node/nodes；ProbePush 为 operation_id/text/node。响应 code 为 ok/invalid/unavailable/disabled，ok 只表示四个 Handler 返回，CLI 另等实际 Push。
 
-内部 NodeProbeRequest 为 probe/access_node/agent_name/agent_token，NodeProbeResponse 为 operation_id/text/node，AgentProbePush 为 push/agent_token。探测令牌由 access 生成，仅隔离当前连接，不充当 LoginID。Probe 是开发诊断接口，access 的 enable_probe 默认 false，业务准入目录不包含它。
+内部 Probe 的参数为 operation_id、text、access_node、agent_name、agent_token 五个 string，返回 map 的 operation_id/text/node；ProbePush 直接传 agent_token、operation_id、text、node 四个 string。探测令牌由 access 生成，仅隔离当前连接，不充当 LoginID。Probe 是开发诊断接口，access 的 enable_probe 默认 false，业务准入目录不包含它。
 
 从根目录运行 scripts/generate.sh（或 npm --prefix typeclient run generate）。源 schema 在 common/proto，Go 与 registry 输出 common/gen，TS 输出 typeclient/src/gen；所有结果和工具输出只在 gsrdemo。Go 插件选中整个 demo/ 目录，新增实际业务消息同时生成 Go/registry；TS 另包含只读 GSR 的 Envelope/选项。
 
