@@ -9,7 +9,7 @@ import (
 
 // TestAccountsVerifyPasswordWithoutExposingHash 保护测试账号的随机盐哈希、错误密码和用户名规范化。
 func TestAccountsVerifyPasswordWithoutExposingHash(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "accounts.local.json")
+	path := filepath.Join(t.TempDir(), "accounts.local.yaml")
 	if err := CreateAccount(path, "Alice", "correct-password"); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestAccountsVerifyPasswordWithoutExposingHash(t *testing.T) {
 
 // TestAccountStoreRejectsContentBeyondReadLimit 保护账号文件不能因为读取上限而忽略后面的多余对象。
 func TestAccountStoreRejectsContentBeyondReadLimit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "accounts.local.json")
+	path := filepath.Join(t.TempDir(), "accounts.local.yaml")
 	content := "[]" + strings.Repeat(" ", 1<<20) + "[]"
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)

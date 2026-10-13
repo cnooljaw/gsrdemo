@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
+# 用途：用 configs/*.yaml 前台启动五个本机节点，等待就绪并监测退出。
+# 用法：run-local.sh，无参数；先用 dev.sh build 构建，并创建本地 YAML 测试账号。
+# 执行范围：使用 bin/，日志写 logs/；Ctrl-C 或节点失败时仅回收本次启动的 PID。
 set -euo pipefail
+if [[ "$#" -ne 0 ]]; then
+    echo "用法：$0" >&2
+    exit 2
+fi
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 pids=()
@@ -22,9 +29,9 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 for role in login online mole settlement access; do
-    [[ -x "bin/$role" ]] || { echo "请先执行 scripts/build.sh" >&2; exit 1; }
+    [[ -x "bin/$role" ]] || { echo "请先执行 scripts/dev.sh build" >&2; exit 1; }
     mkdir -p "logs/$role-01"
-    "bin/$role" -config "configs/$role-01.json" >"logs/$role-01/stdout.log" 2>"logs/$role-01/stderr.log" &
+    "bin/$role" -config "configs/$role-01.yaml" >"logs/$role-01/stdout.log" 2>"logs/$role-01/stderr.log" &
     pids+=("$!")
     ready=0
     for ((attempt=0; attempt<100; attempt++)); do

@@ -22,7 +22,7 @@ func main() {
 }
 
 func run() error {
-	path := flag.String("config", "", "节点 JSON 配置文件")
+	path := flag.String("config", "", "节点 YAML 配置文件")
 	flag.Parse()
 	cfg, err := model.LoadNodeConfig(*path, "access")
 	if err != nil {

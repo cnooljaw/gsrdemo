@@ -1,0 +1,6 @@
+instance: access-01
+listen: access
+nodes_file: nodes.yaml
+log_directory: ../logs/access-01
+gate_address: 127.0.0.1:7888
+enable_probe: false

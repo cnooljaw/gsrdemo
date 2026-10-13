@@ -1,0 +1,4 @@
+instance: online-01
+listen: online
+nodes_file: nodes.yaml
+log_directory: ../logs/online-01

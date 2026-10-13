@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { create } from "@bufbuild/protobuf";
+import { parseDocument } from "yaml";
 import * as pb from "./gen/demo/business/v1/demo_pb.js";
 import { DemoClient } from "./client.js";
 
@@ -11,7 +12,7 @@ function check(condition: unknown, message: string): asserts condition {
 
 function options() {
   let url = "ws://127.0.0.1:7888/ws";
-  let accounts = "configs/clients.local.json";
+  let accounts = "configs/clients.local.yaml";
   for (let index = 2; index < process.argv.length; index += 2) {
     const value = process.argv[index + 1];
     if (value === undefined) throw new Error("usage: mole [--url URL] [--accounts FILE]");
@@ -45,8 +46,10 @@ async function enter(client: DemoClient) {
 
 async function run() {
   const { url, accounts } = options();
-  const credentials: { username: string; password: string }[] = JSON.parse(await readFile(accounts, "utf8"));
-  check(Array.isArray(credentials) && credentials.length === 4 && credentials.every((account) => typeof account.username === "string" && typeof account.password === "string"), "provide four test accounts");
+  const document = parseDocument(await readFile(accounts, "utf8"), { uniqueKeys: true });
+  check(document.errors.length === 0, "invalid YAML account config");
+  const credentials: unknown = document.toJS();
+  check(Array.isArray(credentials) && credentials.length === 4 && credentials.every((account) => account !== null && typeof account === "object" && typeof account.username === "string" && typeof account.password === "string"), "provide four test accounts");
   const clients: DemoClient[] = [];
   try {
     for (let index = 0; index < 4; index++) clients.push(await DemoClient.connect(url));

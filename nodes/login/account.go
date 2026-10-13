@@ -12,7 +12,7 @@ import (
 // runAccount 是 login account 子命令，密码只从标准输入读取。
 func runAccount(args []string) error {
 	flags := flag.NewFlagSet("login account", flag.ContinueOnError)
-	path := flags.String("file", "configs/accounts.local.json", "测试账号哈希文件")
+	path := flags.String("file", "configs/accounts.local.yaml", "测试账号哈希文件")
 	username := flags.String("username", "", "测试用户名；密码从标准输入读取")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

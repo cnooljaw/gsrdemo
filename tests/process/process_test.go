@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ type child struct {
 // TestFiveNodeProbe 保护真实 TS→Agent→四节点 Call、mole→Agent Push 的接线与故障可观察性。
 func TestFiveNodeProbe(t *testing.T) {
 	if os.Getenv("GSR_PROCESS_TEST") != "1" {
-		t.Skip("通过 scripts/process-test.sh 显式启用真实进程验收")
+		t.Skip("通过 scripts/dev.sh test 显式启用真实进程验收")
 	}
 	fixture := startCluster(t, false)
 	ctx, root, url, children := fixture.ctx, fixture.root, fixture.url, fixture.children
@@ -184,10 +185,10 @@ func startCluster(t *testing.T, business bool) clusterFixture {
 		}
 	})
 	directory := t.TempDir()
-	accountsFile := filepath.Join(directory, "accounts.local.json")
-	clientsFile := filepath.Join(directory, "clients.local.json")
+	accountsFile := filepath.Join(directory, "accounts.local.yaml")
+	clientsFile := filepath.Join(directory, "clients.local.yaml")
 	if business {
-		credentials := make([]map[string]string, 0, 4)
+		var credentials strings.Builder
 		for _, username := range []string{"player1", "player2", "player3", "player4"} {
 			admin := exec.CommandContext(ctx, filepath.Join(binDirectory, "login"), "account", "-file", accountsFile, "-username", username)
 			admin.Dir = root
@@ -196,15 +197,19 @@ func startCluster(t *testing.T, business bool) clusterFixture {
 			if err != nil {
 				t.Fatalf("create fixture account: %v; %s", err, output)
 			}
-			credentials = append(credentials, map[string]string{"username": username, "password": "process-test-password"})
+			fmt.Fprintf(&credentials, "- username: %s\n  password: process-test-password\n", username)
 		}
-		encoded, err := json.Marshal(credentials)
-		if err != nil {
+		if err := os.WriteFile(clientsFile, []byte(credentials.String()), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(clientsFile, encoded, 0600); err != nil {
-			t.Fatal(err)
-		}
+	}
+	var nodesYAML strings.Builder
+	nodesYAML.WriteString("nodes:\n")
+	for _, name := range []string{"login", "online", "mole", "settlement", "access"} {
+		fmt.Fprintf(&nodesYAML, "  %s: %s\n", name, routes[name])
+	}
+	if err := os.WriteFile(filepath.Join(directory, "nodes.yaml"), []byte(nodesYAML.String()), 0600); err != nil {
+		t.Fatal(err)
 	}
 	children := make(map[string]*child)
 	for _, name := range []string{"login", "online", "mole", "settlement", "access"} {
@@ -215,27 +220,18 @@ func startCluster(t *testing.T, business bool) clusterFixture {
 		if name == "access" {
 			_ = reservations["gate"].Close()
 		}
-		cfg := map[string]any{
-			"instance": name + "-test", "listen": name,
-			"log_directory": filepath.Join(directory, "logs", name),
-			"nodes":         map[string]string{"login": routes["login"], "online": routes["online"], "mole": routes["mole"], "settlement": routes["settlement"], "access": routes["access"]},
-		}
+		cfg := fmt.Sprintf("instance: %s-test\nlisten: %s\nnodes_file: nodes.yaml\nlog_directory: %s\n", name, name, strconv.Quote(filepath.Join(directory, "logs", name)))
 		if name == "access" {
-			cfg["gate_address"] = routes["gate"]
-			cfg["enable_probe"] = !business
+			cfg += fmt.Sprintf("gate_address: %s\nenable_probe: %t\n", routes["gate"], !business)
 		}
 		if business && name == "login" {
-			cfg["accounts_file"] = accountsFile
+			cfg += "accounts_file: accounts.local.yaml\n"
 		}
 		if business && name == "mole" {
-			cfg["mole"] = map[string]int{"group_size": 3, "round_ms": 6000, "window_ms": 1000, "gap_ms": 500}
+			cfg += "mole:\n  group_size: 3\n  round_ms: 6000\n  window_ms: 1000\n  gap_ms: 500\n"
 		}
-		path := filepath.Join(directory, name+".json")
-		content, err := json.Marshal(cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, content, 0600); err != nil {
+		path := filepath.Join(directory, name+".yaml")
+		if err := os.WriteFile(path, []byte(cfg), 0600); err != nil {
 			t.Fatal(err)
 		}
 		process := startNode(t, ctx, root, binDirectory, name, path)
@@ -248,7 +244,7 @@ func startCluster(t *testing.T, business bool) clusterFixture {
 // TestMultiplayerMole 保护真实四节点登录、协议准入、三人分组、重连和全组局末冻结。
 func TestMultiplayerMole(t *testing.T) {
 	if os.Getenv("GSR_PROCESS_TEST") != "1" {
-		t.Skip("通过 scripts/process-test.sh 显式启用真实进程验收")
+		t.Skip("通过 scripts/dev.sh test 显式启用真实进程验收")
 	}
 	fixture := startCluster(t, true)
 	events, err := runClient(fixture.ctx, fixture.root, fixture.url, "disabled-probe")

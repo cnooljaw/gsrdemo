@@ -1,0 +1,4 @@
+instance: mole-01
+listen: mole
+nodes_file: nodes.yaml
+log_directory: ../logs/mole-01

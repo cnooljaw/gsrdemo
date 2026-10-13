@@ -5,8 +5,8 @@
 ## 项目与修改边界
 
 - gsrdemo 是唯一开发主目录，是一个 Git 仓库管理的多项目工作区。每个节点角色一个独立 Go module；同角色的多个实例共用项目、分别配置。common 是共享 Go module，typeclient 是独立 TypeScript 项目。
-- `../gsr`、`../../skynet_bt/nbgameserver` 和 `../GoServerActorFsm` 严格只读；gsr 同时是本地框架依赖，另两个目录提供业务知识参考。不修改源码、文档、配置、依赖或生成结果，不在其中执行会写入文件的生成、格式化、安装或验证命令。
-- GSR 1.0 指本地 ../gsr 基线，尚未发布；节点 go.mod 通过 replace 引用只读 GSR。参考 revision 记录在 docs/DESIGN.md 的参考基线一节；本地源码变化需核对并更新基线，不当作已经锁定的发布包。
+- `../gsr`、`../../skynet_bt/nbgameserver` 和 `../GoServerActorFsm` 严格只读，提供框架文档和业务参考。不修改源码、文档、配置、依赖或生成结果，不在其中执行会写入文件的生成、格式化、安装或验证命令；依赖缓存和 vendor 同样不手工修改。
+- common 和五个节点的 go.mod 固定 `github.com/cnooljaw/gsr v1.0.0`，不提交指向本地 GSR 的 replace；节点只对本仓库 common 使用本地 replace。依赖 tag 与文档阅读 revision 记录在 docs/DESIGN.md 的参考基线一节，核对 API 时以实际依赖版本为准。
 - 节点项目的 Go 入口、业务源码和测试默认放项目根目录，不预设 cmd/<节点名>/ 或 internal/ 层级；只有实际需要独立包或职责边界时才建子目录。
 - 游戏业务、协议、配置、生成结果和运行产物都写在 gsrdemo 中。
 - 参考实现不构成兼容目标；采用哪些行为由本项目文档、用户要求及实际需求决定。
@@ -29,11 +29,25 @@
 - 优先简单、可验证的节点方案，不提前搭建没有调用者的通用框架。
 - 业务状态尽量少，优先合并行为相同的状态；处理步骤用必要的操作/结果记录表达，不为 RPC、重试和存储步骤增加状态，也不以重复布尔值重建复杂状态机。
 - 同一契约只维护一个文档入口，不创建空目录说明或重复 README；协议规划集中在 docs/PROTOCOL.md，具体 .proto 用到时再拆分。
+- 脚本头部写明用途、参数及执行范围；重复步骤合并到现有入口，不为少量操作新增独立脚本。
 - 只修改当前任务范围，不顺手重构；保留用户已有的无关改动。
 - Go 代码遵守编码规范并经过 gofmt；自然语言注释尽量中文。每个 Test 函数前说明它保护的可观察行为。
 - 优先标准库；引入第三方依赖时说明具体用途和标准库不足之处。
 - 共享代码依据实际调用提取，节点不导入彼此的实现。
+- 配置统一使用 YAML；节点地址表只维护 configs/nodes.yaml，各实例通过 nodes_file 引用。配置中的相对文件路径以该配置文件所在目录为基准，不复制地址表到每个节点。
 - 密钥、私密配置不提交。依赖及生成工具固定版本，锁文件纳入版本管理。
+
+## GSR 接入约定
+
+以下从只读 [独立业务项目开发指南](../gsr/docs/APPLICATION-DEVELOPMENT.md) 和 [AGENTS 模板](../gsr/docs/templates/AGENTS.application.md) 提取；业务契约仍集中在现有设计与协议文档。
+
+- 使用 `gsr.Run + MainService` 启动；MainService 创建、注册业务 Service，不手工组装 Runtime/ClusterClient。
+- Service 显式实现 `Handle`，具名持有 Dispatcher，接口断言紧跟类型；客户端 Agent 另显式实现 `HandleClientMessage`。
+- 每份可变状态只有一个 Service owner，跨 Service 通过消息访问；纯规则函数和 owner 私有值对象按需保留，不为普通函数额外建 Service。
+- 不保存 `self` 或 Handler 上下文，不在业务中直接启动 goroutine；消息与结果的引用参数传独立快照，本地 Args 的浅拷贝不代表内部集合已隔离。
+- 直接使用 GSR Call/Send；Call 有限等待，远程 Handler 使用规范参数类型，不另做内部 Protobuf 编解码。超时、重复、迟到结果的幂等或补偿由业务负责，Send 成功只表示接纳。
+- 资源明确创建者、关闭者和部分启动失败时的清理；`gsr.Run` 管理 Runtime/Cluster/日志，业务关闭自己拥有的资源；`self.Exit()` 后立即返回，退出父 Service 不代表子 Service 已退出。
+- 生成工具、GSR Envelope 和目录选项使用 common/go.mod 选定的同一 GSR 版本，不从旁边 checkout 混入协议。
 
 ## 验证与交付
 

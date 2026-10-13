@@ -4,16 +4,15 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/cnooljaw/gsrdemo/common/model"
+	"go.yaml.in/yaml/v3"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -24,13 +23,13 @@ const hashThreads = 1
 var usernamePattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
 type account struct {
-	UserID     string `json:"user_id"`
-	Username   string `json:"username"`
-	Salt       string `json:"salt"`
-	Hash       string `json:"hash"`
-	Memory     uint32 `json:"memory"`
-	Iterations uint32 `json:"iterations"`
-	Threads    uint8  `json:"threads"`
+	UserID     string `yaml:"user_id"`
+	Username   string `yaml:"username"`
+	Salt       string `yaml:"salt"`
+	Hash       string `yaml:"hash"`
+	Memory     uint32 `yaml:"memory"`
+	Iterations uint32 `yaml:"iterations"`
+	Threads    uint8  `yaml:"threads"`
 }
 
 func normalizeUsername(value string) string {
@@ -42,27 +41,9 @@ func loadAccounts(path string) (map[string]account, error) {
 	if path == "" {
 		return accounts, nil
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if info.Size() > 1<<20 {
-		return nil, errors.New("account file exceeds 1 MiB")
-	}
-	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
-	decoder.DisallowUnknownFields()
 	var records []account
-	if err := decoder.Decode(&records); err != nil {
+	if err := model.ReadYAMLFile(path, &records); err != nil {
 		return nil, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return nil, errors.New("accounts must contain one JSON array")
 	}
 	if len(records) > 512 {
 		return nil, errors.New("account capacity exceeded")
@@ -106,8 +87,8 @@ func authenticate(accounts map[string]account, username, password string) string
 // CreateAccount 是离线管理入口；只保存带随机盐的 Argon2id 哈希，不输出密码或哈希。
 func CreateAccount(path, username, password string) error {
 	username = normalizeUsername(username)
-	if !strings.HasSuffix(path, ".local.json") || !usernamePattern.MatchString(username) || len(password) < 8 || len(password) > 128 {
-		return errors.New("requires .local.json, username 3..32 and password 8..128 bytes")
+	if !strings.HasSuffix(path, ".local.yaml") || !usernamePattern.MatchString(username) || len(password) < 8 || len(password) > 128 {
+		return errors.New("requires .local.yaml, username 3..32 and password 8..128 bytes")
 	}
 	accounts, err := loadAccounts(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -141,10 +122,10 @@ func CreateAccount(path, username, password string) error {
 		return err
 	}
 	defer os.Remove(file.Name())
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
+	encoder := yaml.NewEncoder(file)
+	encoder.SetIndent(2)
 	writeErr := encoder.Encode(records)
-	if err := errors.Join(writeErr, file.Close()); err != nil {
+	if err := errors.Join(writeErr, encoder.Close(), file.Close()); err != nil {
 		return fmt.Errorf("save accounts: %w", err)
 	}
 	return os.Rename(file.Name(), path)

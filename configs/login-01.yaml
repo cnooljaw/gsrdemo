@@ -1,0 +1,5 @@
+instance: login-01
+listen: login
+nodes_file: nodes.yaml
+log_directory: ../logs/login-01
+accounts_file: accounts.local.yaml

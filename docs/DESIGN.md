@@ -8,7 +8,7 @@
 
 ## 1. 范围与边界
 
-一个 Git 仓库管理多个独立项目：每节点角色一个 Go module，同角色多实例用配置区分；common 为共享 Go module，typeclient 为独立 TypeScript 项目。节点依赖 GSR/common，不导入彼此实现。节点入口、业务源码和测试默认放项目根目录；实际需要独立包时再建子目录，不预设 cmd/ 或 internal/ 层级。common 按实际调用提取值对象、命令及协议，不放 Service、SQL、可变游戏状态或宿主组装。三个参考目录严格只读，本地 GSR 依赖及阅读来源见本文末尾。
+一个 Git 仓库管理多个独立项目：每节点角色一个 Go module，同角色多实例用配置区分；common 为共享 Go module，typeclient 为独立 TypeScript 项目。节点依赖 GSR/common，不导入彼此实现。节点入口、业务源码和测试默认放项目根目录；实际需要独立包时再建子目录，不预设 cmd/ 或 internal/ 层级。common 按实际调用提取值对象、命令及协议，不放 Service、SQL、可变游戏状态或宿主组装。三个参考目录严格只读，GSR 发布依赖及文档阅读来源见本文末尾。
 
 首版仅使用整数积分，不涉及真钱。先用 TypeScript 命令行客户端和机器人，完成“用户名密码登录 → 打地鼠 → 持久化积分 → 故障恢复”，再加入三人斗地主。Redis 不进入首版闭环。
 
@@ -217,14 +217,16 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 
 ## 10. GSR 接入约束
 
-- Go main 通过 `gsr.Run` 启动，业务只使用当前 `self.Cluster()/Logger()`；不手工注入 Runtime 或 ClusterClient。
-- Service 显式实现 Handle，具名持有 gsr.Dispatcher；Agent 的 HandleClientMessage 使用 protocol.Dispatcher，两种入口共用一个 runner。
+- Go main 通过 `gsr.Run + MainService` 启动，MainService 创建、注册业务 Service；业务只使用当前 `self.Cluster()/Logger()`，不手工注入 Runtime 或 ClusterClient。
+- Service 显式实现 Handle，具名持有 gsr.Dispatcher，接口断言紧跟类型；Agent 的 HandleClientMessage 使用 protocol.Dispatcher，两种入口共用一个 runner。
+- 每份可变状态只有一个 Service owner，跨 Service 通过消息访问。引用参数和返回值建立独立快照；本地 Args 只浅拷贝，不能共享仍会修改的 map、slice 或指针。
 - 调用与发送直接使用 GSR，不另包通用 Call/Send。所有跨节点参数/返回值直接使用规范标量、map[string]any 和 []any，由默认 ValueCodec 编码；不为内部命令定义 Protobuf 载荷或扩展 Codec。身份/绑定/操作记录为可复制、可比较的 Go 值，跨节点只组装业务字段。Directory→Room 的 ReserveSeat 用本地 CallName 传普通 Go 值；快照每次新建全部集合，客户端 Protobuf 视图在 access 出口组装。具体签名集中在协议规划。
 - 消息方向、编号、载荷及业务错误统一遵循协议规划，不把状态拒绝转换成通用 internal。
 - Cluster 入站的 Source 不能证明远端 Agent/UserID 身份。内部 Cluster 仅开放在受信任网络；认证身份由受信任 access 传入，Room 再检查当前业务绑定。客户端提供的 UserID/LoginID 不作为凭据。
-- 等待链不能成环：Agent→Online→Room、Agent→Room、Recovery→Settlement；Room 不 Call Online/Agent，Settlement 不 Call Room。业务 Service 不启动 goroutine，不保存 Handler 上下文做异步工作。
+- 等待链不能成环：Agent→Online→Room、Agent→Room、Recovery→Settlement；Room 不 Call Online/Agent，Settlement 不 Call Room。业务 Service 不启动 goroutine，不保存 self 或 Handler 上下文做异步工作。
 - 任一外部 Call/SQL 都有有限预算；配置整个流程的总预算，避免多次子调用各自耗尽一次完整客户端等待。返回超时不等于操作没有执行。
 - Mailbox、客户端队列、活跃房间、认证实例、数据库池和恢复批次均配置上限。房间结束后按业务保留期 Exit，避免每一局永久留存一个 Service。
+- `gsr.Run` 负责 Runtime/Cluster/日志生命周期；业务资源明确创建、关闭和部分启动失败的清理 owner。`self.Exit()` 后立即返回，父 Service 退出不自动清理其创建的子 Service。Send 成功只表示接纳；超时、重复与迟到结果的幂等或补偿由业务负责。
 
 ## 11. 第三方登录
 
@@ -255,7 +257,7 @@ RoomService.OnStop 不承担最后一次跨节点结算；可靠性来自运行�
 
 common 与 typeclient 按当前节点实际需要配套调整，不提前设计下一节点。协议规划仍集中在 PROTOCOL.md；实际跨节点接口变动要先确认，不能用临时适配层掩盖尚未决定的职责。
 
-当前下一步是 access 的方案审查，本轮仅调整执行计划，不改业务实现。Online 现有方案在该节点审查时重新讨论，不默认保留其协调流程，也不直接删除已实现代码。
+当前下一步是 access 的方案审查，方案确认前不改该节点业务实现。Online 现有方案在该节点审查时重新讨论，不默认保留其协调流程，也不直接删除已实现代码。
 
 完整 demo 的最终验收仍是：用户名密码登录 → 多人同组 → 满员开局 → 共享目标与个人计分 → 局末全组结果（含断线与零分成员）→ 持久化 → 同事务积分到账 → 已保存结果的故障恢复。局末冻结和测试通过不能代替结算到账。节点方案确认后再确定联调顺序及相关故障用例。
 
@@ -265,12 +267,13 @@ common 与 typeclient 按当前节点实际需要配套调整，不提前设计�
 
 | 来源 | 基线与阅读位置 | 采用范围 |
 | --- | --- | --- |
-| ../gsr | 本地 1.0，尚未发布；依赖/阅读 revision 286ea6f62b7398c432ba9e42fb70a0e619b6d1d8 | gsr.Run、Service、Gate/Protocol、Cluster 和 SQL 宿主边界；公开 API 以 CONTEXT.md、docs/API-DESIGN.md 为准；Cluster 调用参考 docs/CLUSTER-CALL-TUTORIAL.md |
+| github.com/cnooljaw/gsr | 依赖固定 v1.0.0，tag commit d5531a6ba413415f3ab65b8100f894750c44dcd4 | gsr.Run、Service、Gate/Protocol、Cluster 和 SQL 宿主边界；公开 API 以该版本 CONTEXT.md、docs/API-DESIGN.md 和源码为准 |
+| ../gsr | 只读文档 revision 30a870f282f6fd2b6fc58b6e3d3e962a291a14b8 | README、docs/APPLICATION-DEVELOPMENT.md、docs/templates/AGENTS.application.md 和 docs/CLUSTER-CALL-TUTORIAL.md；补充教程不替代依赖版本契约 |
 | ../../skynet_bt/nbgameserver | gameofhlddz/（main、baseattackd、attackd1、roomd1）；gameofshrew/（main、roomd、agent） | 三人斗地主优先 gameofhlddz，不选四人 gameofsrddz；打地鼠仅补充流程问题，不照搬概率/倍率/计费或协议 |
 | ../GoServerActorFsm | 阅读 HEAD ecbb971534b429643a704dfa05410687da611d9b，阅读时有用户未提交改动；internal/room、internal/gamelogic/shrew_timeline.go、internal/fsm/player.go、docs/client-sync-contract.md | 分组/座位、共享目标时间线、广播/快照和简单状态迁移；不移植 Actor/PlayerActor/FSM 框架、旧 Envelope 或地图动画 |
 
-本轮核对 GSR 新基线与上一基线的差异仅为 Cluster 参数教程及相关文档/测试，生产 API 未变化。GSR 的 require v0.0.0 是占位版本。各节点 replace ../../../gsr，common replace ../../gsr；本地 go.work 只组装 gsrdemo，关闭 workspace 仍使用 module 的 replace。它不冻结源码，GSR checkout 变化需核对基线；正式发布后再固定发布依赖。Go 编码规范及 .gitignore 初始化来源为旧 revision b2a9f16ae78da0bade541eabbb39a9144d5e04d2，规范仅调整标题和入口，工作约定提取到 AGENTS.md。
+本轮核对只读文档 revision 与 v1.0.0 tag 的差异为文档、测试及许可证，生产源码未变化。common 和五个节点均 require v1.0.0，移除指向本地 GSR 的 replace；节点仅保留 common 的本地 replace，go.work 只组装 gsrdemo。生成脚本从 common 的依赖模块读取 GSR schema 并构建 registry 工具，避免混用 checkout 中的协议。升级版本需核对 API 与实际验证，再同步基线。Go 编码规范及 .gitignore 初始化来源为旧 revision b2a9f16ae78da0bade541eabbb39a9144d5e04d2，编码规则保留，工作约定提取到 AGENTS.md。
 
 GoServerActorFsm 默认容量 10、至少 3 人开始，demo 默认三人满员开始；所读实现的命中回包不构成全组持久化记账/恢复证据。本项目另行实现结算。三个目录均只读，参考实现不是兼容目标，不在其中执行生成、安装、格式化或测试。
 
-当前基线的已实现边界（待逐节点审查）：密码账号由离线 bin/login account 写入 configs/accounts.local.json，login 启动读入，不提供注册/账号数据库；mole 每组一个 RoomService，Directory 负责预留和满组分配，房间 Timer 与目录巡检分别推进，Online 低频有界核对阶段。结果在 ended 中冻结全部成员增量、包括断线和零分成员，progress=unpersisted；未保存结果不退出房间，容量到限拒绝新组。MySQL 账号/结果保存、同事务到账、恢复和按确认释放仍未实现，需在相关节点方案确认后逐项推进。用户要求继续保持尽可能少的状态。
+当前基线的已实现边界（待逐节点审查）：密码账号由离线 bin/login account 写入 configs/accounts.local.yaml，login 启动读入，不提供注册/账号数据库；mole 每组一个 RoomService，Directory 负责预留和满组分配，房间 Timer 与目录巡检分别推进，Online 低频有界核对阶段。结果在 ended 中冻结全部成员增量、包括断线和零分成员，progress=unpersisted；未保存结果不退出房间，容量到限拒绝新组。MySQL 账号/结果保存、同事务到账、恢复和按确认释放仍未实现，需在相关节点方案确认后逐项推进。用户要求继续保持尽可能少的状态。

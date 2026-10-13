@@ -1,33 +1,37 @@
 package model
 
 import (
-	"encoding/json"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // NodeConfig 是节点宿主的最终配置，路由名不代表 Core ServiceID。
 type NodeConfig struct {
-	Instance     string            `json:"instance"`
-	Listen       string            `json:"listen"`
-	Nodes        map[string]string `json:"nodes"`
-	LogDirectory string            `json:"log_directory"`
-	GateAddress  string            `json:"gate_address,omitempty"`
-	EnableProbe  bool              `json:"enable_probe,omitempty"`
-	AccountsFile string            `json:"accounts_file,omitempty"`
-	Mole         MoleConfig        `json:"mole,omitempty"`
+	Instance     string            `yaml:"instance"`
+	Listen       string            `yaml:"listen"`
+	NodesFile    string            `yaml:"nodes_file"`
+	Nodes        map[string]string `yaml:"-"`
+	LogDirectory string            `yaml:"log_directory"`
+	GateAddress  string            `yaml:"gate_address,omitempty"`
+	EnableProbe  bool              `yaml:"enable_probe,omitempty"`
+	AccountsFile string            `yaml:"accounts_file,omitempty"`
+	Mole         MoleConfig        `yaml:"mole,omitempty"`
 }
 
 // MoleConfig 只配置组容量和服务端时间，不接收客户端奖励参数。
 type MoleConfig struct {
-	GroupSize int `json:"group_size"`
-	RoundMS   int `json:"round_ms"`
-	WindowMS  int `json:"window_ms"`
-	GapMS     int `json:"gap_ms"`
+	GroupSize int `yaml:"group_size"`
+	RoundMS   int `yaml:"round_ms"`
+	WindowMS  int `yaml:"window_ms"`
+	GapMS     int `yaml:"gap_ms"`
 }
 
 // DefaultMoleConfig 是最小三人同组玩法的默认时间线。
@@ -35,28 +39,28 @@ func DefaultMoleConfig() MoleConfig {
 	return MoleConfig{GroupSize: 3, RoundMS: 15000, WindowMS: 1000, GapMS: 500}
 }
 
-// LoadNodeConfig 读取并校验单个 JSON 配置文件；路径按进程工作目录解释。
+// LoadNodeConfig 合并节点 YAML 与 nodes_file 指定的地址表；文件路径相对节点配置目录。
 func LoadNodeConfig(path, role string) (NodeConfig, error) {
-	file, err := os.Open(path)
+	path, err := filepath.Abs(path)
 	if err != nil {
 		return NodeConfig{}, err
 	}
-	cfg, decodeErr := DecodeNodeConfig(file, role)
-	return cfg, errors.Join(decodeErr, file.Close())
-}
-
-// DecodeNodeConfig 拒绝未知字段、额外对象和非本地/私网开发路由。
-func DecodeNodeConfig(reader io.Reader, role string) (NodeConfig, error) {
 	var cfg NodeConfig
-	decoder := json.NewDecoder(reader)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cfg); err != nil {
+	if err := ReadYAMLFile(path, &cfg); err != nil {
 		return cfg, err
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return cfg, errors.New("config must contain exactly one JSON object")
+	if cfg.NodesFile == "" {
+		return cfg, errors.New("nodes_file is required")
 	}
+	base := filepath.Dir(path)
+	cfg.NodesFile = configPath(base, cfg.NodesFile)
+	var routes struct {
+		Nodes map[string]string `yaml:"nodes"`
+	}
+	if err := ReadYAMLFile(cfg.NodesFile, &routes); err != nil {
+		return cfg, err
+	}
+	cfg.Nodes = routes.Nodes
 	if cfg.Instance == "" || cfg.LogDirectory == "" || cfg.Listen != role || cfg.Nodes[role] == "" {
 		return cfg, errors.New("instance, log_directory and matching listen route are required")
 	}
@@ -98,7 +102,44 @@ func DecodeNodeConfig(reader io.Reader, role string) (NodeConfig, error) {
 			}
 		}
 	}
+	cfg.LogDirectory = configPath(base, cfg.LogDirectory)
+	if cfg.AccountsFile != "" {
+		cfg.AccountsFile = configPath(base, cfg.AccountsFile)
+	}
 	return cfg, nil
+}
+
+func configPath(base, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(base, path)
+}
+
+// ReadYAMLFile 读取一个不超过 1 MiB 的 YAML 文档，拒绝未知字段、重复键和多文档。
+// 节点配置、共享地址表和本地账号使用同一读取规则。
+func ReadYAMLFile(path string, destination any) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err := errors.Join(readErr, file.Close()); err != nil {
+		return err
+	}
+	if len(contents) > 1<<20 {
+		return fmt.Errorf("%s exceeds 1 MiB", path)
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(contents))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(destination); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%s must contain exactly one YAML document", path)
+	}
+	return nil
 }
 
 func validateAddress(address string) error {

@@ -156,8 +156,8 @@ RoomReply map 包含 code、可选 binding、可选 snapshot。snapshot 的字�
 
 内部 Probe 的参数为 operation_id、text、access_node、agent_name、agent_token 五个 string，返回 map 的 operation_id/text/node；ProbePush 直接传 agent_token、operation_id、text、node 四个 string。探测令牌由 access 生成，仅隔离当前连接，不充当 LoginID。Probe 是开发诊断接口，access 的 enable_probe 默认 false，业务准入目录不包含它。
 
-从根目录运行 scripts/generate.sh（或 npm --prefix typeclient run generate）。源 schema 在 common/proto，Go 与 registry 输出 common/gen，TS 输出 typeclient/src/gen；所有结果和工具输出只在 gsrdemo。Go 插件选中整个 demo/ 目录，新增实际业务消息同时生成 Go/registry；TS 另包含只读 GSR 的 Envelope/选项。
+从根目录运行 scripts/generate.sh（或 npm --prefix typeclient run generate）。源 schema 在 common/proto，Go 与 registry 输出 common/gen，TS 输出 typeclient/src/gen；所有结果和工具输出只在 gsrdemo。Go 插件选中整个 demo/ 目录，新增实际业务消息同时生成 Go/registry；TS 另包含依赖版本 GSR 的 Envelope/选项。
 
-工具版本：protoc-gen-go 1.36.1、Buf 1.73.0、protoc-gen-es 2.15.0。GSR Envelope/ErrorResponse/目录选项来自只读本地基线；registry 工具从该依赖构建，npm 工具由 package-lock.json 固定。生成文件及锁文件纳入 Git，生成结果不手改。
+工具版本：protoc-gen-go 1.36.1、Buf 1.73.0、protoc-gen-es 2.15.0。GSR Envelope/ErrorResponse/目录选项与 registry 工具统一使用 common/go.mod 固定的 v1.0.0；脚本通过 go list -m 查找模块目录，不读取旁边 GSR checkout。npm 工具由 package-lock.json 固定。生成文件及锁文件纳入 Git，生成结果不手改。
 
 当前 PositionResult 统一携带 code/operation_id/session/snapshot/refreshed，各客户端 Response 用独立类型包装。RoundResult.progress 当前只有 unpersisted；结算未接入，ended 的 LeaveRoom 固定返回 settlement_pending 并保留位置和成员。SessionChanged、LandlordState、SettlementCompleted 尚未实现；位置确认目前通过对应 Response/查询恢复，房间 Push 只更新快照，不安装路由。

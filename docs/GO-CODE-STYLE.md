@@ -2,7 +2,7 @@
 
 本规范补充 Go 官方约定，目标是让代码简单、直白、统一、可读。它不追求代码越短越好，而追求熟悉业务但不是原作者的开发者能够快速理解行为、边界和失败方式。
 
-来源：从只读 `../gsr/docs/GO-CODE-STYLE.md` 复制，参考 revision `b2a9f16ae78da0bade541eabbb39a9144d5e04d2`；仅调整标题和文档入口，保留编码规则。
+来源：从只读 `../gsr/docs/GO-CODE-STYLE.md` 复制，参考 revision `b2a9f16ae78da0bade541eabbb39a9144d5e04d2`；保留编码规则，文档入口随本项目依赖版本更新。
 
 ## 1. 规则层级
 
@@ -11,7 +11,7 @@
 - **强制规则**：可以在评审或工具中明确判断，新增和修改代码必须遵守。
 - **评审启发**：用于发现复杂度，不以固定行数或层数机械裁决。
 
-本项目业务架构以 [DESIGN.md](DESIGN.md) 为准；GSR 公开 API 查阅只读参考仓库的 `docs/API-DESIGN.md`。本规范不得被用来绕过 Service 状态所有权、Mailbox 或生命周期边界。
+本项目业务架构以 [DESIGN.md](DESIGN.md) 为准；GSR 公开 API 查阅实际依赖 v1.0.0 的 `docs/API-DESIGN.md` 和源码，旁边只读仓库的指南作为补充。版本与阅读基线见设计文档末尾。本规范不得被用来绕过 Service 状态所有权、Mailbox 或生命周期边界。
 
 ## 2. 强制规则
 

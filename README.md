@@ -32,17 +32,16 @@
 Go 1.24 或更新、Node.js 22.15 或更新、npm；当前工具版本沿用只读 GSR 示例并锁定。从根目录执行：
 
 ```sh
-./scripts/workspace.sh
 npm --prefix typeclient ci
-./scripts/verify.sh
-./scripts/build.sh
+./scripts/dev.sh check
+./scripts/dev.sh build
 ```
 
-本地 go.work 被忽略，示例纳入 Git，只组装本仓库 module。五个节点通过自身 go.mod 的 replace 引用只读 ../gsr，以当前本地 1.0 为基线，尚无发布版本；占位版本 v0.0.0 不表示框架的完成程度。两个业务参考仓库只用于阅读；Go 模块缓存与 npm 缓存保留。
+本地 go.work 被忽略，示例纳入 Git，只组装本仓库 module；编辑器需要时执行 `cp go.work.example go.work`，已有文件保留。common 和五个节点固定依赖已发布的 `github.com/cnooljaw/gsr v1.0.0`；节点通过 replace 引用本仓库 common。../gsr 只用于阅读框架文档，两个业务参考仓库只用于阅读；Go 模块缓存与 npm 缓存保留。
 
-独立 module 验证使用 scripts/verify.sh --standalone 和 scripts/build.sh --standalone，关闭 workspace，仍使用节点 go.mod 的本地 GSR/common 替换。需要保留当前兄弟目录布局；第三方依赖首次获取可能需要网络，GSR 本身无需远端下载。GSR 基线记录在业务设计末尾。
+构建和检查统一使用 scripts/dev.sh，逐个 module 执行并固定 GOWORK=off，依赖选择以各自 go.mod 为准。首次获取 GSR 和其他第三方依赖需要网络，构建不依赖兄弟目录中的 GSR checkout。GSR 基线记录在业务设计末尾，接入约定参考其独立业务项目开发指南并提取到 AGENTS.md。
 
-Go build 输出 bin/access、bin/login、bin/online、bin/mole、bin/settlement；账号管理使用 bin/login account，TS build 输出 typeclient/dist。schema 和生成结果纳入 Git，修改 common/proto 后运行 scripts/generate.sh，Go/TS/registry 输出只在本项目；工具版本和消息清单集中在协议规划中。
+Go build 输出 bin/access、bin/login、bin/online、bin/mole、bin/settlement；账号管理使用 bin/login account，TS build 输出 typeclient/dist。schema 和生成结果纳入 Git，修改 common/proto 后运行 scripts/generate.sh；GSR 协议依赖与 registry 工具均从 common/go.mod 选定的模块读取，Go/TS/registry 输出只在本项目。工具版本和消息清单集中在协议规划中。
 
 ## 本机演示
 
@@ -54,7 +53,20 @@ printf '%s\n' "$demo_password" | bin/login account -username player1
 unset demo_password
 ```
 
-依次创建 player1、player2、player3、player4；管理入口只用于本地离线测试，不提供线上注册。再建立 configs/clients.local.json，内容是四个 `{ "username": "player1", "password": "对应测试密码" }` 对象组成的数组，密码需与账号创建时一致。该文件只供本机机器人读取，不提交。
+依次创建 player1、player2、player3、player4；管理入口只用于本地离线测试，不提供线上注册。再建立 configs/clients.local.yaml，内容为四条 YAML 账号记录，密码需与账号创建时一致：
+
+```yaml
+- username: player1
+  password: "对应测试密码"
+- username: player2
+  password: "对应测试密码"
+- username: player3
+  password: "对应测试密码"
+- username: player4
+  password: "对应测试密码"
+```
+
+该文件只供本机机器人读取，不提交。
 
 从根目录启动五个进程，另一个终端运行四个独立 WebSocket 客户端的演示：
 
@@ -65,24 +77,37 @@ npm --prefix typeclient run mole
 
 演示验证未登录拒绝、错误密码、三人同组与第四人隔离、竞争命中与重试、等待组离开、同局重连、断线零分成员仍进入局末结果；最后输出 complete/progress=unpersisted。所有客户端始终只连接 access。默认一局 15 秒，mole 配置可指定 group_size/round_ms/window_ms/gap_ms 四项，范围由加载器校验。
 
-两个 CLI 均可指定 --url（默认 ws://127.0.0.1:7888/ws）；mole 另有 --accounts（默认 configs/clients.local.json）。如需原五节点探测，显式将 access 配置 enable_probe 设为 true，重启 access，再运行 `npm --prefix typeclient run client -- --text "hello demo"`。默认关闭该诊断协议，返回 disabled。探测校验关联并等待四节点响应和 mole Push；总 Call 预算 2 秒、CLI 等待 5 秒。
+两个 CLI 均可指定 --url（默认 ws://127.0.0.1:7888/ws）；mole 另有 --accounts（默认 configs/clients.local.yaml）。如需原五节点探测，显式将 access 配置 enable_probe 设为 true，重启 access，再运行 `npm --prefix typeclient run client -- --text "hello demo"`。默认关闭该诊断协议，返回 disabled。探测校验关联并等待四节点响应和 mole Push；总 Call 预算 2 秒、CLI 等待 5 秒。
 
-Ctrl-C 停止 run-local.sh 本次启动的子进程，任一节点提前退出也会收回剩余进程；清理只针对自己的 PID。日志按实例在 logs/ 下隔离。也可从根目录单独执行 bin/<角色> -config configs/<角色>-01.json，成功输出 JSON ready，Ctrl-C/SIGTERM 有序退出。
+Ctrl-C 停止 run-local.sh 本次启动的子进程，任一节点提前退出也会收回剩余进程；清理只针对自己的 PID。日志按实例在 logs/ 下隔离。也可从根目录单独执行 bin/<角色> -config configs/<角色>-01.yaml，成功输出 JSON ready，Ctrl-C/SIGTERM 有序退出。
 
 配置是本地开发示例；Gate 为 Plain，监听 127.0.0.1:7888。Cluster 的 GSR Open 实际绑定 0.0.0.0，配置路由中的 127.0.0.1 是拨号地址，不代表其监听限制在回环；本轮用于受信任开发环境。
 
-JSON 配置共用 nodes 路由表，各实例独占日志目录，路径按启动工作目录解释。加载拒绝未知字段、多个对象、缺失监听路由和非法地址，当前 listen 要匹配角色；access-02 在对应切片接入。私密配置用被忽略的 configs/*.local.json/*.local.yaml，数据库字段随持久化切片加入。
+节点配置使用 YAML，地址只在 [configs/nodes.yaml](configs/nodes.yaml) 配置一次。各实例通过 `nodes_file: nodes.yaml` 引用该表，例如 [access-01.yaml](configs/access-01.yaml)：
+
+```yaml
+instance: access-01
+listen: access
+nodes_file: nodes.yaml
+log_directory: ../logs/access-01
+gate_address: 127.0.0.1:7888
+enable_probe: false
+```
+
+nodes_file、log_directory 和 accounts_file 的相对路径以节点配置文件所在目录为基准，绝对路径原样使用。加载拒绝未知字段、重复键、多文档、缺失监听路由和非法地址；listen 要匹配角色。账号哈希文件为 configs/accounts.local.yaml，机器人账号为 configs/clients.local.yaml；私密配置使用被忽略的 configs/*.local.yaml，数据库字段随对应节点方案加入。
+
+Go 和 Node 标准库不提供 YAML 解析，分别固定 [go.yaml.in/yaml/v3](https://pkg.go.dev/go.yaml.in/yaml/v3) v3.0.5 和 [yaml](https://eemeli.org/yaml/) 2.8.3，锁文件纳入版本管理；解析只在配置加载边界进行。
 
 真实进程测试显式运行：
 
 ```sh
-./scripts/process-test.sh
-./scripts/process-test.sh --race
+./scripts/dev.sh test
+./scripts/dev.sh test --race
 ```
 
-测试预留临时本机端口、创建临时测试账号并等待 readiness。通信用例验证五节点探测和故障；业务用例只启动 access/login/online/mole 四节点，运行上述完整多人状态切片。--race 模式同时检查所有子进程和测试。普通 verify.sh 不启动进程或数据库。
+测试预留临时本机端口、创建临时测试账号并等待 readiness。通信用例验证五节点探测和故障；业务用例只启动 access/login/online/mole 四节点，运行上述完整多人状态切片。--race 模式同时检查所有子进程和测试。dev.sh check 不启动进程或数据库。
 
-当前基线验证记录（2026-10-13）：统一脚本的 module test/vet 和 TS 类型检查通过；受影响状态包的 race 通过；process-test.sh --race 的五节点探测与四节点多人用例全部通过，合计约 26 秒。通信阶段曾验证 run-local.sh 的启动及 Ctrl-C 清理。MySQL 保存、积分到账与结算恢复尚未验收。
+当前验证记录（2026-10-13）：使用发布的 GSR v1.0.0，协议重新生成无差异；各 module test/vet、TS 类型检查与构建通过；YAML 共享文件、相对路径、错误配置和五份示例配置的用例通过；dev.sh test --race 的五节点探测与多人用例通过，合计约 26 秒。此前验证过 run-local.sh 的启动及 Ctrl-C 清理。MySQL 保存、积分到账与结算恢复尚未验收。
 
 ## 工程命令
 
@@ -90,12 +115,11 @@ JSON 配置共用 nodes 路由表，各实例独占日志目录，路径按启�
 
 | 命令 | 用途 |
 | --- | --- |
-| ./scripts/workspace.sh | 创建本地 go.work，已有配置保留 |
-| ./scripts/build.sh [--standalone] | 构建各 module、节点二进制和 TS；standalone 关闭 workspace |
-| ./scripts/verify.sh [--standalone] | 各 module 测试/vet 和 TS 类型检查，默认跳过真实进程 |
-| ./scripts/generate.sh | 生成 Go/TS/registry；npm --prefix typeclient run generate 等价 |
-| ./scripts/run-local.sh | 前台启动五节点，等待 readiness，并负责自己进程的清理 |
-| ./scripts/process-test.sh [--race] | 构建并显式执行真实进程验收，race 同时检测节点与测试 |
+| ./scripts/dev.sh build [--race] | 构建节点二进制与 TS；race 版放 bin/race |
+| ./scripts/dev.sh check | 各 module 测试/vet 和 TS 类型检查 |
+| ./scripts/dev.sh test [--race] | 构建并执行真实多进程测试，只回收测试自己的进程 |
+| ./scripts/generate.sh | 生成 Go/TS/registry，并整理生成文件；npm --prefix typeclient run generate 等价 |
+| ./scripts/run-local.sh | 前台启动五节点，等待 readiness，回收本次启动的进程 |
 | npm --prefix typeclient run check / build / client / mole | 独立客户端的类型检查、构建、探测与多人演示 |
 
 ## 业务完成标准
