@@ -1,6 +1,0 @@
-# 用途：供 generate.sh 生成客户端 TS 消息，输入包含 demo 和 GSR 的协议依赖。
-version: v2
-plugins:
-  - local: protoc-gen-es
-    out: typeclient/src/gen
-    opt: [target=ts, import_extension=js]

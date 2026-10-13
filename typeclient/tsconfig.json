@@ -6,14 +6,10 @@
     "rootDir": "src",
     "outDir": "dist",
     "lib": [
-      "ES2022",
-      "DOM"
+      "ES2022"
     ],
-    "types": [
-      "node"
-    ],
+    "types": [],
     "strict": true,
-    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "noEmitOnError": true
   },

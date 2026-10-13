@@ -68,5 +68,4 @@ Thumbs.db
 .env
 .env.*
 !.env.example
-/configs/*.local.json
 /configs/*.local.yaml

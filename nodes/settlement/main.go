@@ -24,18 +24,19 @@ func main() {
 func run() error {
 	path := flag.String("config", "", "节点 YAML 配置文件")
 	flag.Parse()
-	cfg, err := model.LoadNodeConfig(*path, "settlement")
+	config, err := model.LoadNodeConfig(*path, "settlement")
 	if err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	nodes := make(map[cluster.NodeID]string, len(cfg.Nodes))
-	for name, address := range cfg.Nodes {
+
+	nodes := make(map[cluster.NodeID]string, len(config.Nodes))
+	for name, address := range config.Nodes {
 		nodes[cluster.NodeID(name)] = address
 	}
 	return gsr.Run(ctx, gsr.Config{
-		Logging: logging.Config{Directory: cfg.LogDirectory},
+		Logging: logging.Config{Directory: config.LogDirectory},
 		Cluster: cluster.ClusterConfig{Nodes: nodes},
-	}, NewMain(cfg, os.Stdout))
+	}, NewMain(cluster.NodeID(config.Listen)))
 }

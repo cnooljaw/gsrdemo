@@ -15,13 +15,7 @@ import (
 )
 
 func main() {
-	var err error
-	if len(os.Args) > 1 && os.Args[1] == "account" {
-		err = runAccount(os.Args[2:])
-	} else {
-		err = run()
-	}
-	if err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -30,18 +24,19 @@ func main() {
 func run() error {
 	path := flag.String("config", "", "节点 YAML 配置文件")
 	flag.Parse()
-	cfg, err := model.LoadNodeConfig(*path, "login")
+	config, err := model.LoadNodeConfig(*path, "login")
 	if err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	nodes := make(map[cluster.NodeID]string, len(cfg.Nodes))
-	for name, address := range cfg.Nodes {
+
+	nodes := make(map[cluster.NodeID]string, len(config.Nodes))
+	for name, address := range config.Nodes {
 		nodes[cluster.NodeID(name)] = address
 	}
 	return gsr.Run(ctx, gsr.Config{
-		Logging: logging.Config{Directory: cfg.LogDirectory},
+		Logging: logging.Config{Directory: config.LogDirectory},
 		Cluster: cluster.ClusterConfig{Nodes: nodes},
-	}, NewMain(cfg, os.Stdout))
+	}, NewMain(cluster.NodeID(config.Listen)))
 }

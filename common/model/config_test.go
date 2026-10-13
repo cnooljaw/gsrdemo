@@ -18,7 +18,7 @@ func configFiles(t *testing.T, node, routes string) string {
 	return path
 }
 
-const loginConfig = "instance: login-01\nlisten: login\nlog_directory: logs/login-01\nnodes_file: nodes.yaml\naccounts_file: accounts.local.yaml\n"
+const loginConfig = "instance: login-01\nlisten: login\nlog_directory: logs/login-01\nnodes_file: nodes.yaml\n"
 const loginRoutes = "nodes:\n  login: 127.0.0.1:19002\n"
 
 // TestLoadNodeConfigUsesSharedRoutesAndRelativePaths 保护节点地址只从共享文件读取，路径与启动工作目录无关。
@@ -29,7 +29,7 @@ func TestLoadNodeConfigUsesSharedRoutesAndRelativePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := filepath.Dir(path)
-	if cfg.Nodes["login"] != "127.0.0.1:19002" || cfg.LogDirectory != filepath.Join(base, "logs/login-01") || cfg.AccountsFile != filepath.Join(base, "accounts.local.yaml") {
+	if cfg.Nodes["login"] != "127.0.0.1:19002" || cfg.LogDirectory != filepath.Join(base, "logs/login-01") || cfg.NodesFile != filepath.Join(base, "nodes.yaml") {
 		t.Fatalf("shared config or relative paths lost: %+v", cfg)
 	}
 	if err := os.WriteFile(filepath.Join(base, "nodes.yaml"), []byte("nodes:\n  login: 127.0.0.1:29002\n"), 0600); err != nil {
@@ -54,8 +54,6 @@ func TestLoadNodeConfigRejectsUnsafeOrAmbiguousInput(t *testing.T) {
 		{"missing role route", loginConfig, "nodes:\n  online: 127.0.0.1:19003\n"},
 		{"missing shared file", "instance: login\nlisten: login\nlog_directory: logs\nnodes_file: missing.yaml\n", loginRoutes},
 		{"wrong role", "instance: login\nlisten: online\nlog_directory: logs\nnodes_file: nodes.yaml\n", loginRoutes},
-		{"wrong gameplay owner", loginConfig + "mole:\n  group_size: 3\n", loginRoutes},
-		{"wrong probe owner", loginConfig + "enable_probe: true\n", loginRoutes},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

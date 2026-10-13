@@ -7,5 +7,4 @@ use (
 	./nodes/mole
 	./nodes/online
 	./nodes/settlement
-	./tests/process
 )

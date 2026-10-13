@@ -2,52 +2,30 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"io"
+	"fmt"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/model"
 )
 
 type mainService struct {
-	cfg    model.NodeConfig
-	output io.Writer
+	node cluster.NodeID
 }
 
 var _ gsr.Service = (*mainService)(nil)
 
-// NewMain 显式组装 online 节点的业务 Service 和诊断入口。
-func NewMain(cfg model.NodeConfig, output io.Writer) gsr.Service {
-	return &mainService{cfg: cfg, output: output}
+// NewMain 创建只负责节点启动的 MainService。
+func NewMain(node cluster.NodeID) gsr.Service {
+	return &mainService{node: node}
 }
 
-func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	id, err := self.CreateService(ctx, newProbeService())
-	if err != nil {
+func (service *mainService) OnStart(_ context.Context, self gsr.ServiceContext) error {
+	if err := self.Cluster().Open(service.node); err != nil {
 		return err
 	}
-	if err := self.Register("online", id); err != nil {
-		return err
-	}
-	sessionsID, err := self.CreateService(ctx, newSessionService())
-	if err != nil {
-		return err
-	}
-	if err := self.Register("sessions", sessionsID); err != nil {
-		return err
-	}
-	if err := self.Cluster().Open(cluster.NodeID(service.cfg.Listen)); err != nil {
-		return err
-	}
-	if err := json.NewEncoder(service.output).Encode(model.NodeReady{
-		Event: "ready", Instance: service.cfg.Instance, ListenAddress: self.Cluster().ListenAddress(),
-	}); err != nil {
-		return err
-	}
-	self.Exit()
-	return nil
+	_, err := fmt.Printf("%s 就绪：%s\n", service.node, self.Cluster().ListenAddress())
+	return err
 }
 
 func (service *mainService) Handle(_ gsr.CommandContext, _ runtime.CommandID, _ ...any) (any, error) {
