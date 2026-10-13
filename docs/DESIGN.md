@@ -8,7 +8,7 @@
 
 ## 1. 范围与边界
 
-一个 Git 仓库管理多个独立项目：每节点角色一个 Go module，同角色多实例用配置区分；common 为共享 Go module，typeclient 为独立 TypeScript 项目。节点依赖 GSR/common，不导入彼此 internal。common 按实际调用提取值对象、命令及协议，不放 Service、SQL、可变游戏状态或宿主组装。三个参考目录严格只读，本地 GSR 依赖及阅读来源见本文末尾。
+一个 Git 仓库管理多个独立项目：每节点角色一个 Go module，同角色多实例用配置区分；common 为共享 Go module，typeclient 为独立 TypeScript 项目。节点依赖 GSR/common，不导入彼此实现。节点入口、业务源码和测试默认放项目根目录；实际需要独立包时再建子目录，不预设 cmd/ 或 internal/ 层级。common 按实际调用提取值对象、命令及协议，不放 Service、SQL、可变游戏状态或宿主组装。三个参考目录严格只读，本地 GSR 依赖及阅读来源见本文末尾。
 
 首版仅使用整数积分，不涉及真钱。先用 TypeScript 命令行客户端和机器人，完成“用户名密码登录 → 打地鼠 → 持久化积分 → 故障恢复”，再加入三人斗地主。Redis 不进入首版闭环。
 
@@ -273,4 +273,4 @@ common 与 typeclient 按当前节点实际需要配套调整，不提前设计�
 
 GoServerActorFsm 默认容量 10、至少 3 人开始，demo 默认三人满员开始；所读实现的命中回包不构成全组持久化记账/恢复证据。本项目另行实现结算。三个目录均只读，参考实现不是兼容目标，不在其中执行生成、安装、格式化或测试。
 
-当前基线的已实现边界（待逐节点审查）：密码账号由离线 bin/account 写入 configs/accounts.local.json，login 启动读入，不提供注册/账号数据库；mole 每组一个 RoomService，Directory 负责预留和满组分配，房间 Timer 与目录巡检分别推进，Online 低频有界核对阶段。结果在 ended 中冻结全部成员增量、包括断线和零分成员，progress=unpersisted；未保存结果不退出房间，容量到限拒绝新组。MySQL 账号/结果保存、同事务到账、恢复和按确认释放仍未实现，需在相关节点方案确认后逐项推进。用户要求继续保持尽可能少的状态。
+当前基线的已实现边界（待逐节点审查）：密码账号由离线 bin/login account 写入 configs/accounts.local.json，login 启动读入，不提供注册/账号数据库；mole 每组一个 RoomService，Directory 负责预留和满组分配，房间 Timer 与目录巡检分别推进，Online 低频有界核对阶段。结果在 ended 中冻结全部成员增量、包括断线和零分成员，progress=unpersisted；未保存结果不退出房间，容量到限拒绝新组。MySQL 账号/结果保存、同事务到账、恢复和按确认释放仍未实现，需在相关节点方案确认后逐项推进。用户要求继续保持尽可能少的状态。

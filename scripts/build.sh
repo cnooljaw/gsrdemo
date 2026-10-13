@@ -21,10 +21,11 @@ for module_directory in "$project_root/common" "$project_root"/nodes/* "$project
     echo "检查 ${module_directory#"$project_root/"}"
     (
         cd "$module_directory"
-        go build ./...
-        if [[ -d "cmd/$(basename "$module_directory")" ]]; then
+        if [[ "$module_directory" == "$project_root"/nodes/* ]]; then
             mkdir -p "$project_root/bin"
-            go build -o "$project_root/bin/$(basename "$module_directory")" "./cmd/$(basename "$module_directory")"
+            go build -o "$project_root/bin/$(basename "$module_directory")" .
+        else
+            go build ./...
         fi
     )
 done
@@ -32,5 +33,4 @@ if [[ ! -d "$project_root/typeclient/node_modules" ]]; then
     echo "缺少客户端依赖，请在 typeclient 执行 npm ci 后重试。" >&2
     exit 1
 fi
-(cd "$project_root/nodes/login" && go build -o "$project_root/bin/account" ./cmd/account)
 npm --prefix "$project_root/typeclient" run build

@@ -189,7 +189,7 @@ func startCluster(t *testing.T, business bool) clusterFixture {
 	if business {
 		credentials := make([]map[string]string, 0, 4)
 		for _, username := range []string{"player1", "player2", "player3", "player4"} {
-			admin := exec.CommandContext(ctx, filepath.Join(binDirectory, "account"), "-file", accountsFile, "-username", username)
+			admin := exec.CommandContext(ctx, filepath.Join(binDirectory, "login"), "account", "-file", accountsFile, "-username", username)
 			admin.Dir = root
 			admin.Stdin = strings.NewReader("process-test-password\n")
 			output, err := admin.CombinedOutput()

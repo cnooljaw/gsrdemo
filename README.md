@@ -21,11 +21,11 @@
 | typeclient | 独立 TypeScript CLI/机器人项目 |
 | configs、scripts、tests | 配置、工程操作和跨进程验收；数据库切片按需建立 migrations |
 
-每个节点角色一个项目；access-01/access-02 共用 access。nodes/landlord 在斗地主切片再建立，优先参考 gameofhlddz/。根目录没有 go.mod，一个 Git 仓库管理全部项目。
+每个节点角色一个项目；Go 入口 main.go、业务源码和测试默认直接放该项目根目录，统一为 package main，实际需要独立包时再分目录。access-01/access-02 共用 access。nodes/landlord 在斗地主切片再建立，优先参考 gameofhlddz/。根目录没有 go.mod，一个 Git 仓库管理全部项目。
 
 节点依赖 common 和 gsr，节点之间只通过命令契约通信，不导入对方实现。共享代码按真实需求提取，不建立通用 GameService 基类。
 
-阅读 access 时从 [agent.go](nodes/access/internal/access/agent.go) 看连接和固定分发入口，再看 login.go（认证与连接替换）、position.go（已确认位置与进出房）、mole.go（地鼠协议）、probe.go（诊断）。这些都是同一个 Agent 的方法，共用 Mailbox；会话记录只保存身份、绑定和房间阶段，游戏快照单独缓存。common/command 只定义命令编号；内部调用直接用 GSR 的原生参数/map/list，Protobuf 只用于客户端协议。
+阅读 access 时从 [agent.go](nodes/access/agent.go) 看连接和固定分发入口，再看 login.go（认证与连接替换）、position.go（已确认位置与进出房）、mole.go（地鼠协议）、probe.go（诊断）。这些都是同一个 Agent 的方法，共用 Mailbox；会话记录只保存身份、绑定和房间阶段，游戏快照单独缓存。common/command 只定义命令编号；内部调用直接用 GSR 的原生参数/map/list，Protobuf 只用于客户端协议。
 
 ## 准备与验证
 
@@ -42,7 +42,7 @@ npm --prefix typeclient ci
 
 独立 module 验证使用 scripts/verify.sh --standalone 和 scripts/build.sh --standalone，关闭 workspace，仍使用节点 go.mod 的本地 GSR/common 替换。需要保留当前兄弟目录布局；第三方依赖首次获取可能需要网络，GSR 本身无需远端下载。GSR 基线记录在业务设计末尾。
 
-Go build 输出 bin/access、bin/login、bin/online、bin/mole、bin/settlement 和 bin/account，TS build 输出 typeclient/dist。schema 和生成结果纳入 Git，修改 common/proto 后运行 scripts/generate.sh，Go/TS/registry 输出只在本项目；工具版本和消息清单集中在协议规划中。
+Go build 输出 bin/access、bin/login、bin/online、bin/mole、bin/settlement；账号管理使用 bin/login account，TS build 输出 typeclient/dist。schema 和生成结果纳入 Git，修改 common/proto 后运行 scripts/generate.sh，Go/TS/registry 输出只在本项目；工具版本和消息清单集中在协议规划中。
 
 ## 本机演示
 
@@ -50,7 +50,7 @@ Go build 输出 bin/access、bin/login、bin/online、bin/mole、bin/settlement 
 
 ```sh
 read -s 'demo_password?测试密码（至少 8 字节）：'; echo
-printf '%s\n' "$demo_password" | bin/account -username player1
+printf '%s\n' "$demo_password" | bin/login account -username player1
 unset demo_password
 ```
 

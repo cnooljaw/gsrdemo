@@ -10,9 +10,8 @@ elif [[ "$#" -eq 1 && "$1" == "--race" ]]; then
     export GSR_NODE_BIN="$project_root/bin/race"
     mkdir -p "$GSR_NODE_BIN"
     for role in access login online mole settlement; do
-        (cd "$project_root/nodes/$role" && go build -race -o "$GSR_NODE_BIN/$role" "./cmd/$role")
+        (cd "$project_root/nodes/$role" && go build -race -o "$GSR_NODE_BIN/$role" .)
     done
-    (cd "$project_root/nodes/login" && go build -race -o "$GSR_NODE_BIN/account" ./cmd/account)
     npm --prefix "$project_root/typeclient" run build
     race=true
 else
