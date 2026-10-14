@@ -2,3 +2,5 @@ instance: login-01
 listen: login
 nodes_file: nodes.yaml
 log_directory: ../logs/login-01
+# 复制为 login-01.local.yaml 后填写本机 DSN；私密配置不提交。
+mysql_dsn: ""

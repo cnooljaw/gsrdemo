@@ -1,2 +1,4 @@
+github.com/cnooljaw/gsr v1.0.1 h1:5cqAEoQJ3HcYcC4RKL84KhVPNEYzj0OP5ilsjhTnLRQ=
+github.com/cnooljaw/gsr v1.0.1/go.mod h1:KfpLAmcpT0oHZEOCJbMUzVbQLB1mIqlvm5otb3Sw1CE=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
 go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=

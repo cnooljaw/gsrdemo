@@ -6,9 +6,9 @@
 
 三人斗地主后续单独确认，优先参考 nbgameserver 的 gameofhlddz/；多人分组和共享目标可参考 GoServerActorFsm。参考代码提供知识，不作为兼容目标。
 
-当前 access 已具备 Gate/Agent 连接基础，其余四个节点和 TypeScript 保持骨架。没有业务状态、业务命令、本项目客户端协议、生成结果、账号管理或游戏演示。旧实现和旧方案已移除，不能当作已确认设计继续扩展。
+当前 access 已具备 MAC Gate/Agent 连接基础，login 已实现内部用户名密码认证与管理命令；online、mole、settlement 和 TypeScript 保持骨架。尚无客户端登录协议、在线位置、游戏状态或游戏演示。旧实现和旧方案已移除，不能当作已确认设计继续扩展。
 
-每个节点角色一个独立 Go module，源码默认放该项目根目录；common 目前只包含实际共用的配置代码。没有调用者的通用框架、协议目录和业务包不提前建立。
+每个节点角色一个独立 Go module，源码默认放该项目根目录；common 仅包含配置代码与 login 内部命令契约。没有调用者的通用框架、协议目录和业务包不提前建立。
 
 ## 2. 推进顺序
 
@@ -27,7 +27,7 @@
 3. 用户确认后实现当前节点。common、协议和 TypeScript 只配套加入该节点必需的内容；其他节点的依赖问题先列出，不自动扩展实现。
 4. 展示改动和实际验证，等待用户决定是否提交及推进下一节点。
 
-access 连接基础已实现，当前交用户审查，再决定后续范围。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。协议有实际需求后集中维护，再按使用范围拆分 .proto。
+access 连接基础已提交，login 本轮范围已确认，完成后交用户审查。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。业务契约见 [PROTOCOL.md](PROTOCOL.md)，按使用范围决定是否需要 .proto。
 
 完成五个节点后再联调打地鼠全流程。三人斗地主、access 多实例和第三方登录分别先确认方案，不提前开工。
 
@@ -57,6 +57,18 @@ access 连接基础已实现，当前交用户审查，再决定后续范围。�
 - 远程 Handler 使用 `int64` / `uint64` / `float64` / `[]any` / `map[string]any` 等规范参数；Dispatcher 不做隐式类型转换，集合的 nil/空状态不作为远程业务语义。本地 Args 浅拷贝不隔离内部集合，参数和结果仍须独立快照。
 - 节点表 host 为访问地址，OpenCluster 取 port 绑定 `0.0.0.0`，访问限制归部署网络；端口零仅用于动态监听测试，不作为出站路由。本项目集中维护 YAML 节点表，不额外拆分监听配置。
 
-本次迁移只更新五个节点的依赖、启动/测试接线及文档，不增加业务状态、协议或 TypeScript 功能，也不保留旧入口兼容包装。
+框架升级只更新五个节点的依赖、启动/测试接线及文档，不保留旧入口兼容包装；login 的业务增量单独记录在下节。
 
 2026-10-14 验证：`./scripts/dev.sh check`、`./scripts/dev.sh build` 和 access 的 `go test -race ./... -timeout=2m` 通过，包含真实 WebSocket 接入、停机及启动失败清理。其余节点只验证骨架编译/静态检查，未验收跨节点业务或 MySQL。
+
+## 5. login 第一步（已确认）
+
+- 单个 LoginService 负责用户名密码验证，MySQL `gsrdemo_login.accounts` 保存稳定 UserID、唯一用户名和密码摘要；没有账号缓存、Token、LoginID、在线状态或额外状态机。
+- 按用户确认采用标准库无盐 SHA-256，仅用于示例；不引入 Argon2id。账号由本节点 `-create-user` 管理命令创建，密码从标准输入读取；不增加远程注册接口。
+- 宿主通过 GSR mysqlclient.Open 创建原生数据库池，Run 返回后关闭。MainService 创建并命名 LoginService、打开 Cluster 后退出；Service 仅借用数据库池，每次 SQL 最多等待 2 秒。
+- Cluster 命令接收两个 string，返回 uint64；common/login 仅定义命令、名称和稳定错误，契约集中在 PROTOCOL.md。MySQL 驱动沿用 GSR 示例的 v1.10.1；sqlmock v1.5.2 仅用于测试，标准库没有对应模拟驱动。
+- YAML 的 mysql_dsn 为 login 私有字段，公开模板不含凭据；本机凭据保存在被忽略的 login-01.local.yaml。schema.sql 只初始化本项目专用库，不修改 GSR 示例库，节点启动不自动建表。
+- 默认测试使用 SQL mock 和两个真实 Runtime 的 TCP Cluster 链路，覆盖正确/错误凭据、重复认证、非法输入、数据库错误与账号损坏。真实 MySQL 验收显式开启，使用独占测试账号并清理；未运行时不声称数据库验收完成。
+- 本轮不修改 access 或 TypeScript 的业务逻辑，不推进 online；下一节点或客户端登录接入另行确认。
+
+2026-10-14：统一 check（Go test/vet、TS 类型检查）、login race 与 login 构建通过。GSR 的本机 MySQL 凭据已只读复用到本项目私密 YAML；管理员已初始化专用库。`GSRDEMO_MYSQL_INTEGRATION=1 go test -run '^TestLoginLiveMySQL$' -timeout=30s -v` 通过：真实 MySQL 创建账号、拒绝重复覆盖，通过 TCP Cluster 两次认证返回同一 UserID，错误密码/不存在账号均拒绝，测试账号清理成功。此验收不包含 access 客户端登录或跨进程业务联调。
