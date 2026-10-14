@@ -34,6 +34,8 @@ check 执行各 Go module 的 test/vet 和 TS 类型检查，其中 access 用�
 
 按节点工作时可执行 `./scripts/dev.sh check access` 和 `./scripts/dev.sh build access`，仅处理 common 与 access。TypeScript 当前只做类型检查与编译，没有连接或业务功能。Go 命令使用 GOWORK=off 和 .cache/go-build，保留缓存；编辑器需要时执行 `cp go.work.example go.work`。
 
+若编辑器出现 `go.work requires go >= 1.24.0 (running go 1.23.3)`，先检查 `go version` 和 `go env GOROOT`。终端自动选择的新工具链可能与 gopls 实际执行的 `go` 不同；在本机 `.vscode/settings.json` 中将 `go.goroot` 设为 Go 1.24 或更新 SDK 的目录，并通过 `go.toolsEnvVars.PATH` 把该目录的 `bin` 放在 `${env:PATH}` 前，`GOTOOLCHAIN` 设为 `auto`。配置后执行 `Go: Restart Language Server`；仍沿用旧环境时执行 `Developer: Reload Window`。此文件含本机路径，已被 Git 忽略，不降低 go.work/go.mod 的版本要求。工具链选择规则见 [Go 官方文档](https://go.dev/doc/toolchain)。
+
 节点地址只维护 [configs/nodes.yaml](configs/nodes.yaml)。各实例通过 nodes_file 引用该表，配置中的文件路径以该配置文件所在目录为基准。例如：
 
 ```yaml

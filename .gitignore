@@ -65,6 +65,8 @@ Thumbs.db
 # gsrdemo 本地 workspace 与私密配置
 /go.work
 /go.work.sum
+# 本机 Go SDK 和编辑器环境路径，不共享到其他机器
+/.vscode/settings.json
 .env
 .env.*
 !.env.example
