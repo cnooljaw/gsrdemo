@@ -21,10 +21,10 @@ func NewMain(node cluster.NodeID) gsr.Service {
 }
 
 func (service *mainService) OnStart(_ context.Context, self gsr.ServiceContext) error {
-	if err := self.Cluster().Open(service.node); err != nil {
+	if err := self.Node().OpenCluster(service.node); err != nil {
 		return err
 	}
-	_, err := fmt.Printf("%s 就绪：%s\n", service.node, self.Cluster().ListenAddress())
+	_, err := fmt.Printf("%s 就绪：%s\n", service.node, self.Node().ClusterListenAddress())
 	return err
 }
 

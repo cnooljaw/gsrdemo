@@ -3,6 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/hkdf"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"net"
 	"os"
@@ -108,7 +114,7 @@ func startAccess(t *testing.T) (string, string, func()) {
 	go func() {
 		done <- gsr.Run(ctx, gsr.Config{
 			Logging: logging.Config{Directory: config.Node.LogDirectory},
-			Cluster: cluster.ClusterConfig{Nodes: map[cluster.NodeID]string{"access": clusterAddress}},
+			Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access": clusterAddress}},
 		}, &readyMain{Service: NewMain("access", config.Gate), ready: ready})
 	}()
 	stopped := false
@@ -139,7 +145,7 @@ func startAccess(t *testing.T) (string, string, func()) {
 	return clusterAddress, gateAddress, stop
 }
 
-func dialAccess(t *testing.T, address string) *websocket.Conn {
+func dialAccessSocket(t *testing.T, address string) *websocket.Conn {
 	t.Helper()
 	dialer := websocket.Dialer{HandshakeTimeout: time.Second}
 	connection, _, err := dialer.Dial("ws://"+address+"/ws", nil)
@@ -150,7 +156,68 @@ func dialAccess(t *testing.T, address string) *websocket.Conn {
 	return connection
 }
 
-func expectUnsupportedRequest(t *testing.T, connection *websocket.Conn, requestID uint32) {
+// accessClient 只为接入测试实现 GSR v1 的握手与认证上行，不进入业务代码。
+type accessClient struct {
+	*websocket.Conn
+	macKey   []byte
+	sequence uint64
+}
+
+func dialAccess(t *testing.T, address string) *accessClient {
+	t.Helper()
+	connection := dialAccessSocket(t, address)
+	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientPublicKey := privateKey.PublicKey().Bytes()
+	request := append([]byte{1}, clientPublicKey...)
+	if err := connection.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.WriteMessage(websocket.BinaryMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	kind, response, err := connection.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != websocket.BinaryMessage || len(response) != 33 || response[0] != 1 {
+		t.Fatal("expected GSR v1 MAC handshake response")
+	}
+	serverPublicKey, err := ecdh.X25519().NewPublicKey(response[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedSecret, err := privateKey.ECDH(serverPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 标签和公钥顺序遵循 GSR v1.0.1 gate/security.go 的 wire 契约。
+	saltInput := append([]byte("gsr/wss/hkdf-salt/v1"), clientPublicKey...)
+	saltInput = append(saltInput, response[1:]...)
+	salt := sha256.Sum256(saltInput)
+	macKey, err := hkdf.Key(sha256.New, sharedSecret, salt[:], "gsr/wss/c2s-hmac-sha256/v1", sha256.Size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &accessClient{Conn: connection, macKey: macKey}
+}
+
+func (client *accessClient) authenticatedFrame(envelope []byte) []byte {
+	client.sequence++
+	frame := make([]byte, 8, 8+len(envelope)+16)
+	binary.BigEndian.PutUint64(frame, client.sequence)
+	frame = append(frame, envelope...)
+	mac := hmac.New(sha256.New, client.macKey)
+	_, _ = mac.Write(frame)
+	return append(frame, mac.Sum(nil)[:16]...)
+}
+
+func expectUnsupportedRequest(t *testing.T, connection *accessClient, requestID uint32) {
 	t.Helper()
 	// 最大 uint32 是未定义编号，用框架 Envelope 走真实接入，不创建测试业务协议。
 	frame, err := proto.Marshal(&commonv1.Envelope{MsgId: ^uint32(0), RequestId: requestID})
@@ -160,7 +227,7 @@ func expectUnsupportedRequest(t *testing.T, connection *websocket.Conn, requestI
 	if err := connection.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := connection.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+	if err := connection.WriteMessage(websocket.BinaryMessage, connection.authenticatedFrame(frame)); err != nil {
 		t.Fatal(err)
 	}
 	if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -186,9 +253,21 @@ func expectUnsupportedRequest(t *testing.T, connection *websocket.Conn, requestI
 	}
 }
 
-// TestAccessConnectionFailureIsIsolatedAndShutdownClosesResources 保护实际 Gate/Agent 接线、配置帧限制、连接隔离和停机释放。
+// TestAccessConnectionFailureIsIsolatedAndShutdownClosesResources 保护 MAC 接入接线、拒绝未握手客户端、配置帧限制、连接隔离和停机释放。
 func TestAccessConnectionFailureIsIsolatedAndShutdownClosesResources(t *testing.T) {
 	clusterAddress, gateAddress, stop := startAccess(t)
+	plain := dialAccessSocket(t, gateAddress)
+	frame, err := proto.Marshal(&commonv1.Envelope{MsgId: ^uint32(0), RequestId: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+		t.Fatal(err)
+	}
+	expectConnectionClosed(t, plain)
 	first := dialAccess(t, gateAddress)
 	second := dialAccess(t, gateAddress)
 	expectUnsupportedRequest(t, first, 31)
@@ -198,10 +277,11 @@ func TestAccessConnectionFailureIsIsolatedAndShutdownClosesResources(t *testing.
 	if err := first.WriteMessage(websocket.BinaryMessage, bytes.Repeat([]byte{1}, 512)); err != nil {
 		t.Fatal(err)
 	}
-	expectConnectionClosed(t, first)
+	expectConnectionClosed(t, first.Conn)
 	expectUnsupportedRequest(t, second, 32)
+	expectUnsupportedRequest(t, second, 33)
 	stop()
-	expectConnectionClosed(t, second)
+	expectConnectionClosed(t, second.Conn)
 	for _, address := range []string{clusterAddress, gateAddress} {
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
@@ -238,7 +318,7 @@ func TestAccessStartupFailureReleasesCluster(t *testing.T) {
 	defer cancel()
 	err = gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: t.TempDir()},
-		Cluster: cluster.ClusterConfig{Nodes: map[cluster.NodeID]string{"access": clusterAddress}},
+		Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access": clusterAddress}},
 	}, NewMain("access", gateOptions{
 		Address: occupied.Addr().String(), MaxConnections: 4, MaxFrameBytes: 256, MaxOutboundQueueBytes: 1024,
 	}))

@@ -1,5 +1,5 @@
-github.com/cnooljaw/gsr v1.0.0 h1:K67H2kxGXy9zPADM8+WCJ6AiS7xYDCfmYNtiOT7pEME=
-github.com/cnooljaw/gsr v1.0.0/go.mod h1:KfpLAmcpT0oHZEOCJbMUzVbQLB1mIqlvm5otb3Sw1CE=
+github.com/cnooljaw/gsr v1.0.1 h1:5cqAEoQJ3HcYcC4RKL84KhVPNEYzj0OP5ilsjhTnLRQ=
+github.com/cnooljaw/gsr v1.0.1/go.mod h1:KfpLAmcpT0oHZEOCJbMUzVbQLB1mIqlvm5otb3Sw1CE=
 github.com/google/go-cmp v0.5.5 h1:Khx7svrCpmxxtHBq5j2mp/xVjsi8hQMfNLvJFAlrGgU=
 github.com/google/go-cmp v0.5.5/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=

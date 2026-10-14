@@ -37,6 +37,6 @@ func run() error {
 	}
 	return gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: config.LogDirectory},
-		Cluster: cluster.ClusterConfig{Nodes: nodes},
+		Cluster: gsr.ClusterConfig{Nodes: nodes},
 	}, NewMain(cluster.NodeID(config.Listen)))
 }

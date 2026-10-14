@@ -24,15 +24,15 @@ func NewMain(node cluster.NodeID, options gateOptions) gsr.Service {
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	if err := self.Cluster().Open(service.node); err != nil {
+	if err := self.Node().OpenCluster(service.node); err != nil {
 		return err
 	}
 	registry, err := protocol.NewRegistry()
 	if err != nil {
 		return err
 	}
-	address, err := self.OpenGate(ctx, gsr.GateConfig{
-		Protocol:              gate.ProtocolPlain,
+	address, err := self.Node().CreateGate(ctx, gsr.GateConfig{
+		Protocol:              gate.ProtocolMAC,
 		Address:               service.gate.Address,
 		MaxConnections:        service.gate.MaxConnections,
 		MaxFrameBytes:         service.gate.MaxFrameBytes,
@@ -44,7 +44,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Printf("%s 就绪：Cluster=%s Gate=ws://%s/ws\n", service.node, self.Cluster().ListenAddress(), address); err != nil {
+	if _, err := fmt.Printf("%s 就绪：Cluster=%s Gate=ws://%s/ws\n", service.node, self.Node().ClusterListenAddress(), address); err != nil {
 		return err
 	}
 	self.Exit()

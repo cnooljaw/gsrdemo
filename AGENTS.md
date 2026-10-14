@@ -6,7 +6,7 @@
 
 - gsrdemo 是唯一开发主目录，一个 Git 仓库管理多个项目。每个节点角色一个独立 Go module，同角色多实例共用项目、分别配置；common 为共享 Go module，typeclient 为独立 TypeScript 项目。
 - 节点源码、入口和测试默认放项目根目录，不预设 cmd/ 或 internal/；实际需要独立包时才建目录。
-- 所有使用 GSR 的 go.mod 固定 github.com/cnooljaw/gsr v1.0.0，不提交指向本地 GSR 的 replace；节点仅对本仓库 common 使用本地 replace。
+- 所有使用 GSR 的 go.mod 固定 github.com/cnooljaw/gsr v1.0.1，不提交指向本地 GSR 的 replace；节点仅对本仓库 common 使用本地 replace。
 - ../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 严格只读，只提供框架文档和业务参考。不修改源码、文档、配置、依赖或生成结果，不在其中执行会写文件的生成、格式化、安装或验证；依赖缓存和 vendor 同样不手工修改。
 - 游戏业务、配置、协议和运行产物都写在 gsrdemo；参考实现不是兼容目标。依赖与阅读基线见 docs/DESIGN.md。
 
@@ -32,15 +32,15 @@
 
 ## GSR 接入约定
 
-从只读 [开发指南](../gsr/docs/APPLICATION-DEVELOPMENT.md) 和 [AGENTS 模板](../gsr/docs/templates/AGENTS.application.md) 提取：
+依据 v1.0.1 发布说明、开发指南与 ADR 0012；版本基线和入口见 [DESIGN.md](docs/DESIGN.md#4-gsr-与参考边界)。
 
-- 使用 gsr.Run + MainService 启动；MainService 负责创建、注册业务 Service，不手工组装 Runtime/ClusterClient。
+- 使用 gsr.Run + MainService；节点组装用 self.Node().RegisterService/OpenCluster/CreateGate/OpenHTTP，通信用 self.Cluster().Send/Call，不手工组装 Runtime/ClusterClient。
 - Service 显式实现 Handle，接口断言紧跟类型。有业务命令时具名持有 Dispatcher；没有命令的 MainService 直接返回 ErrUnknownCommand。客户端 Agent 另显式实现 HandleClientMessage。
 - 每份可变状态只有一个 Service owner，跨 Service 通过消息访问；纯规则和 owner 私有值对象按需保留。
-- 不保存 self 或 Handler 上下文，不在业务中直接启动 goroutine；引用参数和结果传独立快照，本地 Args 的浅拷贝不隔离内部集合。
+- self、Node 和 Handler 上下文仅在当前回调使用，不保存或借给异步任务，不在业务中启动 goroutine；引用参数和结果传独立快照。
 - 直接使用 GSR Call/Send；Call 有限等待，远程 Handler 使用规范参数类型，不另做内部 Protobuf 编解码。Send 成功只表示接纳，超时、重复和迟到结果的幂等或补偿由业务负责。
-- 资源明确创建者、关闭者和部分启动失败的清理；gsr.Run 管理 Runtime/Cluster/日志，业务关闭自己拥有的资源。self.Exit() 后立即返回，父 Service 退出不代表子 Service 已退出。
-- 以后加入生成工具时，GSR schema 与工具使用同一依赖版本，不从旁边 checkout 混入协议。
+- 配置用 gsr.RuntimeConfig/gsr.ClusterConfig；日志用只提供 Info/Error 的 ServiceLogger。gsr.Run 管理节点资源，Gate 是独立 Service；业务只关闭自有资源，self.Exit() 后立即返回，创建者退出不停止已创建的 Service。
+- 生成工具与 GSR schema 同版本，不混用旁边 checkout；其余接入边界见 DESIGN.md。
 
 ## 验证与交付
 
