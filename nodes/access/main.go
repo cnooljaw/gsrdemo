@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,34 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/model"
 )
 
+type accessConfig struct {
+	Node model.NodeConfig `yaml:",inline"`
+	Gate gateOptions      `yaml:"gate"`
+}
+
+type gateOptions struct {
+	Address               string `yaml:"address"`
+	MaxConnections        int    `yaml:"max_connections"`
+	MaxFrameBytes         int    `yaml:"max_frame_bytes"`
+	MaxOutboundQueueBytes int    `yaml:"max_outbound_queue_bytes"`
+}
+
+func loadAccessConfig(path string) (accessConfig, error) {
+	var config accessConfig
+	if path == "" {
+		return config, errors.New("config path is required")
+	}
+	if err := model.ReadYAMLFile(path, &config); err != nil {
+		return config, err
+	}
+	node, err := model.ResolveNodeConfig(config.Node, path, "access")
+	if err != nil {
+		return config, err
+	}
+	config.Node = node
+	return config, nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -24,19 +53,19 @@ func main() {
 func run() error {
 	path := flag.String("config", "", "节点 YAML 配置文件")
 	flag.Parse()
-	config, err := model.LoadNodeConfig(*path, "access")
+	config, err := loadAccessConfig(*path)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	nodes := make(map[cluster.NodeID]string, len(config.Nodes))
-	for name, address := range config.Nodes {
+	nodes := make(map[cluster.NodeID]string, len(config.Node.Nodes))
+	for name, address := range config.Node.Nodes {
 		nodes[cluster.NodeID(name)] = address
 	}
 	return gsr.Run(ctx, gsr.Config{
-		Logging: logging.Config{Directory: config.LogDirectory},
+		Logging: logging.Config{Directory: config.Node.LogDirectory},
 		Cluster: cluster.ClusterConfig{Nodes: nodes},
-	}, NewMain(cluster.NodeID(config.Listen)))
+	}, NewMain(cluster.NodeID(config.Node.Listen), config.Gate))
 }

@@ -27,12 +27,21 @@ func LoadNodeConfig(path, role string) (NodeConfig, error) {
 	if path == "" {
 		return NodeConfig{}, errors.New("config path is required")
 	}
+	var cfg NodeConfig
+	if err := ReadYAMLFile(path, &cfg); err != nil {
+		return cfg, err
+	}
+	return ResolveNodeConfig(cfg, path, role)
+}
+
+// ResolveNodeConfig 从节点配置所在目录读取地址表并校验宿主字段，供节点私有配置复用。
+// 返回新的地址表，不保留输入中的 Nodes；角色私有字段由节点自己的类型解析。
+func ResolveNodeConfig(cfg NodeConfig, path, role string) (NodeConfig, error) {
+	if path == "" {
+		return cfg, errors.New("config path is required")
+	}
 	path, err := filepath.Abs(path)
 	if err != nil {
-		return NodeConfig{}, err
-	}
-	var cfg NodeConfig
-	if err := readYAMLFile(path, &cfg); err != nil {
 		return cfg, err
 	}
 	if cfg.NodesFile == "" {
@@ -43,7 +52,7 @@ func LoadNodeConfig(path, role string) (NodeConfig, error) {
 	var routes struct {
 		Nodes map[string]string `yaml:"nodes"`
 	}
-	if err := readYAMLFile(cfg.NodesFile, &routes); err != nil {
+	if err := ReadYAMLFile(cfg.NodesFile, &routes); err != nil {
 		return cfg, err
 	}
 	cfg.Nodes = routes.Nodes
@@ -69,8 +78,8 @@ func configPath(base, path string) string {
 	return filepath.Join(base, path)
 }
 
-// readYAMLFile 读取一个不超过 1 MiB 的 YAML 文档，拒绝未知字段、重复键和多文档。
-func readYAMLFile(path string, destination any) error {
+// ReadYAMLFile 将一个不超过 1 MiB 的 YAML 文档读入调用方类型，拒绝未知字段、重复键和多文档。
+func ReadYAMLFile(path string, destination any) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err

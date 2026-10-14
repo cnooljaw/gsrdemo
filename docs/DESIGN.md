@@ -6,7 +6,7 @@
 
 三人斗地主后续单独确认，优先参考 nbgameserver 的 gameofhlddz/；多人分组和共享目标可参考 GoServerActorFsm。参考代码提供知识，不作为兼容目标。
 
-当前只有五个节点的启动骨架、共用 YAML 配置和 TypeScript 入口占位。没有业务状态、命令、客户端协议、生成结果、账号管理或游戏演示。旧实现和旧方案已移除，不能当作已确认设计继续扩展。
+当前 access 已具备 Gate/Agent 连接基础，其余四个节点和 TypeScript 保持骨架。没有业务状态、业务命令、本项目客户端协议、生成结果、账号管理或游戏演示。旧实现和旧方案已移除，不能当作已确认设计继续扩展。
 
 每个节点角色一个独立 Go module，源码默认放该项目根目录；common 目前只包含实际共用的配置代码。没有调用者的通用框架、协议目录和业务包不提前建立。
 
@@ -27,11 +27,20 @@
 3. 用户确认后实现当前节点。common、协议和 TypeScript 只配套加入该节点必需的内容；其他节点的依赖问题先列出，不自动扩展实现。
 4. 展示改动和实际验证，等待用户决定是否提交及推进下一节点。
 
-当前下一步是 access 方案审查。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。协议有实际需求后集中维护，再按使用范围拆分 .proto。
+access 连接基础已实现，当前交用户审查，再决定后续范围。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。协议有实际需求后集中维护，再按使用范围拆分 .proto。
 
 完成五个节点后再联调打地鼠全流程。三人斗地主、access 多实例和第三方登录分别先确认方案，不提前开工。
 
-## 3. GSR 与参考边界
+## 3. access 第一步（已确认）
+
+- MainService 打开 Cluster 和 Gate；每条连接由 Gate 创建一个 Agent。采用本机 Plain WebSocket，监听地址及连接数、帧大小、出站队列上限放在 access 的私有 YAML 配置中。
+- Gate 拥有连接和 I/O；Agent 只持有 ClientSession 与具名协议 Dispatcher，不接触 socket 或连接表，不持有业务状态，也不增加状态机。
+- 调用链为客户端 → Gate → Agent.HandleClientMessage → protocol.Dispatcher。只使用 GSR 通用目录和空业务 Handler 表，错误处理沿用框架规则；没有本项目的协议编号、.proto、生成工具或跨节点业务调用。
+- Gate 的断线通知进入 Agent.Handle，Agent 调用 self.Exit 后立即返回；OnStop 调用幂等的 ClientSession.Close。MainService 完成组装后退出，Gate 和 Agent 继续由 Runtime 管理；进程停机由 gsr.Run 收尾。任一步启动失败都向宿主返回错误。
+- 修改范围是 access 的入口、MainService、根目录 agent.go 和相关测试/配置；common 仅拆出已有的 YAML 读取和宿主配置解析，角色私有字段留在节点中。其他节点和 TypeScript 保持骨架。
+- 验证配置边界、断线清理、真实 WebSocket 的错误路径与单连接故障隔离、停机关闭连接/监听，以及 Gate 启动失败后的 Cluster 释放；对 access 运行 race。
+
+## 4. GSR 与参考边界
 
 - 节点固定 GSR v1.0.0，tag commit 为 d5531a6ba413415f3ab65b8100f894750c44dcd4；节点仅对本仓库 common 使用本地 replace。
 - 只读文档 revision 为 30a870f282f6fd2b6fc58b6e3d3e962a291a14b8，生产源码与该发布 tag 一致；公开 API 以实际依赖版本为准。

@@ -65,10 +65,10 @@ func TestLoadNodeConfigRejectsUnsafeOrAmbiguousInput(t *testing.T) {
 	}
 }
 
-// TestExampleNodeConfigsShareOneTable 保护仓库示例可直接加载，所有节点使用同一个地址表。
-func TestExampleNodeConfigsShareOneTable(t *testing.T) {
+// TestExampleHostConfigsShareOneTable 保护纯宿主配置的节点示例共用地址表；access 私有字段由节点测试负责。
+func TestExampleHostConfigsShareOneTable(t *testing.T) {
 	var table string
-	for _, role := range []string{"access", "login", "online", "mole", "settlement"} {
+	for _, role := range []string{"login", "online", "mole", "settlement"} {
 		cfg, err := LoadNodeConfig(filepath.Join("..", "..", "configs", role+"-01.yaml"), role)
 		if err != nil {
 			t.Fatalf("%s: %v", role, err)
