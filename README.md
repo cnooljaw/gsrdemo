@@ -9,7 +9,7 @@
 | nodes/access | Cluster、Gate 和每连接一个 Agent，相关源码与测试都在根目录 |
 | nodes/login | 密码认证、MySQL 账号表、账号创建管理命令及测试 |
 | nodes/online、mole、settlement | 启动骨架 |
-| common/model、common/login | YAML 宿主配置与内部认证协议契约 |
+| common/model | YAML 宿主配置加载与校验 |
 | typeclient | 独立 TypeScript 项目，src/index.ts 仅为入口占位 |
 | configs | 一份节点地址表和各实例的宿主配置 |
 | scripts | 一个 dev.sh，负责构建、检查和单节点启动 |

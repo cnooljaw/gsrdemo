@@ -7,7 +7,7 @@
 | 项目 | 约定 |
 | --- | --- |
 | 目标 | Node `login`，Service `login` |
-| CommandID | `1`（common/login.AuthenticateCommand） |
+| CommandID | `1`（loginservice.go 的 authenticateCommand） |
 | 位置参数 | `username string`、`password string` |
 | 成功结果 | 非零 `uint64` UserID；同账号重复认证返回相同 ID |
 
@@ -24,3 +24,5 @@
 认证只读账号，不创建登录会话、Token 或 Online 记录；Call 超时可以重试本次只读验证，不代表登录位置已经绑定。内部直接使用规范参数类型，不增加内部 Protobuf 编解码。
 
 本示例按用户确认采用无盐 SHA-256，账号表保存 32 字节摘要，仅用于示例，不是生产密码存储方案。
+
+当前命令、Service 名称及错误定义与 LoginService 放在 loginservice.go；真实跨节点调用方接入时，再按实际需要提取共享契约。

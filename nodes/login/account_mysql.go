@@ -6,8 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"time"
-
-	login "github.com/cnooljaw/gsrdemo/common/login"
 )
 
 const (
@@ -34,7 +32,7 @@ func validLoginInput(username, password string) bool {
 // SHA-256 无盐哈希仅用于本示例，不作为生产密码存储方案。
 func createAccount(ctx context.Context, db *sql.DB, username, password string) (uint64, error) {
 	if !validLoginInput(username, password) {
-		return 0, login.ErrInvalidRequest
+		return 0, errInvalidLoginInput
 	}
 	hash := sha256.Sum256([]byte(password))
 	wait, cancel := context.WithTimeout(ctx, queryTimeout)

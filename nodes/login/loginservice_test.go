@@ -16,7 +16,6 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
-	login "github.com/cnooljaw/gsrdemo/common/login"
 )
 
 // observedMain 只观察真实 MainService 的启动结果，保留实际创建和命名流程。
@@ -116,7 +115,7 @@ func callLogin(t *testing.T, address string, args ...any) (any, error) {
 	caller := &loginCaller{cancel: cancel, call: func(self gsr.ServiceContext) {
 		wait, stop := context.WithTimeout(ctx, time.Second)
 		defer stop()
-		value, callErr = self.Cluster().Call(wait, "login", login.ServiceName, login.AuthenticateCommand, args...)
+		value, callErr = self.Cluster().Call(wait, "login", loginServiceName, authenticateCommand, args...)
 	}}
 	if err := gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: t.TempDir()},
@@ -141,7 +140,7 @@ func TestLoginAuthenticatesOverCluster(t *testing.T) {
 			sqlmock.NewRows([]string{"user_id", "password_hash"}).AddRow(7, hash[:]))
 		value, err := callLogin(t, address, "alice", password)
 		if password == "wrong" {
-			if !errors.Is(err, login.ErrInvalidCredentials) {
+			if !errors.Is(err, errInvalidCredentials) {
 				t.Fatalf("wrong password: %v", err)
 			}
 		} else if err != nil || value != uint64(7) {
@@ -149,11 +148,11 @@ func TestLoginAuthenticatesOverCluster(t *testing.T) {
 		}
 	}
 	mock.ExpectQuery(selectAccountSQL).WithArgs("missing").WillReturnRows(sqlmock.NewRows([]string{"user_id", "password_hash"}))
-	if _, err := callLogin(t, address, "missing", "example-password"); !errors.Is(err, login.ErrInvalidCredentials) {
+	if _, err := callLogin(t, address, "missing", "example-password"); !errors.Is(err, errInvalidCredentials) {
 		t.Fatalf("missing account: %v", err)
 	}
 	for _, args := range [][]any{{"", "password"}, {"alice", ""}, {" alice", "password"}, {"alice", strings.Repeat("p", 129)}} {
-		if _, err := callLogin(t, address, args...); !errors.Is(err, login.ErrInvalidRequest) {
+		if _, err := callLogin(t, address, args...); !errors.Is(err, errInvalidLoginInput) {
 			t.Fatalf("invalid input: %v", err)
 		}
 	}
@@ -161,12 +160,12 @@ func TestLoginAuthenticatesOverCluster(t *testing.T) {
 		t.Fatalf("wrong wire argument: %v", err)
 	}
 	mock.ExpectQuery(selectAccountSQL).WithArgs("alice").WillReturnError(fmt.Errorf("private SQL error"))
-	if _, err := callLogin(t, address, "alice", "password"); !errors.Is(err, login.ErrStoreUnavailable) || strings.Contains(err.Error(), "private SQL") {
+	if _, err := callLogin(t, address, "alice", "password"); !errors.Is(err, errAccountStoreUnavailable) || strings.Contains(err.Error(), "private SQL") {
 		t.Fatalf("database error: %v", err)
 	}
 	mock.ExpectQuery(selectAccountSQL).WithArgs("broken").WillReturnRows(
 		sqlmock.NewRows([]string{"user_id", "password_hash"}).AddRow(7, []byte{1}))
-	if _, err := callLogin(t, address, "broken", "password"); !errors.Is(err, login.ErrStoreUnavailable) {
+	if _, err := callLogin(t, address, "broken", "password"); !errors.Is(err, errAccountStoreUnavailable) {
 		t.Fatalf("corrupt account: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

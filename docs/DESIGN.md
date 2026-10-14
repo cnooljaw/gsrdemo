@@ -8,7 +8,7 @@
 
 当前 access 已具备 MAC Gate/Agent 连接基础，login 已实现内部用户名密码认证与管理命令；online、mole、settlement 和 TypeScript 保持骨架。尚无客户端登录协议、在线位置、游戏状态或游戏演示。旧实现和旧方案已移除，不能当作已确认设计继续扩展。
 
-每个节点角色一个独立 Go module，源码默认放该项目根目录；common 仅包含配置代码与 login 内部命令契约。没有调用者的通用框架、协议目录和业务包不提前建立。
+每个节点角色一个独立 Go module，源码默认放该项目根目录；common 仅包含共享配置代码。没有调用者的通用框架、协议目录和业务包不提前建立。
 
 ## 2. 推进顺序
 
@@ -66,7 +66,7 @@ access 连接基础已提交，login 本轮范围已确认，完成后交用户�
 - 单个 LoginService 负责用户名密码验证，MySQL `gsrdemo_login.accounts` 保存稳定 UserID、唯一用户名和密码摘要；没有账号缓存、Token、LoginID、在线状态或额外状态机。
 - 按用户确认采用标准库无盐 SHA-256，仅用于示例；不引入 Argon2id。账号由本节点 `-create-user` 管理命令创建，密码从标准输入读取；不增加远程注册接口。
 - 宿主通过 GSR mysqlclient.Open 创建原生数据库池，Run 返回后关闭。MainService 创建并命名 LoginService、打开 Cluster 后退出；Service 仅借用数据库池，每次 SQL 最多等待 2 秒。
-- Cluster 命令接收两个 string，返回 uint64；common/login 仅定义命令、名称和稳定错误，契约集中在 PROTOCOL.md。MySQL 驱动沿用 GSR 示例的 v1.10.1；sqlmock v1.5.2 仅用于测试，标准库没有对应模拟驱动。
+- Cluster 命令接收两个 string，返回 uint64；命令、名称及错误定义与 LoginService 放在 loginservice.go，文档契约集中在 PROTOCOL.md。当前没有其他节点消费者，不提前抽共享包。MySQL 驱动沿用 GSR 示例的 v1.10.1；sqlmock v1.5.2 仅用于测试，标准库没有对应模拟驱动。
 - YAML 的 mysql_dsn 为 login 私有字段，公开模板不含凭据；本机凭据保存在被忽略的 login-01.local.yaml。schema.sql 只初始化本项目专用库，不修改 GSR 示例库，节点启动不自动建表。
 - 默认测试使用 SQL mock 和两个真实 Runtime 的 TCP Cluster 链路，覆盖正确/错误凭据、重复认证、非法输入、数据库错误与账号损坏。真实 MySQL 验收显式开启，使用独占测试账号并清理；未运行时不声称数据库验收完成。
 - 本轮不修改 access 或 TypeScript 的业务逻辑，不推进 online；下一节点或客户端登录接入另行确认。

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/mysqlclient"
-	login "github.com/cnooljaw/gsrdemo/common/login"
 	"github.com/go-sql-driver/mysql"
 )
 
@@ -112,10 +111,10 @@ func TestLoginLiveMySQL(t *testing.T) {
 			t.Fatalf("live authenticate: id=%v err=%v", value, err)
 		}
 	}
-	if _, err := callLogin(t, address, username, "different-password"); !errors.Is(err, login.ErrInvalidCredentials) {
+	if _, err := callLogin(t, address, username, "different-password"); !errors.Is(err, errInvalidCredentials) {
 		t.Fatalf("wrong password: %v", err)
 	}
-	if _, err := callLogin(t, address, "missing_"+username, "test-password"); !errors.Is(err, login.ErrInvalidCredentials) {
+	if _, err := callLogin(t, address, "missing_"+username, "test-password"); !errors.Is(err, errInvalidCredentials) {
 		t.Fatalf("missing account: %v", err)
 	}
 }

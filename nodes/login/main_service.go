@@ -8,7 +8,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	login "github.com/cnooljaw/gsrdemo/common/login"
 )
 
 type mainService struct {
@@ -28,7 +27,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 	if err != nil {
 		return err
 	}
-	if err := self.Node().RegisterService(login.ServiceName, id); err != nil {
+	if err := self.Node().RegisterService(loginServiceName, id); err != nil {
 		return err
 	}
 	if err := self.Node().OpenCluster(service.node); err != nil {
