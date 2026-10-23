@@ -2,7 +2,7 @@
 
 这是一个多项目工作区，按节点逐步设计和实现。当前完成 access 的连接基础和 login 的内部密码认证，其余节点和 TypeScript 保持骨架。
 
-每个节点角色一个独立 Go module，依赖已发布的 `github.com/cnooljaw/gsr v1.0.1`；入口和源码默认放项目根目录。节点通过 `gsr.Run + MainService` 启动，组装使用 `self.Node()`，跨节点通信使用 `self.Cluster()`。版本及资源归属见 [接入知识](docs/DESIGN.md#v101-接入知识)。
+每个节点角色一个独立 Go module，依赖已发布的 `github.com/cnooljaw/gsr v1.0.2`；入口和源码默认放项目根目录。节点通过 `gsr.Run + MainService` 启动，组装使用 `self.Node()`，跨节点通信使用 `self.Cluster()`。版本及资源归属见 [接入知识](docs/DESIGN.md#v102-接入知识)。
 
 | 目录 | 当前内容 |
 | --- | --- |
@@ -16,7 +16,7 @@
 
 旧演示实现已移除，现有业务仅按确认的节点范围加入。common 根据实际调用提取共享内容，节点不导入彼此实现。内部契约见 [PROTOCOL.md](docs/PROTOCOL.md)。
 
-access 只处理连接生命周期：客户端 → Gate → Agent → GSR 协议 Dispatcher。Gate 固定使用 `ProtocolMAC`：客户端先完成 33 字节 X25519 握手，上行发送 `seq | Envelope | MAC`，下行仍为 Envelope；未握手的 Plain 客户端会被关闭。本机使用 WS，TLS 配置独立于 MAC 模式。每个 Agent 只有 ClientSession 与协议 Dispatcher，业务 Handler 表为空；使用 GSR 通用 Envelope/ErrorResponse，没有本项目 .proto 或生成步骤。收到断线通知后 Agent 退出，停止时关闭当前连接；进程停机由 GSR 管理。
+access 只处理连接生命周期：客户端 → Gate → Agent → GSR 协议 Dispatcher。Gate 固定使用 `SecurityModeMAC`：客户端先完成 33 字节 X25519 握手，上行发送 `seq | Envelope | MAC`，下行仍为 Envelope；未握手的 Plain 客户端会被关闭。本机使用 WS，TLS 配置独立于 MAC 模式。每个 Agent 只有 ClientSession 与协议 Dispatcher，业务 Handler 表为空；使用 GSR 通用 Envelope/ErrorResponse，没有本项目 .proto 或生成步骤。收到断线通知后 Agent 退出，停止时关闭当前连接；进程停机由 GSR 管理。
 
 工作规则见 [AGENTS.md](AGENTS.md)，目标和逐节点计划见 [docs/DESIGN.md](docs/DESIGN.md)，Go 规范见 [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)。
 

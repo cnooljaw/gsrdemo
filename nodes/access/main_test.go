@@ -196,7 +196,7 @@ func dialAccess(t *testing.T, address string) *accessClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 标签和公钥顺序遵循 GSR v1.0.1 gate/security.go 的 wire 契约。
+	// 标签和公钥顺序遵循 GSR v1.0.2 gate/security.go 的 wire 契约。
 	saltInput := append([]byte("gsr/wss/hkdf-salt/v1"), clientPublicKey...)
 	saltInput = append(saltInput, response[1:]...)
 	salt := sha256.Sum256(saltInput)

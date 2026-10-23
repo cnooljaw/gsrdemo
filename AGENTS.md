@@ -6,7 +6,7 @@
 
 - gsrdemo 是唯一开发主目录，一个 Git 仓库管理多个项目。每个节点角色一个独立 Go module，同角色多实例共用项目、分别配置；common 为共享 Go module，typeclient 为独立 TypeScript 项目。
 - 节点源码、入口和测试默认放项目根目录，不预设 cmd/ 或 internal/；实际需要独立包时才建目录。
-- 所有使用 GSR 的 go.mod 固定 github.com/cnooljaw/gsr v1.0.1，不提交指向本地 GSR 的 replace；节点仅对本仓库 common 使用本地 replace。
+- 所有使用 GSR 的 go.mod 固定 github.com/cnooljaw/gsr v1.0.2，不提交指向本地 GSR 的 replace；节点仅对本仓库 common 使用本地 replace。
 - ../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 严格只读，只提供框架文档和业务参考。不修改源码、文档、配置、依赖或生成结果，不在其中执行会写文件的生成、格式化、安装或验证；依赖缓存和 vendor 同样不手工修改。
 - 游戏业务、配置、协议和运行产物都写在 gsrdemo；参考实现不是兼容目标。依赖与阅读基线见 docs/DESIGN.md。
 
@@ -32,9 +32,10 @@
 
 ## GSR 接入约定
 
-依据 v1.0.1 发布说明、开发指南与 ADR 0012；版本基线和入口见 [DESIGN.md](docs/DESIGN.md#4-gsr-与参考边界)。
+依据 v1.0.2 发布说明、开发指南与 ADR 0012/0013；版本基线和入口见 [DESIGN.md](docs/DESIGN.md#4-gsr-与参考边界)。
 
 - 使用 gsr.Run + MainService；节点组装用 self.Node().RegisterService/OpenCluster/CreateGate/OpenHTTP，通信用 self.Cluster().Send/Call，不手工组装 Runtime/ClusterClient。
+- Gate 用 SecurityModeMAC 指定传输认证，业务协议由 Agent 选择；当前沿用 Protobuf protocol 包与 Envelope。
 - Service 显式实现 Handle，接口断言紧跟类型。有业务命令时具名持有 Dispatcher；没有命令的 MainService 直接返回 ErrUnknownCommand。客户端 Agent 另显式实现 HandleClientMessage。
 - 每份可变状态只有一个 Service owner，跨 Service 通过消息访问；纯规则和 owner 私有值对象按需保留。
 - self、Node 和 Handler 上下文仅在当前回调使用，不保存或借给异步任务，不在业务中启动 goroutine；引用参数和结果传独立快照。

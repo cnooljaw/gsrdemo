@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/cnooljaw/gsr v1.0.1
+	github.com/cnooljaw/gsr v1.0.2
 	github.com/cnooljaw/gsrdemo/common v0.0.0
 	github.com/go-sql-driver/mysql v1.10.1
 )

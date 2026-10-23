@@ -32,7 +32,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		return err
 	}
 	address, err := self.Node().CreateGate(ctx, gsr.GateConfig{
-		Protocol:              gate.ProtocolMAC,
+		SecurityMode:          gate.SecurityModeMAC,
 		Address:               service.gate.Address,
 		MaxConnections:        service.gate.MaxConnections,
 		MaxFrameBytes:         service.gate.MaxFrameBytes,
