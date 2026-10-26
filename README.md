@@ -21,6 +21,8 @@ access 只处理连接生命周期：客户端 → Gate → Agent → GSR 协议
 
 工作规则见 [AGENTS.md](AGENTS.md)，目标和逐节点计划见 [docs/DESIGN.md](docs/DESIGN.md)，Go 规范见 [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)。
 
+下一步设计为单个 mole 节点内的 MoleService、每组一个 AttackService 和唯一 MoleAccountingService，通过独立 settlement 节点批量处理通用银子变化；游戏持续运行，无固定局长。mole [实现方案](docs/DESIGN.md#8-mole-实现方案草案尚未实现)和 settlement [预案](docs/DESIGN.md#9-settlement-节点预案只记录尚未实现)已记录，当前仍是骨架，尚未实现游戏或银子入账。
+
 ## 准备与使用
 
 需要 Go 1.24 或更新、Node.js 22.15 或更新及 npm。从根目录执行：
