@@ -20,12 +20,22 @@ func NewMain(node cluster.NodeID) gsr.Service {
 	return &mainService{node: node}
 }
 
-func (service *mainService) OnStart(_ context.Context, self gsr.ServiceContext) error {
+func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	id, err := self.CreateService(ctx, newOnlineService())
+	if err != nil {
+		return err
+	}
+	if err := self.Node().RegisterService(onlineServiceName, id); err != nil {
+		return err
+	}
 	if err := self.Node().OpenCluster(service.node); err != nil {
 		return err
 	}
-	_, err := fmt.Printf("%s 就绪：%s\n", service.node, self.Node().ClusterListenAddress())
-	return err
+	if _, err := fmt.Printf("%s 就绪：%s\n", service.node, self.Node().ClusterListenAddress()); err != nil {
+		return err
+	}
+	self.Exit()
+	return nil
 }
 
 func (service *mainService) Handle(_ gsr.CommandContext, _ runtime.CommandID, _ ...any) (any, error) {

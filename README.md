@@ -1,6 +1,6 @@
 # GSR Demo
 
-这是一个多项目工作区，按节点逐步设计和实现。当前完成 access 的连接基础和 login 的内部密码认证，其余节点和 TypeScript 保持骨架。
+这是一个多项目工作区，按节点逐步设计和实现。当前完成 access 的连接基础、login 的内部密码认证和 online 的内部位置目录；游戏节点和 TypeScript 保持骨架。
 
 每个节点角色一个独立 Go module，依赖已发布的 `github.com/cnooljaw/gsr v1.0.2`；入口和源码默认放项目根目录。节点通过 `gsr.Run + MainService` 启动，组装使用 `self.Node()`，跨节点通信使用 `self.Cluster()`。版本及资源归属见 [接入知识](docs/DESIGN.md#v102-接入知识)。
 
@@ -8,7 +8,8 @@
 | --- | --- |
 | nodes/access | Cluster、Gate 和每连接一个 Agent，相关源码与测试都在根目录 |
 | nodes/login | 密码认证、MySQL 账号表、账号创建管理命令及测试 |
-| nodes/online、mole、settlement | 启动骨架 |
+| nodes/online | 内存位置目录、跨接入节点绑定替换、条件解绑及测试 |
+| nodes/mole、settlement | 启动骨架 |
 | common/model | YAML 宿主配置加载与校验 |
 | typeclient | 独立 TypeScript 项目，src/index.ts 仅为入口占位 |
 | configs | 一份节点地址表和各实例的宿主配置 |
@@ -31,7 +32,7 @@ npm --prefix typeclient ci
 ./scripts/dev.sh run access
 ```
 
-check 执行各 Go module 的 test/vet 和 TS 类型检查，其中 access/login 用例会打开临时本机端口；build 输出 bin/<节点名> 和 typeclient/dist。run 只前台启动指定节点，优先读取 configs/<节点>-01.local.yaml，Ctrl-C/SIGTERM 由该节点有序退出。
+check 执行各 Go module 的 test/vet 和 TS 类型检查，其中 access/login/online 用例会打开临时本机端口；build 输出 bin/<节点名> 和 typeclient/dist。run 只前台启动指定节点，优先读取 configs/<节点>-01.local.yaml，Ctrl-C/SIGTERM 由该节点有序退出。
 
 按节点工作时可执行 `./scripts/dev.sh check access` 和 `./scripts/dev.sh build access`，仅处理 common 与 access。TypeScript 当前只做类型检查与编译，没有连接或业务功能。Go 命令使用 GOWORK=off 和 .cache/go-build，保留缓存；编辑器需要时执行 `cp go.work.example go.work`。
 
@@ -83,6 +84,27 @@ GOWORK=off GSRDEMO_MYSQL_INTEGRATION=1 go test -run '^TestLoginLiveMySQL$' -time
 ```
 
 该用例检查库名和地址，创建独占测试账号，通过真实 TCP Cluster 认证并核对稳定 UserID，测试后删除自己创建的账号。schema.sql 不在应用启动或测试中自动执行。
+
+## online 使用
+
+online 提供内部 Bind/Lookup/Unbind，按 UserID 保存 LoginID、AccessNode、AgentName。位置保留接入节点名，允许不同 access 使用同名 Agent；旧 LoginID 的断线通知不能删除新连接。当前 access 尚未接入该目录，命令与异常语义见 [内部协议](docs/PROTOCOL.md#online-位置目录)。
+
+```sh
+./scripts/dev.sh check online
+./scripts/dev.sh build online
+./scripts/dev.sh run online
+```
+
+目录仅在内存中，重启后为空；异常退出的接入节点可能留下旧位置，后续新登录覆盖。Online 不处理客户端连接、心跳、游戏状态或持久化。
+
+显式运行约两分钟的多调用节点容量样本（默认 check 跳过）：
+
+```sh
+cd nodes/online
+GOWORK=off GSRDEMO_ONLINE_LOAD=1 go test -run '^TestOnlineClusterLoad$' -v -timeout=3m
+```
+
+测试包含预装记录与最终逐条清理，实际总耗时长于两分钟。目标与结果口径见 [设计文档](docs/DESIGN.md#6-online-容量估算与待测计划)。它不代表实际 access 多进程或 12,000/100,000 条客户端连接已验收。
 
 这些地址用于本机开发。GSR Cluster 的路由地址是拨号地址，不能用它限制监听网卡；节点使用受信任开发网络。
 
