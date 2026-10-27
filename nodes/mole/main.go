@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -21,16 +22,26 @@ func main() {
 	}
 }
 
+func loadMoleConfig(path string) (model.NodeConfig, error) {
+	config, err := model.LoadNodeConfig(path, "mole")
+	if err != nil {
+		return config, err
+	}
+	if config.Nodes["settlement"] == "" || config.Nodes["online"] == "" {
+		return config, errors.New("online and settlement routes are required")
+	}
+	return config, nil
+}
+
 func run() error {
 	path := flag.String("config", "", "节点 YAML 配置文件")
 	flag.Parse()
-	config, err := model.LoadNodeConfig(*path, "mole")
+	config, err := loadMoleConfig(*path)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
 	nodes := make(map[cluster.NodeID]string, len(config.Nodes))
 	for name, address := range config.Nodes {
 		nodes[cluster.NodeID(name)] = address
