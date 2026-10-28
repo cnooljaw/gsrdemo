@@ -2,3 +2,5 @@ instance: settlement-01
 listen: settlement
 nodes_file: nodes.yaml
 log_directory: ../logs/settlement-01
+# 复制为 settlement-01.local.yaml，填写专用 gsrdemo_settlement 库连接串并设为 0600。
+mysql_dsn: ""

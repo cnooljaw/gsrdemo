@@ -17,8 +17,8 @@ func (event hitEvent) operationWire() map[string]any {
 	return map[string]any{
 		"operation_id": event.HitID, "business": "mole",
 		"business_ref": fmt.Sprintf("%s/%d/%d", event.AttackName, event.Sequence, event.Hole),
-		"changes":      []any{map[string]any{"user_id": event.UserID, "debit": event.Debit, "credit": event.Credit}},
-		"detail":       map[string]any{"rule": event.Rule, "action_id": event.ActionID},
+		"user_id":      event.UserID, "debit": event.Debit, "credit": event.Credit,
+		"detail": map[string]any{"rule": event.Rule, "action_id": event.ActionID},
 	}
 }
 
@@ -48,7 +48,7 @@ func decodePool(value any) (molePool, error) {
 	if !ok {
 		return molePool{}, errAccountingUnavailable
 	}
-	hits, hitsOK := fields["hits"].(int64)
+	hits, hitsOK := fields["operation_count"].(int64)
 	debit, debitOK := fields["debit"].(int64)
 	credit, creditOK := fields["credit"].(int64)
 	if !hitsOK || !debitOK || !creditOK || hits < 0 || debit < 0 || credit < 0 {

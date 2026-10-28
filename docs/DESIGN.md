@@ -4,7 +4,7 @@
 
 首个 demo 完成持续运行的多人同组打地鼠：用户名密码登录 → 分组与座位 → 共享地鼠 → 每锤扣银子及返还 → 批量入账确认 → 按原 ID 查询已入账结果。用户始终只连接 access。游戏没有固定局长、满员开局或局末结算；旧的“60 秒一局、命中加 1 分”建议已废弃。首版只使用示例银子，不涉及真钱。
 
-2026-10-26 收敛：多个 access、先单个 mole、独立 settlement 节点；组命名为 AttackService，mole 内保留业务记账 Service。settlement 以通用银子变化为主线，后续供斗地主复用，不计算地鼠回报。共享池子先用固定概率表实现 99% 的期望返还，仅统计已入账扣除和返还，不做实时余额控奖。mole 方案与节点内首版实现见第 8 节，settlement 预案见第 9 节；独立钱包结算和客户端仍未实现。
+2026-10-26 收敛：多个 access、先单个 mole、独立 settlement 节点；组命名为 AttackService，mole 内保留业务记账 Service。settlement 以通用银子变化为主线，后续供斗地主复用，不计算地鼠回报。共享池子先用固定概率表实现 99% 的期望返还，仅统计已入账扣除和返还，不做实时余额控奖。mole 方案与节点内首版实现见第 8 节，通用 settlement 实现见第 9 节，客户端尚未接入。
 
 2026-10-27 补充确认：AttackService 本地 Call MoleAccountingService，同步返回内存扣返和余额；独立 MoleSubmissionService 等待远端结算，结果不一致时只校正余额。mole 整个节点不处理 SQL，所有持久化归 settlement；未提交的内存操作不承诺崩溃恢复，替代此前源端待提交表方案。最终银子入账合法性仍由 settlement 裁决。
 
@@ -12,7 +12,7 @@
 
 三人斗地主后续单独确认，优先参考 nbgameserver 的 gameofhlddz/；多人分组和共享目标可参考 GoServerActorFsm。参考代码提供知识，不作为兼容目标。
 
-当前 access 已具备 MAC Gate/Agent 连接基础，login 已实现内部用户名密码认证与管理命令，online 已实现内部位置目录；mole 已完成节点内玩法和记账/提交边界，settlement 和 TypeScript 保持骨架。尚无客户端登录协议、access 到 Online 的业务接入或真实钱包闭环。旧实现和旧方案已移除，不能当作已确认设计继续扩展。
+当前 access 已具备 MAC Gate/Agent 连接基础，login 已实现内部用户名密码认证与管理命令，online 已实现内部位置目录；mole 已完成节点内玩法和记账/提交边界，settlement 已实现通用结算与 MySQL 持久化，TypeScript 保持骨架。尚无客户端登录协议、access 到 Online 的业务接入或真实客户端钱包闭环。旧实现和旧方案已移除，不能当作已确认设计继续扩展。
 
 每个节点角色一个独立 Go module，源码默认放该项目根目录；common 仅包含共享配置代码。没有调用者的通用框架、协议目录和业务包不提前建立。
 
@@ -33,7 +33,7 @@
 3. 用户确认后实现当前节点。common、协议和 TypeScript 只配套加入该节点必需的内容；其他节点的依赖问题先列出，不自动扩展实现。
 4. 展示改动和实际验证，等待用户决定是否提交及推进下一节点。
 
-access 连接基础、login 内部认证、online 目录和 mole/settlement 方案已提交；本轮按确认继续实现 mole，settlement 仍只记录预案。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。业务契约见 [PROTOCOL.md](PROTOCOL.md)，按使用范围决定是否需要 .proto。
+access 连接基础、login 内部认证、online 目录和 mole/settlement 方案已提交；mole 实现已提交；本轮按确认实现独立 settlement，客户端接入另行确认。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。业务契约见 [PROTOCOL.md](PROTOCOL.md)，按使用范围决定是否需要 .proto。
 
 完成五个节点后再联调打地鼠全流程。三人斗地主、access 多实例和第三方登录分别先确认方案，不提前开工。
 
@@ -171,7 +171,7 @@ flowchart LR
 ### 8.4 跨组归批、退出与恢复边界
 
 - Accounting 每 100ms 归批，500 操作或约 256KiB 提前封存；实际批次不超上限。一次只保留一个在途批次，确认后立即推进后续积压。全节点待确认最多 4,096 项，确认结果缓存最多 4,096 项，用户目录/账户缓存最多 100,000 条，每组请求最多 1,024 条；达到上限返回忙，不建无界队列。
-- Accounting 用一张账户表保存每个用户的确认余额、修订号和退出标记，一次遍历待确认操作计算显示余额与可用额。归批后只保存在途 BatchID，完整提交副本由 Submission 持有。Accounting 只 Send 不可变批次给 Submission。发送未接纳时保留原缓冲和待扣，继续按周期尝试；不会撤销已返回的内存结果。Submission 以有限 Cluster.Call 直接 SubmitBatch，依赖 settlement 的同 ID/同内容幂等契约；超时保留原 BatchID 和内容，100ms 后直接重提，不做 GetBatch 前置查询、不重新抽奖。回执发送未接纳则保留回执重试。
+- Accounting 用一张账户表保存每个用户的确认余额、修订号和退出标记，一次遍历待确认操作计算显示余额与可用额。归批后只保存在途 BatchID，完整提交副本由 Submission 持有。Accounting 只 Send 不可变批次给 Submission。发送未接纳时保留原缓冲和待扣，继续按周期尝试；不会撤销已返回的内存结果。Submission 以有限 Cluster.Call 直接 SettleBatch，依赖 settlement 的同 ID/同内容幂等契约；超时保留原 BatchID 和内容，100ms 后直接重提，不做 GetBatch 前置查询、不重新抽奖。回执发送未接纳则保留回执重试。
 - hitEvent 只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule；LoginID 仅用于请求键和成员身份，接入地址只在成员表。不在每锤上复制连接信息。OperationID=HitID；BatchID 封存后内容与顺序不变。
 - 退出释放成员而不取消已接纳操作；无待扣即可回收余额缓存，有待扣则等回执后回收。校正按当前 UserID 路由和 LoginID 投递，旧 Agent 不接收新连接结果。组退出不停止独立记账/提交 Service。
 - 启动从 settlement 查询历史汇总重建统计池；首次进入或缓存已回收时查询余额，重连优先使用本地账，初始化未完成拒绝计费进入。进程内按原批次重试，重复/旧回执不重复记账或累计统计，旧余额不覆盖新版本。
@@ -189,41 +189,48 @@ flowchart LR
 
 多 Runtime 在同一测试进程中经真实 TCP 验证分组补位、跨接入地址重连、旧登录/成员清理隔离、Join 超时沿用原路由、退出继续提交、Online 不可用及单组 panic 隔离。结算测试 Service 覆盖丢回复后原批次幂等重提、mole 重启重新加载已处理结果、慢提交不阻塞其他组的内存结果、一致时不重复奖励、拒绝时向当前连接校正余额且不复活目标。另覆盖已入账但回执缺失时重连不再查询或重复计算；查询发出后新增命中不被普通快照重设基线，旧批次回执保留后续命中。这里没有真实 MySQL，也不代表多个独立 OS 节点或客户端闭环。
 
-2026-10-27：旧源端 SQL 方案已移除。`./scripts/dev.sh check`（全部 Go test/vet 和 TS 类型检查）、`./scripts/dev.sh build mole`、mole 的 `GOWORK=off go test -race ./... -timeout=2m` 通过。实际 bin/mole 使用公开 YAML、无数据库配置启动监听，经 SIGTERM 正常退出，只回收本次子进程。settlement 仍仅有骨架和下节预案。慢客户端出站积压、Timer admission 丢失、12,000/100,000 在线业务负载、真实结算吞吐与约 0.5～1 秒入账目标仍待后续实测。
+2026-10-27：旧源端 SQL 方案已移除。`./scripts/dev.sh check`（全部 Go test/vet 和 TS 类型检查）、`./scripts/dev.sh build mole`、mole 的 `GOWORK=off go test -race ./... -timeout=2m` 通过。实际 bin/mole 使用公开 YAML、无数据库配置启动监听，经 SIGTERM 正常退出，只回收本次子进程。该次检查时 settlement 仍是骨架；后续独立结算实现见第 9 节。慢客户端出站积压、Timer admission 丢失、12,000/100,000 在线业务负载、真实结算吞吐与约 0.5～1 秒入账目标仍待后续实测。
 
-## 9. settlement 节点预案（只记录，尚未实现）
+## 9. settlement 节点与结算实现
 
-### 9.1 以银子变化为主线
+### 9.1 职责与接口
 
-- 独立 settlement 进程，先一个 SettlementService；它唯一修改用户持久银子余额和记账记录。mole 和未来 landlord 都通过同一通用契约提交，不导入彼此实现。
-- 输入是 Business、BusinessRef、OperationID 和一组用户银子变化；业务规则决定输赢/扣返，settlement 不认识地鼠洞位、地鼠 Timer、斗地主牌型或概率算法，也不维护 mole 的玩法池。
-- 一锤是一项原子业务操作，单用户 Debit=成本、Credit=返还；斗地主一局的多个输赢用户是一项原子业务操作，不能因传输分片把它拆成互不关联的扣款和加款。斗地主何时确保输家付得起及收益规则留到该节点设计，不在这里提前建设资金冻结框架。
-- 一个传输批次可携带多个互不相关的业务操作。原子性以 OperationID 为单位；银子不足拒绝整个业务操作，不把一个斗地主操作只执行一半，也不连带拒绝批次里无关的地鼠操作。
+独立 settlement 进程内先一个 SettlementService，唯一修改用户持久银子及记账记录，不拥有游戏、连接或内存钱包缓存。GSR v1.0.2 接入沿用 MySQL 示例：宿主 mysqlclient.Open 打开数据库池，MainService 创建/命名结算 Service、OpenCluster 后退出，Run 停止后宿主关闭池。Service 在回调内使用有限 SQL context，不保存 self、不启动业务 goroutine。
 
-### 9.2 校验、批量事务和幂等
+按场景分三个入口：SettleSingle 单用户一笔，SettleBatch 多笔独立单人操作，SettleGroup 多用户整体操作。接口共享金额校验、幂等和事务实现，调用方不必统一组装多用户结构。地鼠调用批量入口；棋牌一局可立即调用多人入口，批量周期由调用方决定。GetBatch/GetOperation/GetBalance/Summary 提供查询，具体字段和编号见 PROTOCOL.md。
 
-1. 校验固定版本契约、数量/字节上限、非零用户、非负 Debit/Credit、int64 范围、重复 OperationID 与内容摘要；业务细节只归档，不触发游戏回调。
-2. 在同一 MySQL 事务中读取并锁定本批涉及的余额/必要去重记录，按稳定用户顺序访问。同一操作先检查每个付款用户的可用余额能覆盖 Debit，再应用 Credit；不能仅用净额检查。不同操作按封存顺序使用事务内工作副本推进。
-3. 余额不足是终局业务结果：该操作所有用户都不变，保存拒绝结果。其他操作仍可处理。SQL/连接/提交失败则整笔数据库事务回滚或结果未知，不能当作终局业务拒绝。
-4. 只汇总本次新成功操作的每用户 Debit/Credit，批量更新余额及版本；保存去重索引和完整批次结果。提交后才返回入账确认。所有集合化 SQL 保留有限批次，不在 Go 中逐用户发一条 SQL。
-5. 同 OperationID、同内容返回已有终局结果；同 ID 不同内容拒绝。BatchID 同样绑定不可变内容，重试不再次扣返。不能只按 BatchID 去重而容许同一操作换批次重记；重复操作的历史变动不能再次加入本批汇总。
+OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是一项单人操作，棋牌一局是一项多人操作；一项多人操作不能拆成独立付款和收款。Business/BusinessRef/Detail 只用于归档与追溯，settlement 不解析地鼠/牌型/概率/输赢规则。汇总用 operation_count，不出现 hits；地鼠本地自行解释为已入账锤数。
 
-### 9.3 最小存储与明细策略
+### 9.2 事务、幂等和最少状态
 
-| 数据 | 首版用途 |
+1. 校验规范参数、数量/字节上限、全局操作身份、不同参与用户、非负金额和整数范围；规范化 JSON 后取 SHA-256。批次内操作保持顺序，组内参与者按 UserID 排序。
+2. 同 BatchID 已存在时核对摘要，返回原历史回执。同 OperationID 跨入口/跨批次存在时核对内容，沿用原终局结果和 origin_batch，不重新写操作索引或累计金额；冲突拒绝整次请求。
+3. 一个批次一个 MySQL 事务，按稳定用户顺序锁定涉及钱包。使用事务内普通 map 工作副本，按操作顺序先检查完整 Debit 能力、余额/版本溢出，再应用 Credit。多人先全部检查再一起修改；批量单人每笔分别判定。
+4. 余额不足等业务拒绝保存为终局结果，同批其他操作可成功。只对新成功操作涉及用户批量更新余额/版本，再批量插入新操作索引和完整批次/回执，Commit 成功才返回。
+5. SQL/连接/提交错误是未知或失败，不保存成余额不足、不假报入账；事务回滚或调用方用原 ID 重试，已提交但丢回复时返回已有结果。数据库唯一键与余额行锁同时保护重复写入；竞争导致 SQL 失败时按原身份重试。
+
+结算 Service 没有进度状态机、后台队列、Timer 或镜像余额缓存。事务临时数据归当前回调；持久终局状态归 MySQL。全局 OperationID 和 BatchID 的去重记录不自动过期。
+
+### 9.3 三张表及初始化
+
+| 表 | 用途 |
 | --- | --- |
-| 银子余额表 | UserID、余额、版本；只由 settlement 写入 |
-| 紧凑操作索引 | OperationID、请求摘要、所属批次/结果定位；保留必要去重，不复制全部游戏明细或建设分析索引 |
-| 结算批次表 | BatchID、请求摘要、来源、顺序、逐操作终局结果和完整原始明细 JSON，以及扣返/成功拒绝汇总 |
+| silver_balances | UserID、amount、version；银子唯一持久余额 |
+| settlement_operations | 全局 OperationID、请求摘要、原批次及位置、业务/终局状态、扣返汇总；支持幂等、定位和通用 Summary |
+| settlement_batches | BatchID、摘要、规范原始业务明细 JSON、完整回执 JSON；余额和记录同事务提交 |
 
-银子记账 SQL 都放在 settlement；mole 无数据库连接或待提交表。完整逐锤明细先随批次 JSON 保存在同一事务中，不建独立逐锤分析表、明细节点或外部导出链。它仍写入完整事实和必要的逐操作去重索引，并非消除了每锤的存储成本。按 OperationID 查询可经索引定位批次结果；mole 启动可查询其已入账操作汇总来恢复统计池，汇总以唯一成功操作为准，不能将重复批次返回的历史结果再次计入流水。首版不为此另造缓存体系。
+完整明细随批次归档，不建独立逐锤分析表或明细节点。操作索引仅保留去重、结果定位和当前汇总需要的紧凑字段。Summary 按业务仅统计唯一 committed 操作；新批次携带历史操作不会再计入。保留记录便于按用户变化、操作和批次对账，不只比较净额。需要外移明细或优化大规模历史汇总时再单独确认，本版不做通用 Outbox、MQ 或分布式事务。
 
-若未来确有必要将完整明细外移，再以同事务 Outbox 或等价可恢复记录保证余额与待导出内容原子提交，消费方去重后可靠保存再清理；本版 settlement 不提前实现导出 Outbox。扣除、返还、数量、业务引用、批次摘要和余额变化需可对账，不能只核对全局净额。批次 JSON 和去重索引不自动过期，保留/归档策略另行确定。
+钱包不在 GetBalance/结算时自动创建或发钱。管理命令 -init-wallet UserID -silver Amount 显式初始化，初始发放也保存为 wallet_init 操作；固定身份使重复执行不重发，修改金额冲突。缺失钱包返回 wallet_not_found，不默认为零。初始化仅在管理入口开放，普通 RPC 不能使用保留业务名 wallet_init。
 
-### 9.4 复用与未来验收
+配置为 settlement 私有 YAML mysql_dsn；公开模板留空，私密配置权限 0600。专用库 gsrdemo_settlement，由管理员执行 schema.sql 初始化，应用不自动迁移。驱动与 SQL mock 沿用 login 固定版本（MySQL v1.10.1、go-sqlmock v1.5.2），分别用于真实驱动和可重复失败注入，标准库没有对应实现。mole 不增加 SQL，配套迁移为批量单人参数及通用汇总字段；access/login/online/TS 业务不变。
 
-mole 调用侧与结算测试 Service 已固定 SubmitBatch、GetBatch、GetOperation、GetBalance、Summary 的 v1 契约，命令编号和字段见 PROTOCOL.md；独立 settlement 实现时遵守同一契约，冻结规范化摘要与财务事务规则。真正由两个节点消费后，再提取最小 common 契约，不搭万能结算框架。
+### 9.4 验证与边界
 
-未来需验证：地鼠扣返与斗地主多用户原子变动走同一入口；扣款能力按 Debit 而非净额校验；余额不足不部分执行操作；OperationID/BatchID 重试不重复，内容冲突拒绝；重复操作混入新批次不再累计；数据库回滚/超时/提交成功但回复丢失；重启后终局结果一致；明细与余额可对账。真实吞吐以 SQL/事务测试为准，目标正常约 0.5～1 秒确认，故障时允许延迟但不假报成功。
+默认用例覆盖三个入口的参数差异、未知字段/非规范金额/明细上限、多人原子拒绝、完整 Debit、余额溢出、独立批次结果、SQL 写入失败回滚、Commit 失败不假报、双层幂等/跨入口去重及内容冲突。真实 TCP 检查规范类型、稳定错误及数据库诊断不外泄。
 
-演示玩法参数与 mole 初始批次/积压/超时上限已随首版固定，见第 8 节；真实结算容量与正常约 0.5～1 秒确认仍需独立 settlement 和客户端闭环实测，不能用候选阈值当作容量承诺。
+真实 MySQL 用例显式开启，使用专用本机库，创建独占随机测试钱包、操作/批次，完成后只删除自己创建的样本。覆盖三种入口、初始化重试、余额/明细/汇总对账及重启查询；独立进程用例另需构建 online/mole/settlement，验证绑定、进入、命中即时结果与真实 MySQL 入账查询。实际验证结果见下段；该链路使用测试钱包与内部 Cluster 调用，不包含真实 access/TypeScript 客户端。
+
+2026-10-27 验证：统一 `./scripts/dev.sh check`、online/mole/settlement 构建、mole 与 settlement 全量 race 通过。2026-10-28 管理员初始化专用库后，`TestSettlementLiveMySQL` 与 `TestSettlementMoleProcessesLiveMySQL` 均通过：真实 MySQL 覆盖三个入口、跨入口/批次去重、内容冲突、多人整体拒绝、事务回滚、历史回执与重启查询、余额/明细/汇总对账；三个独立 OS 节点经 TCP 完成绑定、进入、命中即时结果及持久入账查询。两项测试清理了自己的钱包、操作和批次，独立进程均经 SIGTERM 正常退出，只回收本次子进程。这不是强杀恢复、客户端接入或负载验收。
+
+本轮只完成通用银子结算，不实现斗地主牌局、资金冻结、匹配或外部明细导出。mole 崩溃可丢失未提交的内存操作，settlement 只能保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。

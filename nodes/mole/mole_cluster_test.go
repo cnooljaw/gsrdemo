@@ -79,7 +79,7 @@ func (service *settlementFixture) submit(_ gsr.CommandContext, request map[strin
 	for _, value := range operations {
 		op := value.(map[string]any)
 		operationID := op["operation_id"].(string)
-		change := op["changes"].([]any)[0].(map[string]any)
+		change := op
 		userID := change["user_id"].(uint64)
 		users[userID] = true
 		if previous, exists := service.operations[operationID]; exists {
@@ -150,7 +150,7 @@ func (service *settlementFixture) balance(_ gsr.CommandContext, userID uint64) (
 }
 
 func (service *settlementFixture) summary(_ gsr.CommandContext, _ string) (map[string]any, error) {
-	return service.pool.snapshot(), nil
+	return map[string]any{"operation_count": service.pool.Hits, "debit": service.pool.Debit, "credit": service.pool.Credit}, nil
 }
 
 func (service *settlementFixture) operation(_ gsr.CommandContext, _ uint64, id string) (any, error) {

@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/cnooljaw/gsr"
@@ -174,9 +173,11 @@ func TestMoleWireContainsFactsWithoutConnections(t *testing.T) {
 	if operation["operation_id"] != event.HitID || operation["business_ref"] != "attack-test/1/0" {
 		t.Fatal("missing stable business identity")
 	}
-	changes := operation["changes"].([]any)
-	if !reflect.DeepEqual(changes, []any{map[string]any{"user_id": uint64(7), "debit": int64(100), "credit": int64(0)}}) {
-		t.Fatal("invalid money change")
+	if operation["user_id"] != uint64(7) || operation["debit"] != int64(100) || operation["credit"] != int64(0) {
+		t.Fatal("invalid single-user money change")
+	}
+	if _, exists := operation["changes"]; exists {
+		t.Fatal("single-user batch used group settlement fields")
 	}
 }
 

@@ -1,6 +1,6 @@
 # GSR Demo
 
-这是一个多项目工作区，按节点逐步设计和实现。当前完成 access 的连接基础、login 的内部密码认证、online 的内部位置目录和 mole 的节点内首版业务；settlement 和 TypeScript 保持骨架，尚未接通客户端游戏与真实钱包结算。
+这是一个多项目工作区，按节点逐步设计和实现。当前完成 access 的连接基础、login 的内部密码认证、online 的内部位置目录和 mole 的节点内首版业务；settlement 已实现通用银子结算及 MySQL 持久化，TypeScript 保持骨架，客户端游戏仍未接入。
 
 每个节点角色一个独立 Go module，依赖已发布的 `github.com/cnooljaw/gsr v1.0.2`；入口和源码默认放项目根目录。节点通过 `gsr.Run + MainService` 启动，组装使用 `self.Node()`，跨节点通信使用 `self.Cluster()`。版本及资源归属见 [接入知识](docs/DESIGN.md#v102-接入知识)。
 
@@ -10,7 +10,7 @@
 | nodes/login | 密码认证、MySQL 账号表、账号创建管理命令及测试 |
 | nodes/online | 内存位置目录、跨接入节点绑定替换、条件解绑及测试 |
 | nodes/mole | 分组、持续地鼠、同步内存扣返、统计池、跨组批量提交及测试 |
-| nodes/settlement | 启动骨架，尚未实现钱包与通用银子入账 |
+| nodes/settlement | 单人、批量单人、多人原子结算，MySQL 幂等及明细归档 |
 | common/model | YAML 宿主配置加载与校验 |
 | typeclient | 独立 TypeScript 项目，src/index.ts 仅为入口占位 |
 | configs | 一份节点地址表和各实例的宿主配置 |
@@ -22,7 +22,7 @@ access 只处理连接生命周期：客户端 → Gate → Agent → GSR 协议
 
 工作规则见 [AGENTS.md](AGENTS.md)，目标和逐节点计划见 [docs/DESIGN.md](docs/DESIGN.md)，Go 规范见 [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)。
 
-mole 包含 MoleService、每组一个 AttackService、唯一 MoleAccountingService 和 MoleSubmissionService。命中同步返回内存扣返结果，提交 Service 独立等待 settlement 批量入账；mole 不使用 SQL，游戏持续运行，无固定局长。节点内实现与边界见 [mole 方案](docs/DESIGN.md#8-mole-方案与首版实现)，独立结算仍按 [预案](docs/DESIGN.md#9-settlement-节点预案只记录尚未实现)等待后续实施。
+mole 包含 MoleService、每组一个 AttackService、唯一 MoleAccountingService 和 MoleSubmissionService。命中同步返回内存扣返结果，提交 Service 独立等待 settlement 批量入账；mole 不使用 SQL，游戏持续运行，无固定局长。节点内实现与边界见 [mole 方案](docs/DESIGN.md#8-mole-方案与首版实现)，独立结算见 [settlement 实现](docs/DESIGN.md#9-settlement-节点与结算实现)。
 
 ## 准备与使用
 
@@ -35,7 +35,7 @@ npm --prefix typeclient ci
 ./scripts/dev.sh run access
 ```
 
-check 执行各 Go module 的 test/vet 和 TS 类型检查，其中 access/login/online/mole 用例会打开临时本机端口；build 输出 bin/<节点名> 和 typeclient/dist。run 只前台启动指定节点，优先读取 configs/<节点>-01.local.yaml，Ctrl-C/SIGTERM 由该节点有序退出。
+check 执行各 Go module 的 test/vet 和 TS 类型检查，其中 access/login/online/mole/settlement 用例会打开临时本机端口；build 输出 bin/<节点名> 和 typeclient/dist。run 只前台启动指定节点，优先读取 configs/<节点>-01.local.yaml，Ctrl-C/SIGTERM 由该节点有序退出。
 
 按节点工作时可执行 `./scripts/dev.sh check access` 和 `./scripts/dev.sh build access`，仅处理 common 与 access。TypeScript 当前只做类型检查与编译，没有连接或业务功能。Go 命令使用 GOWORK=off 和 .cache/go-build，保留缓存；编辑器需要时执行 `cp go.work.example go.work`。
 
@@ -123,8 +123,48 @@ GOWORK=off GSRDEMO_ONLINE_LOAD=1 go test -run '^TestOnlineClusterLoad$' -v -time
 
 mole 只读取 configs/mole-01.yaml 的宿主配置，没有数据库连接、建表脚本或源端持久化。所有余额、幂等凭据和明细的 SQL 归 settlement。此前初始化的 gsrdemo_mole 库不再使用，代码不会自动删除该库。
 
-当前 settlement 尚无业务 Service，mole 可启动监听，但在结算汇总初始化和用户余额加载完成前拒绝计费进入。跨节点测试使用测试 Online、结算和 Agent Service，经真实 TCP 验证内存结果、延迟隔离、批次重试和余额校正，不代表真实 MySQL 或独立钱包实现已验收。
+mole 在结算汇总初始化和用户余额加载完成前拒绝计费进入。默认跨节点测试使用测试 Online、结算和 Agent Service；真实结算数据库和独立进程测试按下节显式开启。access/TypeScript 仍未接入游戏。
 
 未获确认的命中和批次只存在内存中；mole 崩溃可能丢失尚未提交的操作。重启后重新加载 settlement 已保存的余额和汇总，并可查询原操作，不承诺补交已丢失的内存批次。客户端即时显示不代表持久化入账。
+
+## settlement 使用
+
+三种写入口分别是 SettleSingle、SettleBatch（独立单人项）、SettleGroup（多人整体）。同一业务操作跨批次/入口仍按 OperationID 去重；详情见 [协议](docs/PROTOCOL.md#通用银子结算接口)。
+
+管理员先执行建表脚本；复制 configs/settlement-01.yaml 为权限 0600 的 settlement-01.local.yaml，填写专用库的 mysql_dsn：
+
+```sh
+mysql -u root -p < nodes/settlement/schema.sql
+./scripts/dev.sh check settlement
+./scripts/dev.sh build settlement
+```
+
+钱包需要显式初始化。以下 UserID=1 为示例，替换为 login 创建账号时返回的真实 UserID；初始化银子也保留明细，同用户同金额重试不重复发放，改金额拒绝：
+
+```sh
+./bin/settlement -config configs/settlement-01.local.yaml -init-wallet 1 -silver 10000
+./scripts/dev.sh run settlement
+```
+
+节点启动不迁移数据库、不自动创建钱包。MySQL 失败不报告入账成功；调用超时按原身份重试。默认测试使用 go-sqlmock v1.5.2 注入 SQL 失败（标准库不提供对应模拟驱动），不访问外部数据库。
+
+显式真实 MySQL 验证：
+
+```sh
+cd nodes/settlement
+GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 go test -run '^TestSettlementLiveMySQL$' -v -timeout=1m
+```
+
+独立 online/mole/settlement 进程加真实 MySQL 的闭环测试，先从根目录构建三个节点，再运行：
+
+```sh
+./scripts/dev.sh build online
+./scripts/dev.sh build mole
+./scripts/dev.sh build settlement
+cd nodes/settlement
+GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_PROCESSES=1 go test -run '^TestSettlementMoleProcessesLiveMySQL$' -v -timeout=1m
+```
+
+这些用例只接受专用本机 gsrdemo_settlement 库，创建随机独占测试钱包，并清理自己的操作、批次和余额；进程用例只回收自己启动的进程。access/TS 的真实客户端链路、故障负载和入账延迟目标仍需后续验收。
 
 ../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 只用于阅读，构建使用发布模块，不依赖兄弟 GSR checkout。access 后续功能和下一节点仍先展示方案，确认后再实现。
