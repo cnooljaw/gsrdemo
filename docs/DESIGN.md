@@ -199,13 +199,13 @@ flowchart LR
 
 按场景分三个入口：SettleSingle 单用户一笔，SettleBatch 多笔独立单人操作，SettleGroup 多用户整体操作。接口共享金额校验、幂等和事务实现，调用方不必统一组装多用户结构。地鼠调用批量入口；棋牌一局可立即调用多人入口，批量周期由调用方决定。GetBatch/GetOperation/GetBalance/Summary 提供查询，具体字段和编号见 PROTOCOL.md。
 
-OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是一项单人操作，棋牌一局是一项多人操作；一项多人操作不能拆成独立付款和收款。Business/BusinessRef/Detail 只用于归档与追溯，settlement 不解析地鼠/牌型/概率/输赢规则。汇总用 operation_count，不出现 hits；地鼠本地自行解释为已入账锤数。
+OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是一项单人操作，棋牌一局是一项多人操作；一项多人操作不能拆成独立付款和收款。单人使用 UserID + Items，组操作使用 Changes；每项包含 Reason、非负 Debit/Credit，同用户可有手续费、输赢等多条变化。Reason 只校验格式，不解释含义。Business/BusinessRef/Detail 只用于归档与追溯，settlement 不解析地鼠/牌型/概率/输赢规则。汇总用 operation_count，不出现 hits；地鼠本地自行解释为已入账锤数。
 
 ### 9.2 事务、幂等和最少状态
 
-1. 校验规范参数、数量/字节上限、全局操作身份、不同参与用户、非负金额和整数范围；规范化 JSON 后取 SHA-256。批次内操作保持顺序，组内参与者按 UserID 排序。
+1. 校验规范参数、数量/字节上限、全局操作身份、参与用户/明细数量、非负金额和整数范围；规范化 JSON 后取 SHA-256。批次内操作保持顺序，所有变化按 UserID、Reason、Debit、Credit 排序，保留重复明细。分类或拆分改变即为内容变更。
 2. 同 BatchID 已存在时核对摘要，返回原历史回执。同 OperationID 跨入口/跨批次存在时核对内容，沿用原终局结果和 origin_batch，不重新写操作索引或累计金额；冲突拒绝整次请求。
-3. 一个批次一个 MySQL 事务，按稳定用户顺序锁定涉及钱包。使用事务内普通 map 工作副本，按操作顺序先检查完整 Debit 能力、余额/版本溢出，再应用 Credit。多人先全部检查再一起修改；批量单人每笔分别判定。
+3. 一个批次一个 MySQL 事务，按稳定用户顺序锁定涉及钱包。使用事务内普通 map 工作副本，按操作顺序先汇总每名用户的多条分类明细，再检查完整 Debit 能力、余额/版本溢出，最后应用 Credit。每名用户每笔成功 Operation 只递增一次版本。多人先全部检查再一起修改；批量单人每笔分别判定。
 4. 余额不足等业务拒绝保存为终局结果，同批其他操作可成功。只对新成功操作涉及用户批量更新余额/版本，再批量插入新操作索引和完整批次/回执，Commit 成功才返回。
 5. SQL/连接/提交错误是未知或失败，不保存成余额不足、不假报入账；事务回滚或调用方用原 ID 重试，已提交但丢回复时返回已有结果。数据库唯一键与余额行锁同时保护重复写入；竞争导致 SQL 失败时按原身份重试。
 
@@ -219,9 +219,9 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 | settlement_operations | 全局 OperationID、请求摘要、原批次及位置、业务/终局状态、扣返汇总；支持幂等、定位和通用 Summary |
 | settlement_batches | BatchID、摘要、规范原始业务明细 JSON、完整回执 JSON；余额和记录同事务提交 |
 
-完整明细随批次归档，不建独立逐锤分析表或明细节点。操作索引仅保留去重、结果定位和当前汇总需要的紧凑字段。Summary 按业务仅统计唯一 committed 操作；新批次携带历史操作不会再计入。保留记录便于按用户变化、操作和批次对账，不只比较净额。需要外移明细或优化大规模历史汇总时再单独确认，本版不做通用 Outbox、MQ 或分布式事务。
+完整 Reason 明细随批次归档，不丢失同用户的分类构成，不建独立逐锤分析表或明细节点。操作索引仅保留去重、结果定位和当前汇总需要的紧凑字段。Summary 按业务仅统计唯一 committed 操作；新批次携带历史操作不会再计入。保留记录便于按用户变化、操作和批次对账，不只比较净额。需要外移明细或优化大规模历史汇总时再单独确认，本版不做通用 Outbox、MQ 或分布式事务。
 
-钱包不在 GetBalance/结算时自动创建或发钱。管理命令 -init-wallet UserID -silver Amount 显式初始化，初始发放也保存为 wallet_init 操作；固定身份使重复执行不重发，修改金额冲突。缺失钱包返回 wallet_not_found，不默认为零。初始化仅在管理入口开放，普通 RPC 不能使用保留业务名 wallet_init。
+用户中心决定钱包创建和初始银子；Settlement 仅执行账务。Demo 的 -init-wallet UserID -silver Amount 模拟用户中心管理入口，不自动接入账号注册。普通 settle(ctx, batch) 不含创建分支；initialize(ctx, userID, amount) 单独开启事务，先查固定初始化凭据，再创建零余额钱包、执行 wallet_init/initial_balance 操作、保存索引/明细/回执并提交。OperationID=wallet-init-{UserID}，BatchID=derived(init, OperationID)。同金额重试返回历史结果，改金额或已有钱包缺少初始化凭据返回冲突。数据库唯一键保证不重复，业务核对摘要并定义返回语义；竞争导致 SQL 失败时回滚，调用方用原身份重试。GetBalance/普通结算遇到缺失钱包报 wallet_not_found；普通 RPC 禁用 wallet_init。
 
 配置为 settlement 私有 YAML mysql_dsn；公开模板留空，私密配置权限 0600。专用库 gsrdemo_settlement，由管理员执行 schema.sql 初始化，应用不自动迁移。驱动与 SQL mock 沿用 login 固定版本（MySQL v1.10.1、go-sqlmock v1.5.2），分别用于真实驱动和可重复失败注入，标准库没有对应实现。mole 不增加 SQL，配套迁移为批量单人参数及通用汇总字段；access/login/online/TS 业务不变。
 
@@ -232,5 +232,7 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 真实 MySQL 用例显式开启，使用专用本机库，创建独占随机测试钱包、操作/批次，完成后只删除自己创建的样本。覆盖三种入口、初始化重试、余额/明细/汇总对账及重启查询；独立进程用例另需构建 online/mole/settlement，验证绑定、进入、命中即时结果与真实 MySQL 入账查询。实际验证结果见下段；该链路使用测试钱包与内部 Cluster 调用，不包含真实 access/TypeScript 客户端。
 
 2026-10-27 验证：统一 `./scripts/dev.sh check`、online/mole/settlement 构建、mole 与 settlement 全量 race 通过。2026-10-28 管理员初始化专用库后，`TestSettlementLiveMySQL` 与 `TestSettlementMoleProcessesLiveMySQL` 均通过：真实 MySQL 覆盖三个入口、跨入口/批次去重、内容冲突、多人整体拒绝、事务回滚、历史回执与重启查询、余额/明细/汇总对账；三个独立 OS 节点经 TCP 完成绑定、进入、命中即时结果及持久入账查询。两项测试清理了自己的钱包、操作和批次，独立进程均经 SIGTERM 正常退出，只回收本次子进程。这不是强杀恢复、客户端接入或负载验收。
+
+2026-10-28 Reason 契约升级：实施前只读核对本机 silver_balances、settlement_operations、settlement_batches 均为 0 条，写协议直接升级 version=2，无存量迁移；没有清空账务或改写历史摘要。三张表结构不变，mole 逐锤拆成 hammer_cost/hammer_reward 两条 Items；每项操作最多 512 条分类变化，参与用户最多 64 名。新增验证覆盖同用户多条扣款合计不足、版本只递增一次、Reason 重排/变更身份、初始化异常回滚及无凭据钱包冲突；统一 check、mole/settlement race、真实 MySQL 分类明细/版本/初始化幂等及三个独立进程入账验证均通过。
 
 本轮只完成通用银子结算，不实现斗地主牌局、资金冻结、匹配或外部明细导出。mole 崩溃可丢失未提交的内存操作，settlement 只能保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。

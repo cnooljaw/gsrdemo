@@ -173,7 +173,9 @@ func TestMoleWireContainsFactsWithoutConnections(t *testing.T) {
 	if operation["operation_id"] != event.HitID || operation["business_ref"] != "attack-test/1/0" {
 		t.Fatal("missing stable business identity")
 	}
-	if operation["user_id"] != uint64(7) || operation["debit"] != int64(100) || operation["credit"] != int64(0) {
+	items := operation["items"].([]any)
+	cost, reward := items[0].(map[string]any), items[1].(map[string]any)
+	if operation["user_id"] != uint64(7) || cost["reason"] != "hammer_cost" || cost["debit"] != int64(100) || reward["reason"] != "hammer_reward" || reward["credit"] != int64(0) {
 		t.Fatal("invalid single-user money change")
 	}
 	if _, exists := operation["changes"]; exists {

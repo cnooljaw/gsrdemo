@@ -132,8 +132,12 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	business := prefix
 	address, stop := startSettlementTestNode(t, store.db)
 	single := testSingle(prefix+"-single", users[0], 100, 198)
+	single["items"] = []any{
+		map[string]any{"reason": "service_fee", "debit": int64(5), "credit": int64(0)},
+		map[string]any{"reason": "game_win_loss", "debit": int64(95), "credit": int64(198)},
+	}
 	single["business"] = business
-	single["version"] = uint64(1)
+	single["version"] = uint64(2)
 	sample.Operations = append(sample.Operations, prefix+"-single")
 	sample.Batches = append(sample.Batches, derivedBatchID("single", prefix+"-single"))
 	result := liveCall(t, address, settleSingleCommand, single)
@@ -144,6 +148,9 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
 	if _, err := store.initialize(ctx, users[0], 1000); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := store.initialize(ctx, users[0], 999); !errors.Is(err, errSettlementConflict) {
+		t.Fatalf("changed initial amount: %v", err)
 	}
 	cancel()
 	batchOps := []map[string]any{testSingle(prefix+"-a", users[0], 1000, 0), testSingle(prefix+"-bad", users[1], 2000, 0), testSingle(prefix+"-b", users[2], 0, 50)}
@@ -158,8 +165,8 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	if statuses[0].(map[string]any)["status"] != "committed" || statuses[1].(map[string]any)["status"] != "rejected" || statuses[2].(map[string]any)["status"] != "committed" {
 		t.Fatal("independent batch outcomes lost")
 	}
-	group := map[string]any{"version": uint64(1), "operation_id": prefix + "-group-bad", "business": business, "business_ref": "round", "detail": map[string]any{"round": "test"}, "changes": []any{
-		map[string]any{"user_id": users[0], "debit": int64(100), "credit": int64(0)}, map[string]any{"user_id": users[1], "debit": int64(0), "credit": int64(50)}, map[string]any{"user_id": users[2], "debit": int64(0), "credit": int64(50)}}}
+	group := map[string]any{"version": uint64(2), "operation_id": prefix + "-group-bad", "business": business, "business_ref": "round", "detail": map[string]any{"round": "test"}, "changes": []any{
+		map[string]any{"user_id": users[0], "reason": "game_win_loss", "debit": int64(100), "credit": int64(0)}, map[string]any{"user_id": users[1], "reason": "game_win_loss", "debit": int64(0), "credit": int64(50)}, map[string]any{"user_id": users[2], "reason": "game_win_loss", "debit": int64(0), "credit": int64(50)}}}
 	sample.Operations = append(sample.Operations, prefix+"-group-bad")
 	sample.Batches = append(sample.Batches, derivedBatchID("group", prefix+"-group-bad"))
 	result = liveCall(t, address, settleGroupCommand, group)
@@ -170,7 +177,8 @@ func TestSettlementLiveMySQL(t *testing.T) {
 		t.Fatal("rejected group paid a winner")
 	}
 	group["operation_id"] = prefix + "-group"
-	group["changes"].([]any)[0].(map[string]any)["debit"] = int64(98)
+	group["changes"].([]any)[0].(map[string]any)["debit"] = int64(93)
+	group["changes"] = append(group["changes"].([]any), map[string]any{"user_id": users[0], "reason": "service_fee", "debit": int64(5), "credit": int64(0)})
 	group["changes"].([]any)[1].(map[string]any)["credit"] = int64(48)
 	sample.Operations = append(sample.Operations, prefix+"-group")
 	sample.Batches = append(sample.Batches, derivedBatchID("group", prefix+"-group"))
@@ -185,9 +193,16 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	if _, err := settlementRPC(t, address, settleGroupCommand, group); !errors.Is(err, errSettlementConflict) {
 		t.Fatalf("group identity conflict: %v", err)
 	}
+	group["changes"].([]any)[1].(map[string]any)["credit"] = int64(48)
+	group["changes"].([]any)[3].(map[string]any)["reason"] = "other_fee"
+	if _, err := settlementRPC(t, address, settleGroupCommand, group); !errors.Is(err, errSettlementConflict) {
+		t.Fatalf("changed reason: %v", err)
+	}
+
 	// 单人接口的同一操作可以作为新的批量请求重提，不能重复加减。
 	repeated := testSingle(prefix+"-single", users[0], 100, 198)
 	repeated["business"] = business
+	repeated["items"] = single["items"]
 	sample.Batches = append(sample.Batches, prefix+"-repeat")
 	result = liveCall(t, address, settleBatchCommand, testBatch(prefix+"-repeat", repeated))
 	if result["results"].([]any)[0].(map[string]any)["origin_batch"] != derivedBatchID("single", prefix+"-single") {
@@ -198,14 +213,15 @@ func TestSettlementLiveMySQL(t *testing.T) {
 		t.Fatalf("summary duplicated money: %v", summary)
 	}
 	for i, want := range []int64{0, 1048, 1100} {
-		if got := liveCall(t, address, getBalanceCommand, users[i])["amount"]; got != want {
-			t.Fatalf("wallet %d: %v want %d", i, got, want)
+		balance := liveCall(t, address, getBalanceCommand, users[i])
+		if balance["amount"] != want || balance["version"] != []uint64{4, 2, 3}[i] {
+			t.Fatalf("wallet %d: %v want amount %d", i, balance, want)
 		}
 	}
 	// 在写余额之后制造归档序列化错误，核对真实事务已回滚。
 	broken := settlementBatch{ID: prefix + "-rollback", Kind: "single", Operations: []silverOperation{{ID: prefix + "-rollback", Business: business, Reference: "ref", Changes: []silverChange{{UserID: users[1], Debit: 10}}, Detail: json.RawMessage("invalid")}}}
 	ctx, cancel = context.WithTimeout(context.Background(), settlementSQLTimeout)
-	if _, err := store.settle(ctx, broken, 0); err == nil {
+	if _, err := store.settle(ctx, broken); err == nil {
 		t.Fatal("invalid archive succeeded")
 	}
 	cancel()
@@ -232,5 +248,21 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	var archived settlementBatch
 	if err := json.Unmarshal(requestJSON, &archived); err != nil || len(archived.Operations) != 3 || archived.Operations[0].Changes[0].Debit != 1000 {
 		t.Fatal("original detail archive missing")
+	}
+	if err := store.db.QueryRowContext(ctx, "SELECT request_json FROM settlement_batches WHERE batch_id = ?", derivedBatchID("group", prefix+"-group")).Scan(&requestJSON); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(requestJSON, &archived); err != nil {
+		t.Fatal(err)
+	}
+	changes := archived.Operations[0].Changes
+	feeFound := false
+	for _, change := range changes {
+		if change.UserID == users[0] && change.Reason == "service_fee" && change.Debit == 5 {
+			feeFound = true
+		}
+	}
+	if len(changes) != 4 || !feeFound {
+		t.Fatal("reason components not preserved")
 	}
 }

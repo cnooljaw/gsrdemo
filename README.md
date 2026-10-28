@@ -129,7 +129,7 @@ mole 在结算汇总初始化和用户余额加载完成前拒绝计费进入。
 
 ## settlement 使用
 
-三种写入口分别是 SettleSingle、SettleBatch（独立单人项）、SettleGroup（多人整体）。同一业务操作跨批次/入口仍按 OperationID 去重；详情见 [协议](docs/PROTOCOL.md#通用银子结算接口)。
+三种写入口分别是 SettleSingle、SettleBatch（独立单人项）、SettleGroup（多人整体）。写协议为 version=2：单人用 UserID + Items，多人用 Changes，均保留 Reason 分类，允许同用户多条明细并汇总校验；同一业务操作跨批次/入口仍按 OperationID 去重；详情见 [协议](docs/PROTOCOL.md#通用银子结算接口)。
 
 管理员先执行建表脚本；复制 configs/settlement-01.yaml 为权限 0600 的 settlement-01.local.yaml，填写专用库的 mysql_dsn：
 
@@ -139,7 +139,7 @@ mysql -u root -p < nodes/settlement/schema.sql
 ./scripts/dev.sh build settlement
 ```
 
-钱包需要显式初始化。以下 UserID=1 为示例，替换为 login 创建账号时返回的真实 UserID；初始化银子也保留明细，同用户同金额重试不重复发放，改金额拒绝：
+钱包由用户中心决定创建和初始银子，Settlement 只执行；Demo 用独立管理命令模拟用户中心，普通结算不创建钱包。以下 UserID=1 为示例，替换为 login 创建账号时返回的真实 UserID；初始化银子也保留明细，同用户同金额重试不重复发放，改金额拒绝：
 
 ```sh
 ./bin/settlement -config configs/settlement-01.local.yaml -init-wallet 1 -silver 10000

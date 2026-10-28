@@ -86,7 +86,12 @@ func (service *settlementFixture) submit(_ gsr.CommandContext, request map[strin
 			results = append(results, previous)
 			continue
 		}
-		debit, credit := change["debit"].(int64), change["credit"].(int64)
+		var debit, credit int64
+		for _, value := range change["items"].([]any) {
+			item := value.(map[string]any)
+			debit += item["debit"].(int64)
+			credit += item["credit"].(int64)
+		}
 		balance := service.balances[userID]
 		status := "rejected"
 		if balance.Amount >= debit {

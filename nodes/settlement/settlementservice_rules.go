@@ -13,10 +13,12 @@ const (
 	maxSettlementOperations   = 500
 	maxSettlementBytes        = 256 * 1024
 	maxSettlementParticipants = 64
+	maxSettlementChanges      = 512
 )
 
 type silverChange struct {
 	UserID uint64 `json:"user_id"`
+	Reason string `json:"reason"`
 	Debit  int64  `json:"debit"`
 	Credit int64  `json:"credit"`
 }
@@ -108,7 +110,7 @@ func exactFields(fields map[string]any, names ...string) bool {
 }
 
 func validVersion(fields map[string]any) bool {
-	return fields["version"] == uint64(1)
+	return fields["version"] == uint64(2)
 }
 
 func decodeSettlementBatch(fields map[string]any) (settlementBatch, error) {
@@ -168,7 +170,7 @@ func decodeSilverOperation(fields map[string]any, group, versioned bool) (silver
 	if group {
 		names = append(names, "changes")
 	} else {
-		names = append(names, "user_id", "debit", "credit")
+		names = append(names, "user_id", "items")
 	}
 	if versioned {
 		names = append(names, "version")
@@ -195,33 +197,56 @@ func decodeSilverOperation(fields map[string]any, group, versioned bool) (silver
 	if len(operation.Detail) > 64*1024 {
 		return operation, errInvalidSettlement
 	}
-	if group {
-		values, ok := fields["changes"].([]any)
-		if !ok || len(values) < 2 || len(values) > maxSettlementParticipants {
+	values, ok := fields["changes"].([]any)
+	if !group {
+		values, ok = fields["items"].([]any)
+	}
+	if !ok || len(values) == 0 || len(values) > maxSettlementChanges {
+		return operation, errInvalidSettlement
+	}
+	users := make(map[uint64]bool)
+	for _, value := range values {
+		fieldsChange, ok := value.(map[string]any)
+		if !ok {
 			return operation, errInvalidSettlement
 		}
-		for _, value := range values {
-			change, ok := value.(map[string]any)
-			if !ok || !exactFields(change, "user_id", "debit", "credit") {
+		if group {
+			if !exactFields(fieldsChange, "user_id", "reason", "debit", "credit") {
 				return operation, errInvalidSettlement
 			}
-			decoded, err := decodeSilverChange(change)
-			if err != nil {
-				return operation, err
+		} else {
+			if !exactFields(fieldsChange, "reason", "debit", "credit") {
+				return operation, errInvalidSettlement
 			}
-			operation.Changes = append(operation.Changes, decoded)
+			fieldsChange = map[string]any{"user_id": fields["user_id"], "reason": fieldsChange["reason"], "debit": fieldsChange["debit"], "credit": fieldsChange["credit"]}
 		}
-	} else {
-		change, err := decodeSilverChange(fields)
+		change, err := decodeSilverChange(fieldsChange)
 		if err != nil {
 			return operation, err
 		}
-		operation.Changes = []silverChange{change}
+		users[change.UserID] = true
+		operation.Changes = append(operation.Changes, change)
 	}
-	sort.Slice(operation.Changes, func(i, j int) bool { return operation.Changes[i].UserID < operation.Changes[j].UserID })
+	if len(users) > maxSettlementParticipants || group && len(users) < 2 {
+		return operation, errInvalidSettlement
+	}
+	sort.Slice(operation.Changes, func(i, j int) bool {
+		a, b := operation.Changes[i], operation.Changes[j]
+		if a.UserID != b.UserID {
+			return a.UserID < b.UserID
+		}
+		if a.Reason != b.Reason {
+			return a.Reason < b.Reason
+		}
+		if a.Debit != b.Debit {
+			return a.Debit < b.Debit
+		}
+		return a.Credit < b.Credit
+	})
+	// 索引保存整笔总额，因此总额也必须在 int64 范围内。
 	var debit, credit int64
-	for i, change := range operation.Changes {
-		if i > 0 && change.UserID == operation.Changes[i-1].UserID || debit > math.MaxInt64-change.Debit || credit > math.MaxInt64-change.Credit {
+	for _, change := range operation.Changes {
+		if debit > math.MaxInt64-change.Debit || credit > math.MaxInt64-change.Credit {
 			return operation, errInvalidSettlement
 		}
 		debit += change.Debit
@@ -232,12 +257,26 @@ func decodeSilverOperation(fields map[string]any, group, versioned bool) (silver
 
 func decodeSilverChange(fields map[string]any) (silverChange, error) {
 	id, idOK := fields["user_id"].(uint64)
+	reason, _ := fields["reason"].(string)
 	debit, debitOK := fields["debit"].(int64)
 	credit, creditOK := fields["credit"].(int64)
-	if !idOK || id == 0 || !debitOK || !creditOK || debit < 0 || credit < 0 {
+	if !validChangeReason(reason) || !idOK || id == 0 || !debitOK || !creditOK || debit < 0 || credit < 0 {
 		return silverChange{}, errInvalidSettlement
 	}
-	return silverChange{UserID: id, Debit: debit, Credit: credit}, nil
+	return silverChange{UserID: id, Reason: reason, Debit: debit, Credit: credit}, nil
+}
+
+// validChangeReason 只约束分类标识格式，具体含义由业务解释。
+func validChangeReason(reason string) bool {
+	if len(reason) == 0 || len(reason) > 64 {
+		return false
+	}
+	for _, c := range reason {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // validDetail 仅校验有界的通用归档数据，不解释玩法字段；金额只允许整数。
@@ -272,8 +311,28 @@ func validDetail(value any, depth int, nodes *int) bool {
 
 // applySilverOperation 先验证全部参与者再修改工作副本，业务拒绝不产生部分余额变化。
 func applySilverOperation(wallets map[uint64]walletBalance, operation silverOperation) string {
+	totals := make(map[uint64]silverChange)
 	for _, change := range operation.Changes {
-		balance := wallets[change.UserID]
+		total := totals[change.UserID]
+		if change.Debit < 0 || change.Credit < 0 || total.Debit > math.MaxInt64-change.Debit || total.Credit > math.MaxInt64-change.Credit {
+			return "amount_overflow"
+		}
+		total.UserID = change.UserID
+		total.Debit += change.Debit
+		total.Credit += change.Credit
+		totals[change.UserID] = total
+	}
+	ids := make([]uint64, 0, len(totals))
+	for id := range totals {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		change := totals[id]
+		balance, exists := wallets[change.UserID]
+		if !exists {
+			return "wallet_not_found"
+		}
 		if balance.Amount < change.Debit {
 			return "insufficient_silver"
 		}
@@ -284,7 +343,8 @@ func applySilverOperation(wallets map[uint64]walletBalance, operation silverOper
 			return "version_overflow"
 		}
 	}
-	for _, change := range operation.Changes {
+	for _, id := range ids {
+		change := totals[id]
 		balance := wallets[change.UserID]
 		balance.Amount = balance.Amount - change.Debit + change.Credit
 		balance.Version++

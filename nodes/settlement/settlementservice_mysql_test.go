@@ -52,7 +52,7 @@ func TestSettlementBatchPersistsIndependentResults(t *testing.T) {
 	mock.ExpectExec("INSERT INTO settlement_batches").WithArgs("batch", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO settlement_operations").WithArgs("bad", sqlmock.AnyArg(), "batch", 0, "demo", "rejected", int64(100), int64(0), "good", sqlmock.AnyArg(), "batch", 1, "demo", "committed", int64(100), int64(198)).WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()
-	receipt, err := store.settle(context.Background(), batch, 0)
+	receipt, err := store.settle(context.Background(), batch)
 	if err != nil || receipt.Results[0].Status != "rejected" || receipt.Results[1].Status != "committed" || receipt.Balances[0].Amount != 50 || receipt.Balances[1].Amount != 1098 {
 		t.Fatalf("receipt: %+v %v", receipt, err)
 	}
@@ -76,7 +76,7 @@ func TestSettlementFailureDoesNotReportBusinessCompletion(t *testing.T) {
 				mock.ExpectExec("INSERT INTO settlement_operations").WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectCommit().WillReturnError(failure)
 			}
-			if _, err := store.settle(context.Background(), batch, 0); !errors.Is(err, failure) {
+			if _, err := store.settle(context.Background(), batch); !errors.Is(err, failure) {
 				t.Fatalf("SQL failure became final success: %v", err)
 			}
 		})
@@ -98,7 +98,7 @@ func TestSettlementBatchIdentitySurvivesLostReply(t *testing.T) {
 			if conflict {
 				batch.Operations[0].Changes[0].Credit = 198
 			}
-			receipt, err := store.settle(context.Background(), batch, 0)
+			receipt, err := store.settle(context.Background(), batch)
 			if conflict {
 				if !errors.Is(err, errSettlementConflict) {
 					t.Fatal(err)
@@ -128,7 +128,7 @@ func TestSettlementOperationDeduplicatesAcrossBatches(t *testing.T) {
 				mock.ExpectExec("INSERT INTO settlement_batches").WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectCommit()
 			}
-			receipt, err := store.settle(context.Background(), batch, 0)
+			receipt, err := store.settle(context.Background(), batch)
 			if conflict {
 				if !errors.Is(err, errSettlementConflict) {
 					t.Fatal(err)
@@ -143,8 +143,8 @@ func TestSettlementOperationDeduplicatesAcrossBatches(t *testing.T) {
 // TestSettlementGroupWritesAllWalletsTogether 保护多人成功时所有参与余额与一项操作凭据同事务写入。
 func TestSettlementGroupWritesAllWalletsTogether(t *testing.T) {
 	store, mock := mockStore(t)
-	request := map[string]any{"version": uint64(1), "operation_id": "round", "business": "cards", "business_ref": "round-1", "detail": map[string]any{}, "changes": []any{
-		map[string]any{"user_id": uint64(1), "debit": int64(100), "credit": int64(0)}, map[string]any{"user_id": uint64(2), "debit": int64(0), "credit": int64(100)}}}
+	request := map[string]any{"version": uint64(2), "operation_id": "round", "business": "cards", "business_ref": "round-1", "detail": map[string]any{}, "changes": []any{
+		map[string]any{"user_id": uint64(1), "reason": "game_win_loss", "debit": int64(95), "credit": int64(0)}, map[string]any{"user_id": uint64(2), "reason": "game_win_loss", "debit": int64(0), "credit": int64(100)}, map[string]any{"user_id": uint64(1), "reason": "service_fee", "debit": int64(5), "credit": int64(0)}}}
 	batch, err := decodeSettlementGroup(request)
 	if err != nil {
 		t.Fatal(err)
@@ -155,8 +155,55 @@ func TestSettlementGroupWritesAllWalletsTogether(t *testing.T) {
 	mock.ExpectExec("INSERT INTO settlement_batches").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO settlement_operations").WithArgs("round", sqlmock.AnyArg(), batch.ID, 0, "cards", "committed", int64(100), int64(100)).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	receipt, err := store.settle(context.Background(), batch, 0)
+	receipt, err := store.settle(context.Background(), batch)
 	if err != nil || len(receipt.Results) != 1 || receipt.Results[0].Status != "committed" || receipt.Balances[0].Amount != 900 || receipt.Balances[1].Amount != 1100 {
 		t.Fatalf("group receipt: %+v %v", receipt, err)
+	}
+}
+
+// TestSettlementDoesNotCreateMissingWallet 保护普通结算遇到缺失钱包只回滚，不创建钱包或归档成功。
+func TestSettlementDoesNotCreateMissingWallet(t *testing.T) {
+	store, mock := mockStore(t)
+	batch, _ := decodeSettlementBatch(testBatch("missing", testSingle("missing", 1, 0, 100)))
+	expectNewBatch(mock, batch, emptyOperations())
+	mock.ExpectQuery("SELECT user_id, amount, version").WillReturnRows(sqlmock.NewRows([]string{"user_id", "amount", "version"}))
+	mock.ExpectRollback()
+	if _, err := store.settle(context.Background(), batch); !errors.Is(err, errWalletNotFound) {
+		t.Fatalf("missing wallet: %v", err)
+	}
+}
+
+// TestSettlementInitializationBoundary 保护已有无初始化凭据的钱包不补发，创建与首次入账失败整体回滚。
+func TestSettlementInitializationBoundary(t *testing.T) {
+	for _, scenario := range []string{"existing", "insert_failure", "archive_failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			store, mock := mockStore(t)
+			mock.ExpectBegin()
+			mock.ExpectQuery("SELECT request_hash, receipt_json").WillReturnRows(sqlmock.NewRows([]string{"request_hash", "receipt_json"}))
+			rows := sqlmock.NewRows([]string{"user_id"})
+			if scenario == "existing" {
+				rows.AddRow(1)
+			}
+			mock.ExpectQuery("SELECT user_id FROM silver_balances").WithArgs(uint64(1)).WillReturnRows(rows)
+			failure := errors.New("injected initialization failure")
+			if scenario == "insert_failure" {
+				mock.ExpectExec("INSERT INTO silver_balances").WillReturnError(failure)
+			}
+			if scenario == "archive_failure" {
+				mock.ExpectExec("INSERT INTO silver_balances").WithArgs(uint64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery("SELECT o.operation_id").WillReturnRows(emptyOperations())
+				mock.ExpectQuery("SELECT user_id, amount, version").WillReturnRows(sqlmock.NewRows([]string{"user_id", "amount", "version"}).AddRow(1, 0, 0))
+				mock.ExpectExec("UPDATE silver_balances").WithArgs(uint64(1), int64(1000), uint64(1), uint64(1), uint64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("INSERT INTO settlement_batches").WillReturnError(failure)
+			}
+			mock.ExpectRollback()
+			_, err := store.initialize(context.Background(), 1, 1000)
+			if scenario == "existing" {
+				failure = errSettlementConflict
+			}
+			if !errors.Is(err, failure) {
+				t.Fatalf("%s: %v", scenario, err)
+			}
+		})
 	}
 }

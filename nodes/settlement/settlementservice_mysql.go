@@ -24,33 +24,49 @@ func sqlSlots(count int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", count), ",")
 }
 
-func (store settlementStore) settle(ctx context.Context, batch settlementBatch, initializeUser uint64) (settlementReceipt, error) {
+func (store settlementStore) settle(ctx context.Context, batch settlementBatch) (settlementReceipt, error) {
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return settlementReceipt{}, err
 	}
 	defer tx.Rollback()
-	hash := batch.digest()
-	var previousHash, previousJSON []byte
-	err = tx.QueryRowContext(ctx, "SELECT request_hash, receipt_json FROM settlement_batches WHERE batch_id = ?", batch.ID).Scan(&previousHash, &previousJSON)
-	if err == nil {
-		if !bytes.Equal(previousHash, hash[:]) {
-			return settlementReceipt{}, errSettlementConflict
-		}
-		receipt, err := decodeStoredReceipt(previousJSON)
-		if err == nil && receipt.BatchID != batch.ID {
-			return receipt, errors.New("stored batch identity mismatch")
-		}
+	receipt, found, err := readBatchReceipt(ctx, tx, batch)
+	if err != nil || found {
 		return receipt, err
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	receipt, err = applySettlementBatch(ctx, tx, batch)
+	if err != nil {
 		return settlementReceipt{}, err
 	}
-	if initializeUser != 0 {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO silver_balances (user_id, amount, version) VALUES (?, 0, 0)", initializeUser); err != nil {
-			return settlementReceipt{}, err
-		}
+	if err := tx.Commit(); err != nil {
+		return settlementReceipt{}, err
 	}
+	return receipt, nil
+}
+
+func readBatchReceipt(ctx context.Context, tx *sql.Tx, batch settlementBatch) (settlementReceipt, bool, error) {
+	hash := batch.digest()
+	var previousHash, previousJSON []byte
+	err := tx.QueryRowContext(ctx, "SELECT request_hash, receipt_json FROM settlement_batches WHERE batch_id = ?", batch.ID).Scan(&previousHash, &previousJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settlementReceipt{}, false, nil
+	}
+	if err != nil {
+		return settlementReceipt{}, false, err
+	}
+	if !bytes.Equal(previousHash, hash[:]) {
+		return settlementReceipt{}, false, errSettlementConflict
+	}
+	receipt, err := decodeStoredReceipt(previousJSON)
+	if err == nil && receipt.BatchID != batch.ID {
+		err = errors.New("stored batch identity mismatch")
+	}
+	return receipt, true, err
+}
+
+// applySettlementBatch 只操作调用方事务，钱包创建仅属于 initialize。
+func applySettlementBatch(ctx context.Context, tx *sql.Tx, batch settlementBatch) (settlementReceipt, error) {
+	hash := batch.digest()
 	previous, err := loadOperations(ctx, tx, batch)
 	if err != nil {
 		return settlementReceipt{}, err
@@ -103,9 +119,6 @@ func (store settlementStore) settle(ctx context.Context, batch settlementBatch, 
 	}
 	if err := writeOperations(ctx, tx, batch, receipt, fresh); err != nil {
 		return receipt, err
-	}
-	if err := tx.Commit(); err != nil {
-		return settlementReceipt{}, err
 	}
 	return receipt, nil
 }
@@ -340,7 +353,34 @@ func (store settlementStore) initialize(ctx context.Context, id uint64, amount i
 	if id == 0 || amount < 0 {
 		return settlementReceipt{}, errInvalidSettlement
 	}
-	operation := silverOperation{ID: fmt.Sprintf("wallet-init-%d", id), Business: "wallet_init", Reference: fmt.Sprint(id), Changes: []silverChange{{UserID: id, Credit: amount}}, Detail: json.RawMessage(`{"reason":"demo_initial_balance"}`)}
+	operation := silverOperation{ID: fmt.Sprintf("wallet-init-%d", id), Business: "wallet_init", Reference: fmt.Sprint(id), Changes: []silverChange{{UserID: id, Reason: "initial_balance", Credit: amount}}, Detail: json.RawMessage(`{"reason":"demo_initial_balance"}`)}
 	batch := settlementBatch{ID: derivedBatchID("init", operation.ID), Kind: "initialize", Operations: []silverOperation{operation}}
-	return store.settle(ctx, batch, id)
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return settlementReceipt{}, err
+	}
+	defer tx.Rollback()
+	receipt, found, err := readBatchReceipt(ctx, tx, batch)
+	if err != nil || found {
+		return receipt, err
+	}
+	var existing uint64
+	err = tx.QueryRowContext(ctx, "SELECT user_id FROM silver_balances WHERE user_id = ?", id).Scan(&existing)
+	if err == nil {
+		return settlementReceipt{}, errSettlementConflict
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return settlementReceipt{}, err
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO silver_balances (user_id, amount, version) VALUES (?, 0, 0)", id); err != nil {
+		return settlementReceipt{}, err
+	}
+	receipt, err = applySettlementBatch(ctx, tx, batch)
+	if err != nil {
+		return settlementReceipt{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return settlementReceipt{}, err
+	}
+	return receipt, nil
 }

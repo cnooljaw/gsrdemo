@@ -10,14 +10,18 @@ func (batch moleBatch) wire() map[string]any {
 	for _, event := range batch.Events {
 		operations = append(operations, event.operationWire())
 	}
-	return map[string]any{"version": uint64(1), "batch_id": batch.ID, "operations": operations}
+	return map[string]any{"version": uint64(2), "batch_id": batch.ID, "operations": operations}
 }
 
 func (event hitEvent) operationWire() map[string]any {
 	return map[string]any{
 		"operation_id": event.HitID, "business": "mole",
 		"business_ref": fmt.Sprintf("%s/%d/%d", event.AttackName, event.Sequence, event.Hole),
-		"user_id":      event.UserID, "debit": event.Debit, "credit": event.Credit,
+		"user_id":      event.UserID,
+		"items": []any{
+			map[string]any{"reason": "hammer_cost", "debit": event.Debit, "credit": int64(0)},
+			map[string]any{"reason": "hammer_reward", "debit": int64(0), "credit": event.Credit},
+		},
 		"detail": map[string]any{"rule": event.Rule, "action_id": event.ActionID},
 	}
 }

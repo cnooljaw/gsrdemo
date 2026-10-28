@@ -138,9 +138,9 @@ func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 		t.Fatalf("single requires version: %v", err)
 	}
 	single := testSingle("single", 1, 100, 0)
-	single["version"] = uint64(1)
-	group := map[string]any{"version": uint64(1), "operation_id": "group", "business": "demo", "business_ref": "round", "detail": map[string]any{}, "changes": []any{
-		map[string]any{"user_id": uint64(1), "debit": int64(100), "credit": int64(0)}, map[string]any{"user_id": uint64(2), "debit": int64(0), "credit": int64(100)}}}
+	single["version"] = uint64(2)
+	group := map[string]any{"version": uint64(2), "operation_id": "group", "business": "demo", "business_ref": "round", "detail": map[string]any{}, "changes": []any{
+		map[string]any{"user_id": uint64(1), "reason": "game_win_loss", "debit": int64(100), "credit": int64(0)}, map[string]any{"user_id": uint64(2), "reason": "game_win_loss", "debit": int64(0), "credit": int64(100)}}}
 	for _, entry := range []struct {
 		command runtime.CommandID
 		request map[string]any

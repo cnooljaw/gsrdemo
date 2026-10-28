@@ -90,7 +90,7 @@ func (service *settlementService) settleGroup(self gsr.CommandContext, request m
 func (service *settlementService) commit(self gsr.ServiceContext, batch settlementBatch) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
 	defer cancel()
-	receipt, err := service.store.settle(ctx, batch, 0)
+	receipt, err := service.store.settle(ctx, batch)
 	if err != nil {
 		return nil, settlementError(self, err)
 	}
