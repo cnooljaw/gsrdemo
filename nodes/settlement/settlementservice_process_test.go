@@ -31,6 +31,12 @@ func freeBusinessAddress(t *testing.T) string {
 
 func startBusinessProcess(t *testing.T, node, config, address string) func() {
 	t.Helper()
+	_, stop := startBusinessProcessPID(t, node, config, address)
+	return stop
+}
+
+func startBusinessProcessPID(t *testing.T, node, config, address string) (int, func()) {
+	t.Helper()
 	binary, err := filepath.Abs("../../bin/" + node)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +80,7 @@ func startBusinessProcess(t *testing.T, node, config, address string) func() {
 		connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 		if err == nil {
 			connection.Close()
-			return stop
+			return command.Process.Pid, stop
 		}
 		select {
 		case err := <-done:
@@ -86,7 +92,7 @@ func startBusinessProcess(t *testing.T, node, config, address string) func() {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("%s listener not ready", node)
-	return stop
+	return command.Process.Pid, stop
 }
 
 // TestSettlementMoleProcessesLiveMySQL 保护三个独立 OS 节点通过真实 TCP 和 MySQL 跑完命中到持久入账；默认显式跳过。

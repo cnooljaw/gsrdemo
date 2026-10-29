@@ -45,6 +45,7 @@ func liveSettlementStore(t *testing.T) (settlementStore, settlementConfig) {
 
 type liveSettlementSample struct {
 	store      settlementStore
+	Business   string
 	Users      []uint64
 	Operations []string
 	Batches    []string
@@ -52,9 +53,14 @@ type liveSettlementSample struct {
 
 func newLiveSettlementSample(t *testing.T, store settlementStore, count int) *liveSettlementSample {
 	t.Helper()
+	return newLiveSettlementSampleAmount(t, store, count, 1000)
+}
+
+func newLiveSettlementSampleAmount(t *testing.T, store settlementStore, count int, amount int64) *liveSettlementSample {
+	t.Helper()
 	sample := &liveSettlementSample{store: store}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		tx, err := store.db.BeginTx(ctx, nil)
 		if err != nil {
@@ -62,22 +68,21 @@ func newLiveSettlementSample(t *testing.T, store settlementStore, count int) *li
 			return
 		}
 		defer tx.Rollback()
-		for _, id := range sample.Operations {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM settlement_operations WHERE operation_id = ?", id); err != nil {
-				t.Error(err)
-				return
-			}
-		}
-		for _, id := range sample.Batches {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM settlement_batches WHERE batch_id = ?", id); err != nil {
-				t.Error(err)
-				return
-			}
-		}
-		for _, id := range sample.Users {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM silver_balances WHERE user_id = ?", id); err != nil {
-				t.Error(err)
-				return
+		// 压测样本较多，按有界块删除自有身份，避免逐行清理拖长测试。
+		for _, table := range []struct {
+			name, key string
+			ids       []any
+		}{
+			{"settlement_operations", "operation_id", stringSQLArgs(sample.Operations)},
+			{"settlement_batches", "batch_id", stringSQLArgs(sample.Batches)},
+			{"silver_balances", "user_id", userSQLArgs(sample.Users)},
+		} {
+			for start := 0; start < len(table.ids); start += 500 {
+				end := min(start+500, len(table.ids))
+				if _, err := tx.ExecContext(ctx, "DELETE FROM "+table.name+" WHERE "+table.key+" IN ("+sqlSlots(end-start)+")", table.ids[start:end]...); err != nil {
+					t.Error(err)
+					return
+				}
 			}
 		}
 		if err := tx.Commit(); err != nil {
@@ -101,7 +106,7 @@ func newLiveSettlementSample(t *testing.T, store settlementStore, count int) *li
 		sample.Operations = append(sample.Operations, op)
 		sample.Batches = append(sample.Batches, derivedBatchID("init", op))
 		ctx, cancel = context.WithTimeout(context.Background(), settlementSQLTimeout)
-		_, err = store.initialize(ctx, id, 1000)
+		_, err = store.initialize(ctx, id, amount)
 		cancel()
 		if err != nil {
 			t.Fatal(err)
@@ -265,4 +270,20 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	if len(changes) != 4 || !feeFound {
 		t.Fatal("reason components not preserved")
 	}
+}
+
+func stringSQLArgs(values []string) []any {
+	args := make([]any, len(values))
+	for i, value := range values {
+		args[i] = value
+	}
+	return args
+}
+
+func userSQLArgs(values []uint64) []any {
+	args := make([]any, len(values))
+	for i, value := range values {
+		args[i] = value
+	}
+	return args
 }

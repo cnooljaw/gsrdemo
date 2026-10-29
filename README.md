@@ -168,3 +168,40 @@ GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_PROCESSES=1 go test -ru
 这些用例只接受专用本机 gsrdemo_settlement 库，创建随机独占测试钱包，并清理自己的操作、批次和余额；进程用例只回收自己启动的进程。access/TS 的真实客户端链路、故障负载和入账延迟目标仍需后续验收。
 
 ../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 只用于阅读，构建使用发布模块，不依赖兄弟 GSR checkout。access 后续功能和下一节点仍先展示方案，确认后再实现。
+
+结算层负载测试（不执行地鼠目标判定或棋牌局内逻辑）：
+
+```sh
+cd nodes/settlement
+GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_LOAD=1 go test -run '^TestSettlementLoad$' -v -timeout=5m
+```
+
+默认依次执行 A～D，每组 30 秒；可用 `GSRDEMO_SETTLEMENT_LOAD_DURATION=60s` 调整，较长测试同步调整 Go 的 timeout。A 为 600 钱包、3000 笔地鼠操作/秒，每 100ms 提交 300 笔；B 为 2500 桌的 7500 钱包、100 笔三人整体操作/秒；C 叠加；D 把约 20% 的两类操作集中到同一钱包。每笔保留 Reason 分类，结束后核对余额、版本、唯一成功操作及扣返总额，仅清理本次样本。详情见 [设计文档](docs/DESIGN.md#95-结算层负载基线)。结果写入被忽略的 `.cache/settlement-load.json`（项目根目录），不会提交原始运行数据。
+
+5000 桌四人配置及独立进程 CPU 采样：
+
+```sh
+./scripts/dev.sh build settlement
+cd nodes/settlement
+GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_LOAD=1 \
+  GSRDEMO_SETTLEMENT_LOAD_PROFILE=four GSRDEMO_SETTLEMENT_LOAD_DURATION=60s \
+  go test -run '^TestSettlementLoad$' -v -timeout=10m
+```
+
+该配置依次测试 A（600 地鼠钱包/3000 hit/s）、B（5000 桌四人/200 桌结算/s）、C（两者合计 20,600 钱包）、D（C 加热点钱包）。独立启动并回收本次 settlement 子进程，MySQL 仅观察，不停止；每秒通过 `ps` 累计 CPU 时间之差计算进程负载，100% 表示一个逻辑核。需要本机仅有一个 mysqld 进程，CPU 采样仅在显式负载测试中启用。结果及逐秒样本写入 `.cache/settlement-load-four.json`。正式容量测试勿启用 race；race 用短程测试单独检查。
+
+大数据历史压测使用独立库，数据会保留用于后续档位，不能指向日常示例库：
+
+```sh
+# 首次由管理员执行；不清空已有库。
+mysql -u root -p < nodes/settlement/load_schema.sql
+# 准备 configs/settlement-load.local.yaml：节点配置结构沿用 settlement，
+# mysql_dsn 的数据库必须是 gsrdemo_settlement_load，文件权限 0600。
+./scripts/dev.sh history settlement
+```
+
+参数集中在 `configs/settlement-history.yaml`：100 万钱包，按约 102 万/1000 万/5000 万/1 亿游戏操作分档；钱包初始化另产生 100 万操作及批次。默认每 3200 笔游戏操作生成 210 个批次，保留真实分类、请求摘要和完整回执。工具采用有界事务块，检查点与账务一起提交；再次运行从已提交进度继续，不清空或改写已造历史。造数 ID 按 1024 个前缀交错生成，金额为确定性的演示扣返，不用于验证随机数质量。
+
+每档测试固定活跃钱包、每 25 秒轮换且分散到百万钱包空间的用户，再测试历史批次/操作查询、同批重试、跨批重提、内容冲突及全历史 Summary。读取基线会预热部分数据；首遍/重复访问不等同于严格冷启动。正常结束仅删除本次压力流量并恢复借用钱包；历史数据不会清理。测试被强杀时保留 `.cache/history-wallet-backup-*.json` 和现场，工具发现残留 `load-` 账务会拒绝继续造数，不能绕过检查点或直接删历史。报告为 `.cache/settlement-history-<游戏操作数>.json`，造数和压测可能持续数小时。
+
+自然档位之后，工具会在同库追加每锤单批的真实新操作，将批次表推进到约 1000 万和 3000 万条，不改旧账；因此实际操作总数约为 1.034 亿和 1.234 亿，报告按真实数量记录。已完成档位不会伪装成较小规模重测。外部数据库进度不在 Go 缓存依赖中，`history` 入口显式使用 `-count=1`，普通测试继续保留缓存。

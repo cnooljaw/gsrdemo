@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 用途：构建、检查项目，或前台启动一个指定节点。
-# 用法：dev.sh build|check [access|login|online|mole|settlement]；dev.sh run <节点>。
+# 用途：构建、检查项目、前台启动节点或执行独立结算历史压测。
+# 用法：dev.sh build|check [access|login|online|mole|settlement]；dev.sh run <节点>；dev.sh history settlement。
 # run 优先读取 configs/<节点>-01.local.yaml，未配置时读取公开模板。
 # 不指定节点时，build/check 包含所有 Go module 和 TypeScript；指定时只处理 common 和该节点。
 # 执行范围：仅 gsrdemo；GOWORK=off，复用 .cache/go-build，构建输出到 bin/ 和 typeclient/dist/。
@@ -11,7 +11,7 @@ export GOCACHE="${GOCACHE:-$project_root/.cache/go-build}"
 export GOWORK=off
 
 usage() {
-    echo "用法：$0 build|check [access|login|online|mole|settlement] | run <节点>"
+    echo "用法：$0 build|check [access|login|online|mole|settlement] | run <节点> | history settlement"
 }
 
 action="${1:-}"
@@ -25,7 +25,7 @@ if [[ "$#" -lt 1 || "$#" -gt 2 ]]; then
     exit 2
 fi
 case "$action" in
-    build|check|run) ;;
+    build|check|run|history) ;;
     *) usage >&2; exit 2 ;;
 esac
 case "$node" in
@@ -33,6 +33,13 @@ case "$node" in
     *) usage >&2; exit 2 ;;
 esac
 
+if [[ "$action" == "history" ]]; then
+    [[ "$node" == "settlement" ]] || { usage >&2; exit 2; }
+    mkdir -p "$project_root/bin"
+    go -C "$project_root/nodes/settlement" build -o "$project_root/bin/settlement" .
+    export GSRDEMO_SETTLEMENT_HISTORY=1
+    exec go -C "$project_root/nodes/settlement" test -count=1 -run '^TestSettlementHistory$' -v -timeout=24h .
+fi
 if [[ "$action" == "run" ]]; then
     [[ -n "$node" ]] || { usage >&2; exit 2; }
     [[ -x "$project_root/bin/$node" ]] || { echo "请先执行 $0 build $node" >&2; exit 1; }
