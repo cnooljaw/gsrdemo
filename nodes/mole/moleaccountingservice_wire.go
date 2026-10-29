@@ -47,20 +47,6 @@ func decodeBalance(value any) (silverBalance, error) {
 	return silverBalance{Amount: amount, Version: version}, nil
 }
 
-func decodePool(value any) (molePool, error) {
-	fields, ok := value.(map[string]any)
-	if !ok {
-		return molePool{}, errAccountingUnavailable
-	}
-	hits, hitsOK := fields["operation_count"].(int64)
-	debit, debitOK := fields["debit"].(int64)
-	credit, creditOK := fields["credit"].(int64)
-	if !hitsOK || !debitOK || !creditOK || hits < 0 || debit < 0 || credit < 0 {
-		return molePool{}, errAccountingUnavailable
-	}
-	return molePool{Hits: hits, Debit: debit, Credit: credit}, nil
-}
-
 func decodeReceipt(value any, batch moleBatch) (batchReceipt, error) {
 	receipt := batchReceipt{BatchID: batch.ID, Balances: make(map[uint64]silverBalance)}
 	fields, ok := value.(map[string]any)

@@ -515,9 +515,9 @@ func executeSettlementLoad(t *testing.T, name string, duration time.Duration, pr
 		}
 	}
 
-	summary, err := store.summary(ctx, prefix)
+	summary, err := auditSettlementOperations(ctx, store, sample.Operations, prefix)
 	if err != nil {
-		report.VerificationError = "load business summary: " + err.Error()
+		report.VerificationError = "offline operation audit: " + err.Error()
 		t.Error(report.VerificationError)
 		return report
 	}

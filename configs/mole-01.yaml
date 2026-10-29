@@ -2,3 +2,5 @@ instance: mole-01
 listen: mole
 nodes_file: nodes.yaml
 log_directory: ../logs/mole-01
+redis_url: redis://127.0.0.1:6379/0
+redis_key: gsrdemo:mole:accounting

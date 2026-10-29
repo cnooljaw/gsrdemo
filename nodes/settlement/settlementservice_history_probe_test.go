@@ -248,19 +248,6 @@ func runHistoryQueries(t *testing.T, store settlementStore, config settlementCon
 		}
 		reports = append(reports, report)
 	}
-	report := historyQueryReport{Name: "summary_mole_all_history"}
-	result := historyQuery(t, jobs, results, &report, settlementLoadJob{command: summaryCommand, args: []any{"mole"}})
-	report.P50MS = float64(result.elapsed) / float64(time.Millisecond)
-	report.P95MS = report.P50MS
-	report.MaxMS = report.P50MS
-	if result.err == nil {
-		want := int64(progress.Operations / 3200 * 3000)
-		if result.receipt["operation_count"] != want {
-			t.Errorf("summary count: %v want %d", result.receipt, want)
-		}
-	}
-	reports = append(reports, report)
-	reports = append(reports, historySummaryDiagnostic(t, store, progress))
 	return reports
 }
 
@@ -478,22 +465,4 @@ func historyExactCounts(t *testing.T, store settlementStore, progress historyPro
 		}
 	}
 	return counts
-}
-
-func historySummaryDiagnostic(t *testing.T, store settlementStore, progress historyProgress) historyQueryReport {
-	t.Helper()
-	report := historyQueryReport{Name: "summary_direct_sql_60s", Count: 1}
-	begin := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	value, err := store.summary(ctx, "mole")
-	cancel()
-	report.P50MS = float64(time.Since(begin)) / float64(time.Millisecond)
-	report.P95MS, report.MaxMS = report.P50MS, report.P50MS
-	if err != nil {
-		report.Errors = 1
-		report.Error = err.Error()
-	} else if value["operation_count"] != int64(progress.Operations/3200*3000) {
-		t.Error("direct summary count mismatch")
-	}
-	return report
 }

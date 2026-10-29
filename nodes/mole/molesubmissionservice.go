@@ -19,11 +19,11 @@ const (
 	settlementBatchCommand     runtime.CommandID = 2
 	settlementOperationCommand runtime.CommandID = 3
 	settlementBalanceCommand   runtime.CommandID = 4
-	settlementSummaryCommand   runtime.CommandID = 5
 )
 
-// moleSubmissionService 是唯一远端结算调用者；只保留一个易失批次，不持有钱包或数据库。
+// moleSubmissionService 独占 Redis 检查点和结算调用；只推进一个在途批次，不持有钱包。
 type moleSubmissionService struct {
+	store      moleCheckpoint
 	batch      *moleBatch
 	receipt    *batchReceipt
 	ready      bool
@@ -32,8 +32,8 @@ type moleSubmissionService struct {
 
 var _ gsr.Service = (*moleSubmissionService)(nil)
 
-func newMoleSubmissionService() *moleSubmissionService {
-	service := &moleSubmissionService{}
+func newMoleSubmissionService(store moleCheckpoint) *moleSubmissionService {
+	service := &moleSubmissionService{store: store}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		submissionBatchCommand: service.submit, submissionBalanceCommand: service.balance,
 		submissionOperationCommand: service.operation, submissionTickCommand: service.tick,
@@ -61,13 +61,11 @@ func (service *moleSubmissionService) submit(self gsr.CommandContext, batch mole
 		}
 		return nil
 	}
-	if !validMoleIdentifier(batch.ID) || len(batch.Events) == 0 || len(batch.Events) > maxBatchOperations || batchSize(batch) > maxBatchBytes {
-		return errInvalidMoleInput
+	if !service.ready {
+		return errAccountingUnavailable
 	}
-	for _, event := range batch.Events {
-		if !validHitEvent(event) {
-			return errInvalidMoleInput
-		}
+	if !validMoleBatch(batch) || batch.Sequence == 0 {
+		return errInvalidMoleInput
 	}
 	copied := batch.clone()
 	service.batch = &copied
@@ -92,15 +90,24 @@ func (service *moleSubmissionService) tick(self gsr.CommandContext) error {
 
 func (service *moleSubmissionService) advance(self gsr.ServiceContext) error {
 	if !service.ready {
-		value, err := callSettlement(self, settlementSummaryCommand, "mole")
+		ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
+		state, err := service.store.load(ctx)
+		cancel()
 		if err != nil {
 			return err
 		}
-		pool, err := decodePool(value)
-		if err != nil {
-			return err
+		// 恢复完 Redis 中的旧批次后才开放 Accounting，避免重用序号或读到未确认基线。
+		service.batch, service.receipt = nil, nil
+		if state.Pending != nil {
+			copied := state.Pending.clone()
+			service.batch = &copied
+			state, err = service.settlePending(self)
+			if err != nil {
+				return err
+			}
+			service.batch, service.receipt = nil, nil
 		}
-		if err := self.SendName(moleAccountingName, accountingInitPoolCommand, pool); err != nil {
+		if err := self.SendName(moleAccountingName, accountingInitPoolCommand, state.Pool, state.Sequence); err != nil {
 			return err
 		}
 		service.ready = true
@@ -108,23 +115,38 @@ func (service *moleSubmissionService) advance(self gsr.ServiceContext) error {
 	if service.batch == nil {
 		return nil
 	}
-	if service.receipt == nil {
-		// SubmitBatch 按原 ID 和内容幂等；超时后直接重提，不增加查询前置。
-		value, err := callSettlement(self, settlementSubmitCommand, service.batch.wire())
-		if err != nil {
-			return err
-		}
-		receipt, err := decodeReceipt(value, *service.batch)
-		if err != nil {
-			return err
-		}
-		service.receipt = &receipt
+	if _, err := service.settlePending(self); err != nil {
+		return err
 	}
 	if err := self.SendName(moleAccountingName, accountingSettledCommand, service.receipt.clone()); err != nil {
 		return err
 	}
 	service.batch, service.receipt = nil, nil
 	return nil
+}
+
+func (service *moleSubmissionService) settlePending(self gsr.ServiceContext) (moleCheckpointState, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
+	err := service.store.prepare(ctx, *service.batch)
+	cancel()
+	if err != nil {
+		return moleCheckpointState{}, err
+	}
+	if service.receipt == nil {
+		// 先保存原批次，再直接幂等提交；超时不换 ID，也不增加 GetBatch 前置查询。
+		value, err := callSettlement(self, settlementSubmitCommand, service.batch.wire())
+		if err != nil {
+			return moleCheckpointState{}, err
+		}
+		receipt, err := decodeReceipt(value, *service.batch)
+		if err != nil {
+			return moleCheckpointState{}, err
+		}
+		service.receipt = &receipt
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
+	defer cancel()
+	return service.store.finish(ctx, *service.batch, *service.receipt)
 }
 
 func (service *moleSubmissionService) balance(self gsr.CommandContext, userID uint64) (map[string]any, error) {

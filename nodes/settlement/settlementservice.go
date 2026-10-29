@@ -18,7 +18,6 @@ const (
 	getBatchCommand       runtime.CommandID = 2
 	getOperationCommand   runtime.CommandID = 3
 	getBalanceCommand     runtime.CommandID = 4
-	summaryCommand        runtime.CommandID = 5
 	settleSingleCommand   runtime.CommandID = 6
 	settleGroupCommand    runtime.CommandID = 7
 	settlementSQLTimeout                    = 2 * time.Second
@@ -43,7 +42,7 @@ func newSettlementService(db *sql.DB) *settlementService {
 	service := &settlementService{store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		settleBatchCommand: service.settleBatch, settleSingleCommand: service.settleSingle, settleGroupCommand: service.settleGroup,
-		getBatchCommand: service.getBatch, getOperationCommand: service.getOperation, getBalanceCommand: service.getBalance, summaryCommand: service.summary,
+		getBatchCommand: service.getBatch, getOperationCommand: service.getOperation, getBalanceCommand: service.getBalance,
 	})
 	return service
 }
@@ -124,16 +123,6 @@ func (service *settlementService) getBalance(self gsr.CommandContext, userID uin
 	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
 	defer cancel()
 	value, err := service.store.getBalance(ctx, userID)
-	return value, settlementError(self, err)
-}
-
-func (service *settlementService) summary(self gsr.CommandContext, business string) (map[string]any, error) {
-	if !validSettlementID(business) {
-		return nil, errInvalidSettlement
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
-	defer cancel()
-	value, err := service.store.summary(ctx, business)
 	return value, settlementError(self, err)
 }
 

@@ -213,7 +213,10 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	if result["results"].([]any)[0].(map[string]any)["origin_batch"] != derivedBatchID("single", prefix+"-single") {
 		t.Fatal("cross-interface duplicate lost origin")
 	}
-	summary := liveCall(t, address, summaryCommand, business)
+	summary, err := auditSettlementOperations(context.Background(), store, sample.Operations, business)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if summary["operation_count"] != int64(4) || summary["debit"] != int64(1198) || summary["credit"] != int64(346) {
 		t.Fatalf("summary duplicated money: %v", summary)
 	}
@@ -286,4 +289,22 @@ func userSQLArgs(values []uint64) []any {
 		args[i] = value
 	}
 	return args
+}
+
+// auditSettlementOperations 只用于离线验收，按本次明确的操作 ID 分块读取，不提供线上汇总接口。
+func auditSettlementOperations(ctx context.Context, store settlementStore, ids []string, business string) (map[string]int64, error) {
+	totals := map[string]int64{"operation_count": 0, "debit": 0, "credit": 0}
+	for start := 0; start < len(ids); start += 500 {
+		part := ids[start:min(start+500, len(ids))]
+		args := append(stringSQLArgs(part), business)
+		var count, debit, credit int64
+		err := store.db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(SUM(debit), 0), COALESCE(SUM(credit), 0) FROM settlement_operations FORCE INDEX (PRIMARY) WHERE operation_id IN ("+sqlSlots(len(part))+") AND business = ? AND status = 'committed'", args...).Scan(&count, &debit, &credit)
+		if err != nil {
+			return nil, err
+		}
+		totals["operation_count"] += count
+		totals["debit"] += debit
+		totals["credit"] += credit
+	}
+	return totals, nil
 }

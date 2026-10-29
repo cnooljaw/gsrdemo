@@ -39,12 +39,13 @@ func (balance silverBalance) snapshot() map[string]any {
 }
 
 type moleBatch struct {
-	ID     string
-	Events []hitEvent
+	ID       string     `json:"id"`
+	Sequence uint64     `json:"sequence"`
+	Events   []hitEvent `json:"events"`
 }
 
 func (batch moleBatch) clone() moleBatch {
-	return moleBatch{ID: batch.ID, Events: append([]hitEvent(nil), batch.Events...)}
+	return moleBatch{ID: batch.ID, Sequence: batch.Sequence, Events: append([]hitEvent(nil), batch.Events...)}
 }
 
 type operationResult struct {
@@ -104,6 +105,7 @@ type moleAccountingService struct {
 	bufferBytes    int
 	inFlightID     string
 	pool           molePool
+	sequence       uint64
 	ready          bool
 	dispatcher     *gsr.Dispatcher
 }
@@ -140,9 +142,9 @@ func (service *moleAccountingService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *moleAccountingService) initPool(_ gsr.CommandContext, pool molePool) error {
+func (service *moleAccountingService) initPool(_ gsr.CommandContext, pool molePool, sequence uint64) error {
 	if !service.ready {
-		service.pool, service.ready = pool, true
+		service.pool, service.sequence, service.ready = pool, sequence, true
 	}
 	return nil
 }
@@ -303,12 +305,15 @@ func (service *moleAccountingService) flush(self gsr.ServiceContext) error {
 	if service.inFlightID != "" || len(service.buffer) == 0 {
 		return nil
 	}
+	if service.sequence == math.MaxUint64 {
+		return errMoleBusy
+	}
 	id, err := randomInstance("mole-batch-")
 	if err != nil {
 		return err
 	}
 	count := min(len(service.buffer), maxBatchOperations)
-	batch := moleBatch{ID: id, Events: append([]hitEvent(nil), service.buffer[:count]...)}
+	batch := moleBatch{ID: id, Sequence: service.sequence + 1, Events: append([]hitEvent(nil), service.buffer[:count]...)}
 	for batchSize(batch) > maxBatchBytes && count > 1 {
 		count /= 2
 		batch.Events = batch.Events[:count]
@@ -319,7 +324,7 @@ func (service *moleAccountingService) flush(self gsr.ServiceContext) error {
 	if err := self.SendName(moleSubmissionName, submissionBatchCommand, batch.clone()); err != nil {
 		return err
 	}
-	service.inFlightID = batch.ID
+	service.inFlightID, service.sequence = batch.ID, batch.Sequence
 	service.buffer = service.buffer[count:]
 	service.bufferBytes = 0
 	if len(service.buffer) > 0 {

@@ -10,14 +10,15 @@ import (
 )
 
 type mainService struct {
-	node cluster.NodeID
+	node       cluster.NodeID
+	checkpoint moleCheckpoint
 }
 
 var _ gsr.Service = (*mainService)(nil)
 
-// NewMain 组装纯内存游戏与远端提交 Service，不打开数据库。
-func NewMain(node cluster.NodeID) gsr.Service {
-	return &mainService{node: node}
+// NewMain 组装内存游戏与持有 Redis 检查点的提交 Service，不访问 SQL。
+func NewMain(node cluster.NodeID, checkpoint moleCheckpoint) gsr.Service {
+	return &mainService{node: node, checkpoint: checkpoint}
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
@@ -26,7 +27,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		service gsr.Service
 	}{
 		{moleAccountingName, newMoleAccountingService()},
-		{moleSubmissionName, newMoleSubmissionService()},
+		{moleSubmissionName, newMoleSubmissionService(service.checkpoint)},
 		{moleServiceName, newMoleService()},
 	} {
 		id, err := self.CreateService(ctx, child.service)

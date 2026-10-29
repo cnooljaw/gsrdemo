@@ -14,9 +14,9 @@ const (
 
 // molePool 只统计唯一已入账操作，不影响下一锤的概率。
 type molePool struct {
-	Hits   int64
-	Debit  int64
-	Credit int64
+	Hits   int64 `json:"hits"`
+	Debit  int64 `json:"debit"`
+	Credit int64 `json:"credit"`
 }
 
 func (pool molePool) snapshot() map[string]any {

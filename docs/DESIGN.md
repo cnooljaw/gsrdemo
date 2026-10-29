@@ -136,9 +136,9 @@ Online 实现后，先验证 12,000 条记录下的持续混合调用和上述�
 | MoleService（mole） | UserID → AttackName/登录/成员实例路由、组人数 | 冷路径分组/重连、条件清理、将余额校正转给当前连接 |
 | AttackService（每组一个） | 成员/座位/连接地址、地鼠时间线、有限请求记录 | 校验命中、固定扣返、本地 Call 内存记账、立即完成目标、快照与推送 |
 | MoleAccountingService（唯一） | 确认余额/版本、内存修订号、待确认扣返、跨组缓冲/在途批次、统计池 | 纯内存预检查与接纳、同步返回结果、归批、应用结算回执；不执行 SQL 或远端 Call |
-| MoleSubmissionService（唯一） | 单个不可变批次及待交付回执 | 唯一远端结算调用者，查询初始余额/统计、按原批次幂等提交与重试；不处理 SQL |
+| MoleSubmissionService（唯一） | Redis 检查点、单个不可变批次及待交付回执 | 查询初始余额、保存源批次、结算重试、持久统计；不处理 SQL |
 
-统计池只是记账 Service 的私有值对象，累计唯一已入账锤数、扣除、返还及净留存。等待中或被拒绝的操作不计入；它不是可支出的资金账户，也不决定回报。
+统计池是 mole 的业务值对象：Redis 保存确认统计，Accounting 持有本地视图，累计唯一已入账锤数、扣除、返还及净留存。等待中或被拒绝的操作不计入；它不是可支出的资金账户，也不决定回报。
 
 ```mermaid
 flowchart LR
@@ -153,6 +153,7 @@ flowchart LR
         B -->|"仅余额不一致时"| E
     end
     G -->|"即时结果 / 余额校正"| A
+    T -->|"检查点 / 确认统计"| R[("业务 Redis")]
     T -->|"批量提交 / 原 ID 查询"| S["独立 settlement 节点"]
     S --> D[("MySQL：余额 / 幂等索引 / 批次明细")]
 ```
@@ -171,17 +172,17 @@ flowchart LR
 ### 8.4 跨组归批、退出与恢复边界
 
 - Accounting 每 100ms 归批，500 操作或约 256KiB 提前封存；实际批次不超上限。一次只保留一个在途批次，确认后立即推进后续积压。全节点待确认最多 4,096 项，确认结果缓存最多 4,096 项，用户目录/账户缓存最多 100,000 条，每组请求最多 1,024 条；达到上限返回忙，不建无界队列。
-- Accounting 用一张账户表保存每个用户的确认余额、修订号和退出标记，一次遍历待确认操作计算显示余额与可用额。归批后只保存在途 BatchID，完整提交副本由 Submission 持有。Accounting 只 Send 不可变批次给 Submission。发送未接纳时保留原缓冲和待扣，继续按周期尝试；不会撤销已返回的内存结果。Submission 以有限 Cluster.Call 直接 SettleBatch，依赖 settlement 的同 ID/同内容幂等契约；超时保留原 BatchID 和内容，100ms 后直接重提，不做 GetBatch 前置查询、不重新抽奖。回执发送未接纳则保留回执重试。
+- Accounting 用一张账户表保存每个用户的确认余额、修订号和退出标记，一次遍历待确认操作计算显示余额与可用额。归批后只保存在途 BatchID 和单调序号，完整提交副本由 Submission 持有并在 SQL 调用前写入 Redis。Accounting 只 Send 不可变批次给 Submission。发送未接纳时保留原缓冲和待扣，继续按周期尝试；不会撤销已返回的内存结果。Submission 以有限 Cluster.Call 直接 SettleBatch，依赖 settlement 的同 ID/同内容幂等契约；超时保留原 BatchID 和内容，100ms 后直接重提，不做 GetBatch 前置查询、不重新抽奖。回执发送未接纳则保留回执重试。
 - hitEvent 只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule；LoginID 仅用于请求键和成员身份，接入地址只在成员表。不在每锤上复制连接信息。OperationID=HitID；BatchID 封存后内容与顺序不变。
 - 退出释放成员而不取消已接纳操作；无待扣即可回收余额缓存，有待扣则等回执后回收。校正按当前 UserID 路由和 LoginID 投递，旧 Agent 不接收新连接结果。组退出不停止独立记账/提交 Service。
-- 启动从 settlement 查询历史汇总重建统计池；首次进入或缓存已回收时查询余额，重连优先使用本地账，初始化未完成拒绝计费进入。进程内按原批次重试，重复/旧回执不重复记账或累计统计，旧余额不覆盖新版本。
-- **可靠性边界：mole 没有持久化。进程崩溃会丢失未提交的内存操作和批次，已返回的即时结果也可能需要校正；只可重新查询 settlement 已保存的余额、汇总和原操作。** 不承诺恢复丢失的源端批次或地鼠/座位。若将来要求每个即时响应都可靠，需另行确认持久接纳方案，不能仅靠异步内存提交达成。
+- 启动先读取 Redis，并恢复其中原批次，完成确认统计后初始化 Accounting；首次进入或缓存已回收时查询余额，重连优先使用本地账，初始化未完成拒绝计费进入。进程内按原批次重试，重复/旧回执不重复记账或累计统计，旧余额不覆盖新版本。
+- **可靠性边界：尚未保存到 Redis 的内存命中可丢失；保存成功的单个批次按原 ID、内容与序号恢复，SQL 提交后丢回执也可补齐统计。** Redis 保存一个版本化 JSON 值：统计、最后序号/BatchID、可选原批次；先读快照再以 Lua CAS 整体替换，避免部分修改和 Lua 大整数运算。统计完成才向 Accounting 发回执；重复完成不再累加，跨批旧操作和拒绝不计入。Lua 仅比较和 SET，不进行数值运算。Redis 故障时不越过检查点调用 SQL，缓冲有界。Redis 由单个 mole 的 Submission 独占访问，不支持两个活跃 mole 共用同一键；宿主只管理客户端生命周期。缺失/损坏检查点拒绝初始化计费，`-init-accounting` 显式以 NX 创建零统计且不覆盖旧值。持久化/备份由 Redis 部署保证，严重丢失时业务离线重建，不承诺跨 Redis/MySQL 原子提交或恢复座位/目标。
 
 ### 8.5 文件与实施范围
 
-源码按职责命名：moleservice.go、attackservice.go、attackservice_game.go、moleaccountingservice.go、molesubmissionservice.go、moleaccountingservice_wire.go、molepool.go 及对应测试，沿用 main.go/main_service.go。mole 不含数据库适配、schema.sql、MySQL 配置或驱动依赖；此前初始化的源端库不自动删除。
+源码按职责命名：moleservice.go、attackservice.go、attackservice_game.go、moleaccountingservice.go、molesubmissionservice.go、moleaccountingservice_wire.go、molesubmissionservice_redis.go、molepool.go 及对应测试，沿用 main.go/main_service.go。mole 不含 SQL 适配、schema.sql、MySQL 配置或驱动依赖；此前初始化的源端库不自动删除。
 
-仅本节点使用的命令和 DTO 留在具体 Service 文件中；本地值对象不走远程 ValueCodec，远程契约使用规范 uint64/int64/map/列表，见 PROTOCOL.md。不新增通用 FSM、公共 GameService 或内部 Protobuf。下一步独立 settlement 先展示方案再实施，最后接 access 多实例与 TypeScript。
+仅本节点使用的命令和 DTO 留在具体 Service 文件中；本地值对象不走远程 ValueCodec，远程契约使用规范 uint64/int64/map/列表，见 PROTOCOL.md。不新增通用 FSM、公共 GameService 或内部 Protobuf。后续按已确认阶段实现短 ID、日期表和归档，再接 access 多实例与 TypeScript。
 
 ### 8.6 验证与后续验收
 
@@ -197,9 +198,9 @@ flowchart LR
 
 独立 settlement 进程内先一个 SettlementService，唯一修改用户持久银子及记账记录，不拥有游戏、连接或内存钱包缓存。GSR v1.0.2 接入沿用 MySQL 示例：宿主 mysqlclient.Open 打开数据库池，MainService 创建/命名结算 Service、OpenCluster 后退出，Run 停止后宿主关闭池。Service 在回调内使用有限 SQL context，不保存 self、不启动业务 goroutine。
 
-按场景分三个入口：SettleSingle 单用户一笔，SettleBatch 多笔独立单人操作，SettleGroup 多用户整体操作。接口共享金额校验、幂等和事务实现，调用方不必统一组装多用户结构。地鼠调用批量入口；棋牌一局可立即调用多人入口，批量周期由调用方决定。GetBatch/GetOperation/GetBalance/Summary 提供查询，具体字段和编号见 PROTOCOL.md。
+按场景分三个入口：SettleSingle 单用户一笔，SettleBatch 多笔独立单人操作，SettleGroup 多用户整体操作。接口共享金额校验、幂等和事务实现，调用方不必统一组装多用户结构。地鼠调用批量入口；棋牌一局可立即调用多人入口，批量周期由调用方决定。GetBatch/GetOperation/GetBalance 提供查询，具体字段和编号见 PROTOCOL.md。
 
-OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是一项单人操作，棋牌一局是一项多人操作；一项多人操作不能拆成独立付款和收款。单人使用 UserID + Items，组操作使用 Changes；每项包含 Reason、非负 Debit/Credit，同用户可有手续费、输赢等多条变化。Reason 只校验格式，不解释含义。Business/BusinessRef/Detail 只用于归档与追溯，settlement 不解析地鼠/牌型/概率/输赢规则。汇总用 operation_count，不出现 hits；地鼠本地自行解释为已入账锤数。
+OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是一项单人操作，棋牌一局是一项多人操作；一项多人操作不能拆成独立付款和收款。单人使用 UserID + Items，组操作使用 Changes；每项包含 Reason、非负 Debit/Credit，同用户可有手续费、输赢等多条变化。Reason 只校验格式，不解释含义。Business/BusinessRef/Detail 只用于归档与追溯，settlement 不解析地鼠/牌型/概率/输赢规则。Settlement 不提供业务统计或 Summary；地鼠在业务 Redis 中维护确认统计。
 
 ### 9.2 事务、幂等和最少状态
 
@@ -216,10 +217,10 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 | 表 | 用途 |
 | --- | --- |
 | silver_balances | UserID、amount、version；银子唯一持久余额 |
-| settlement_operations | 全局 OperationID、请求摘要、原批次及位置、业务/终局状态、扣返汇总；支持幂等、定位和通用 Summary |
+| settlement_operations | 全局 OperationID、请求摘要、原批次及位置、业务/终局状态、扣返汇总；支持幂等、定位及离线验收 |
 | settlement_batches | BatchID、摘要、规范原始业务明细 JSON、完整回执 JSON；余额和记录同事务提交 |
 
-完整 Reason 明细随批次归档，不丢失同用户的分类构成，不建独立逐锤分析表或明细节点。操作索引仅保留去重、结果定位和当前汇总需要的紧凑字段。Summary 按业务仅统计唯一 committed 操作；新批次携带历史操作不会再计入。保留记录便于按用户变化、操作和批次对账，不只比较净额。需要外移明细或优化大规模历史汇总时再单独确认，本版不做通用 Outbox、MQ 或分布式事务。
+完整 Reason 明细随批次归档，不丢失同用户的分类构成，不建独立逐锤分析表或明细节点。当前表仍保留金额和业务字段用于离线核对，下一阶段日表再精简；线上 Summary 已移除。保留记录便于按用户变化、操作和批次对账，不只比较净额。需要外移明细或优化大规模历史汇总时再单独确认，本版不做通用 Outbox、MQ 或分布式事务。
 
 用户中心决定钱包创建和初始银子；Settlement 仅执行账务。Demo 的 -init-wallet UserID -silver Amount 模拟用户中心管理入口，不自动接入账号注册。普通 settle(ctx, batch) 不含创建分支；initialize(ctx, userID, amount) 单独开启事务，先查固定初始化凭据，再创建零余额钱包、执行 wallet_init/initial_balance 操作、保存索引/明细/回执并提交。OperationID=wallet-init-{UserID}，BatchID=derived(init, OperationID)。同金额重试返回历史结果，改金额或已有钱包缺少初始化凭据返回冲突。数据库唯一键保证不重复，业务核对摘要并定义返回语义；竞争导致 SQL 失败时回滚，调用方用原身份重试。GetBalance/普通结算遇到缺失钱包报 wallet_not_found；普通 RPC 禁用 wallet_init。
 
@@ -235,7 +236,7 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 
 2026-10-28 Reason 契约升级：实施前只读核对本机 silver_balances、settlement_operations、settlement_batches 均为 0 条，写协议直接升级 version=2，无存量迁移；没有清空账务或改写历史摘要。三张表结构不变，mole 逐锤拆成 hammer_cost/hammer_reward 两条 Items；每项操作最多 512 条分类变化，参与用户最多 64 名。新增验证覆盖同用户多条扣款合计不足、版本只递增一次、Reason 重排/变更身份、初始化异常回滚及无凭据钱包冲突；统一 check、mole/settlement race、真实 MySQL 分类明细/版本/初始化幂等及三个独立进程入账验证均通过。
 
-本轮只完成通用银子结算，不实现斗地主牌局、资金冻结、匹配或外部明细导出。mole 崩溃可丢失未提交的内存操作，settlement 只能保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。
+本轮只完成通用银子结算，不实现斗地主牌局、资金冻结、匹配或外部明细导出。mole 崩溃可丢失尚未保存到 Redis 的内存操作；已保存批次可恢复，settlement 保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。
 
 ### 9.5 结算层负载基线
 
@@ -325,6 +326,8 @@ D 每五锤之一和每五桌之一共享同一个钱包，该钱包约参与 64
 
 ### 9.7 大数据历史压测
 
+本节为 2026-10-28 优化前的测量记录。Summary 后续已移除，保留旧失败数据作为基线；其余写入容量结论不能因此自动视为通过。
+
 用户确认以 100 万钱包、1 亿游戏操作为目标，先按真实批量比例造数，再测高批次数对照。独立库 gsrdemo_settlement_load 的业务三表从当前 schema 复制；额外的 load_seed_progress 仅是压测工具检查点，不进入 Settlement 业务实现。配置集中在 configs/settlement-history.yaml，DSN 放被忽略的 settlement-load.local.yaml，工具只接受本机该专用库。管理员已执行 load_schema.sql；不改原示例库、框架、索引、持久化配置或 buffer pool。
 
 自然档位为 1,024,000 / 10,000,000 / 50,000,000 / 100,000,000 笔游戏操作，每档另有 1,000,000 条 wallet_init 操作及批次。每 3200 笔游戏操作含 3000 锤（每批 300）与 200 桌四人操作，共 210 个批次；1 亿游戏操作最终约 1.01 亿操作记录、756.25 万批次。初始化与游戏变化均保留通用 Reason 明细、规范摘要、原始请求、回执、版本及幂等索引；不是占位 JSON。离线事务一次写一组业务周期，所有记录、钱包变化和检查点一起提交；SQL 失败不推进内存钱包，重启读取已提交检查点。造数阶段使用批量 SQL，绕过的是网络逐笔调用，不绕过账务关联、唯一键和正常持久化。
@@ -373,3 +376,18 @@ Summary 失败的业务影响：当前 MoleSubmission.advance 在 ready=false �
 超时清理边界也已实测：1000 万及 3000 万批次的查询探测结束后，分别观察到两条本次 Summary 扫描在客户端超时后继续执行超过两分钟；按专用库、连接 ID、查询类型校验后仅取消这些残留查询，再继续后续测量。Context/socket 超时不能当成服务端查询必然已终止。测试工具现将收尾核验错误记录为 verification_error，保留已采集的 CPU/延迟并判失败，不放宽业务超时。原始运行记录保留。3000 万批次分散索引单独补测：2450.8 Operation/s，丢弃 3227 RPC，地鼠/棋牌 P99 2534.1/2522.3ms，结算/MySQL 平均 CPU 12.3%/44.2%；余额回查未报告不一致，但本次 business 的汇总核验 10 秒超时，对账未完成，仍判失败。补测未清缓存，不与首次运行合并宣称一次性通过。
 
 完整数据见本地 `.cache/settlement-history-*.json`、汇总 `.cache/settlement-history-summary.md` 与图表 `.cache/settlement-history-summary.png`；这些运行产物不提交。测试库保留供后续复测。本轮整体验收未通过：优先单独确认有界 Summary 及超时查询清理方案，再分析分散写入的瓶颈，并在真实部署的内存/磁盘配置下复测；当前仅 128MiB buffer pool 的本机结果不是最大在线人数证明。
+
+### 9.8 压测优化实施状态
+
+第一阶段：mole 使用 Redis 业务检查点恢复统计和一个源批次，Settlement 移除 Summary（CommandID=5 不复用）。go-redis 固定 v9.18.0，与 GSR 相同；客户端由宿主创建和关闭，带有限 I/O 超时及禁用透明重试，Redis I/O 仅在 Submission 回调。配置使用 redis_url/redis_key，认证 URL 只放私密配置；建议 AOF appendfsync always、noeviction、键无 TTL。离线验收按本次已知操作 ID、每块最多 500 条取账务结果，测试工具不再发起线上 Summary 或全历史汇总扫描。旧压测运行产物保留。
+
+后续已确认计划尚未实施：16 字节 ID（4 字节结算日＋12 字节随机数，协议 22 字符 Base64URL、SQL BINARY(16)）；Asia/Shanghai 日表，批次不混结算日，跨日重试保持原日期；最近 7 日可写，关闭日只查已有结果；旧格式 ID 保留原表查询，钱包初始化走固定确定性记录。按约 320 Operation/s 为实际目标、不分桶，3200 Operation/s 作为余量测试。短 ID、归档和新配置的大库容量结论待对应阶段验收。
+
+2026-10-29 第一阶段验证：统一 `./scripts/dev.sh check`（全部 Go test/vet、TS 类型检查）通过；mole、settlement 受影响包 race 及新增缺失检查点/大整数用例 race 通过。真实 MySQL 用例和独立 online/mole/settlement 进程用例通过，后者使用自己的 AOF always Redis，并核对最终统计、序号和待处理批次清除。覆盖 SQL 已提交但回执不可见后 mole 重启恢复、Redis 已更新但回复丢失、Redis 故障阻止 SQL、初始化不覆盖旧统计、缺失/损坏不当作零，以及大于 2^53 的整数精度。只清理本次测试钱包、账务和临时进程；未重跑大库负载，也未验证 Redis 宿主宕机后的持久化恢复或真实客户端链路。
+
+2026-10-29 待优化：结算执行与提交通道的阻塞隔离。用户明确后续处理，本轮不改，也不作为短 ID、日表与归档的前置条件。
+
+- 当前仅一个 SettlementService，同步等待 SQL 时其他结算和余额查询一起排队；2 秒超时限制单次等待，但不等于业务隔离。
+- mole 全节点仅一个在途批次，慢批次或持续重试会阻止其他组提交；内存命中暂可继续，待确认队列满后会拒绝新命中。当前不能宣称满足无关结算互不阻塞的要求。
+- 后续同时评估 Settlement 有界并发执行与 mole 多条独立提交通道，保持钱包行锁、多人事务原子性和幂等；Sequence 与 Redis 检查点的作用域随通道调整，不能为了序号简单而强制全局串行。仅增加结算执行 Service 不能消除源端单批瓶颈。
+- 验收补充：人为阻塞一个钱包或批次，验证无关钱包/组仍能提交，同钱包余额不透支、多人结算不部分生效，并核对超时重试及各通道恢复不重复记账或统计。

@@ -26,7 +26,7 @@ mole 包含 MoleService、每组一个 AttackService、唯一 MoleAccountingServ
 
 ## 准备与使用
 
-需要 Go 1.24 或更新、Node.js 22.15 或更新及 npm。从根目录执行：
+需要 Go 1.24 或更新、Node.js 22.15 或更新及 npm；mole 的真实检查点用例另需 redis-server，缺少时相应用例会显式跳过。从根目录执行：
 
 ```sh
 npm --prefix typeclient ci
@@ -118,14 +118,16 @@ GOWORK=off GSRDEMO_ONLINE_LOAD=1 go test -run '^TestOnlineClusterLoad$' -v -time
 ```sh
 ./scripts/dev.sh check mole
 ./scripts/dev.sh build mole
+# 首次使用一个全新的统计键时显式初始化；已有检查点不会覆盖。
+./bin/mole -config configs/mole-01.yaml -init-accounting
 ./scripts/dev.sh run mole
 ```
 
-mole 只读取 configs/mole-01.yaml 的宿主配置，没有数据库连接、建表脚本或源端持久化。所有余额、幂等凭据和明细的 SQL 归 settlement。此前初始化的 gsrdemo_mole 库不再使用，代码不会自动删除该库。
+mole 配置增加 `redis_url` 和 `redis_key`；带认证的 URL 写在被忽略的 `configs/mole-01.local.yaml` 中，并设为 0600。Redis 只由 Submission 访问，客户端由宿主在 Runtime 结束后关闭；使用与 GSR 一致的 go-redis v9.18.0，标准库没有 Redis 协议客户端。mole 不访问 SQL，余额、幂等凭据和完整账务仍归 settlement。
 
-mole 在结算汇总初始化和用户余额加载完成前拒绝计费进入。默认跨节点测试使用测试 Online、结算和 Agent Service；真实结算数据库和独立进程测试按下节显式开启。access/TypeScript 仍未接入游戏。
+Redis 的一个检查点值保存统计、最后完成的序号/BatchID，以及最多一个原始待处理批次。先保存批次再提交结算，核对回执后 CAS 整体替换统计并清除批次。键无 TTL，需使用持久化且不淘汰该键的 Redis；本机示例推荐 AOF `appendfsync always`、`maxmemory-policy noeviction`，配置 Redis 由操作者管理，程序不修改全局设置。`-init-accounting` 仅用于新业务零统计，不能用来导入已有账务的统计；存量统计由业务离线核对后导入，启动不扫描账本。缺失、损坏或不可用的检查点不自动当成零统计。
 
-未获确认的命中和批次只存在内存中；mole 崩溃可能丢失尚未提交的操作。重启后重新加载 settlement 已保存的余额和汇总，并可查询原操作，不承诺补交已丢失的内存批次。客户端即时显示不代表持久化入账。
+启动先恢复原批次及 Redis 统计，再开放进入；首次用户余额仍查询 settlement。默认跨节点用例会自行启动、回收临时 Redis；需要本机安装 redis-server。尚未保存到检查点的内存命中仍可能因 mole 崩溃丢失，已保存批次可按原身份恢复。Redis 严重数据丢失需由业务离线重放恢复，不能承诺 Redis 与 MySQL 的跨库原子提交。客户端即时显示不代表持久化入账。access/TypeScript 仍未接入游戏。
 
 ## settlement 使用
 
@@ -155,7 +157,7 @@ cd nodes/settlement
 GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 go test -run '^TestSettlementLiveMySQL$' -v -timeout=1m
 ```
 
-独立 online/mole/settlement 进程加真实 MySQL 的闭环测试，先从根目录构建三个节点，再运行：
+独立 online/mole/settlement 进程加真实 MySQL、临时 AOF Redis 的闭环测试，先从根目录构建三个节点，再运行：
 
 ```sh
 ./scripts/dev.sh build online
@@ -202,6 +204,6 @@ mysql -u root -p < nodes/settlement/load_schema.sql
 
 参数集中在 `configs/settlement-history.yaml`：100 万钱包，按约 102 万/1000 万/5000 万/1 亿游戏操作分档；钱包初始化另产生 100 万操作及批次。默认每 3200 笔游戏操作生成 210 个批次，保留真实分类、请求摘要和完整回执。工具采用有界事务块，检查点与账务一起提交；再次运行从已提交进度继续，不清空或改写已造历史。造数 ID 按 1024 个前缀交错生成，金额为确定性的演示扣返，不用于验证随机数质量。
 
-每档测试固定活跃钱包、每 25 秒轮换且分散到百万钱包空间的用户，再测试历史批次/操作查询、同批重试、跨批重提、内容冲突及全历史 Summary。读取基线会预热部分数据；首遍/重复访问不等同于严格冷启动。正常结束仅删除本次压力流量并恢复借用钱包；历史数据不会清理。测试被强杀时保留 `.cache/history-wallet-backup-*.json` 和现场，工具发现残留 `load-` 账务会拒绝继续造数，不能绕过检查点或直接删历史。报告为 `.cache/settlement-history-<游戏操作数>.json`，造数和压测可能持续数小时。
+每档测试固定活跃钱包、每 25 秒轮换且分散到百万钱包空间的用户，再测试历史批次/操作查询、同批重试、跨批重提和内容冲突。线上 Summary 已移除，验收对账按本次操作 ID 分块执行离线 SQL；旧报告中的 Summary 失败保留作优化前基线。读取基线会预热部分数据；首遍/重复访问不等同于严格冷启动。正常结束仅删除本次压力流量并恢复借用钱包；历史数据不会清理。测试被强杀时保留 `.cache/history-wallet-backup-*.json` 和现场，工具发现残留 `load-` 账务会拒绝继续造数，不能绕过检查点或直接删历史。报告为 `.cache/settlement-history-<游戏操作数>.json`，造数和压测可能持续数小时。
 
 自然档位之后，工具会在同库追加每锤单批的真实新操作，将批次表推进到约 1000 万和 3000 万条，不改旧账；因此实际操作总数约为 1.034 亿和 1.234 亿，报告按真实数量记录。已完成档位不会伪装成较小规模重测。外部数据库进度不在 Go 缓存依赖中，`history` 入口显式使用 `-count=1`，普通测试继续保留缓存。

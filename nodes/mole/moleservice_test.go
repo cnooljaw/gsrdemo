@@ -35,7 +35,7 @@ func (service *delayedAttackFixture) OnStop(ctx context.Context) error {
 	return service.attack.OnStop(ctx)
 }
 
-type seededMoleFixture struct{}
+type seededMoleFixture struct{ checkpoint moleCheckpoint }
 
 var _ gsr.Service = (*seededMoleFixture)(nil)
 
@@ -61,7 +61,7 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 		service gsr.Service
 	}{
 		{moleAccountingName, newMoleAccountingService()},
-		{moleSubmissionName, newMoleSubmissionService()},
+		{moleSubmissionName, newMoleSubmissionService(service.checkpoint)},
 		{moleServiceName, root},
 	} {
 		id, err := self.CreateService(ctx, child.service)
@@ -92,7 +92,7 @@ func TestMoleJoinTimeoutKeepsOneReservedRoute(t *testing.T) {
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: newSettlementFixture()})
 	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
-	address, _ := startMoleTestNode(t, "mole", routes, &seededMoleFixture{})
+	address, _ := startMoleTestNode(t, "mole", routes, &seededMoleFixture{checkpoint: testMoleCheckpoint(t)})
 	routes["mole"] = address
 	deadline := time.Now().Add(3 * time.Second)
 	for {

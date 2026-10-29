@@ -340,15 +340,6 @@ func (store settlementStore) getBalance(ctx context.Context, id uint64) (map[str
 	return balance.wire(), nil
 }
 
-func (store settlementStore) summary(ctx context.Context, business string) (map[string]any, error) {
-	var count, debit, credit int64
-	err := store.db.QueryRowContext(ctx, "SELECT COUNT(*), COALESCE(SUM(debit), 0), COALESCE(SUM(credit), 0) FROM settlement_operations WHERE business = ? AND status = 'committed'", business).Scan(&count, &debit, &credit)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"operation_count": count, "debit": debit, "credit": credit}, nil
-}
-
 func (store settlementStore) initialize(ctx context.Context, id uint64, amount int64) (settlementReceipt, error) {
 	if id == 0 || amount < 0 {
 		return settlementReceipt{}, errInvalidSettlement

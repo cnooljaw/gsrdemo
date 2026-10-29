@@ -65,7 +65,7 @@ func TestMoleHandoffRetainsAcceptedOperationsOnBusy(t *testing.T) {
 func fundedAccounting(t *testing.T, amount int64) *moleAccountingService {
 	t.Helper()
 	service := newMoleAccountingService()
-	if err := service.initPool(nil, molePool{}); err != nil {
+	if err := service.initPool(nil, molePool{}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.setBalance(nil, 7, silverBalance{Amount: amount, Version: 1}.snapshot()); err != nil {

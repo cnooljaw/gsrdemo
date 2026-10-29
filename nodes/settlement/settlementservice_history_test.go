@@ -165,17 +165,6 @@ func TestHistoryBaseline(t *testing.T) {
 		report.CountSeconds = time.Since(countBegin).Seconds()
 		report.Tables = sizes
 		report.TableSizesFresh = true
-		diagnostic := historySummaryDiagnostic(t, store, progress)
-		replaced := false
-		for i := range report.Queries {
-			if report.Queries[i].Name == diagnostic.Name {
-				report.Queries[i] = diagnostic
-				replaced = true
-			}
-		}
-		if !replaced {
-			report.Queries = append(report.Queries, diagnostic)
-		}
 		if err := os.WriteFile(path+".preaudit", encoded, 0600); err != nil {
 			t.Fatal(err)
 		}

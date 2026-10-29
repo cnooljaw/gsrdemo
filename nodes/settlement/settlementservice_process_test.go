@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/cluster"
+	"github.com/cnooljaw/gsr/redisclient"
 )
 
 func freeBusinessAddress(t *testing.T) string {
@@ -95,7 +98,7 @@ func startBusinessProcessPID(t *testing.T, node, config, address string) (int, f
 	return command.Process.Pid, stop
 }
 
-// TestSettlementMoleProcessesLiveMySQL 保护三个独立 OS 节点通过真实 TCP 和 MySQL 跑完命中到持久入账；默认显式跳过。
+// TestSettlementMoleProcessesLiveMySQL 保护三个独立 OS 节点通过真实 TCP、Redis 检查点和 MySQL 跑完命中到持久入账。
 func TestSettlementMoleProcessesLiveMySQL(t *testing.T) {
 	if os.Getenv("GSRDEMO_SETTLEMENT_PROCESSES") != "1" {
 		t.Skip("build online/mole/settlement and set GSRDEMO_SETTLEMENT_PROCESSES=1")
@@ -104,6 +107,7 @@ func TestSettlementMoleProcessesLiveMySQL(t *testing.T) {
 	sample := newLiveSettlementSample(t, store, 1)
 	userID := sample.Users[0]
 	directory := t.TempDir()
+	redisAddress := startBusinessRedis(t)
 	routes := map[cluster.NodeID]string{"settlement": freeBusinessAddress(t), "online": freeBusinessAddress(t), "mole": freeBusinessAddress(t)}
 	nodes := fmt.Sprintf("nodes:\n  settlement: %s\n  online: %s\n  mole: %s\n", routes["settlement"], routes["online"], routes["mole"])
 	if err := os.WriteFile(filepath.Join(directory, "nodes.yaml"), []byte(nodes), 0600); err != nil {
@@ -115,9 +119,22 @@ func TestSettlementMoleProcessesLiveMySQL(t *testing.T) {
 		if node == "settlement" {
 			body += "mysql_dsn: " + strconv.Quote(config.MySQLDSN) + "\n"
 		}
+		if node == "mole" {
+			body += "redis_url: redis://" + redisAddress + "/0\nredis_key: gsrdemo:test:mole\n"
+		}
 		path := filepath.Join(directory, node+".yaml")
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
+		}
+		if node == "mole" {
+			binary, err := filepath.Abs("../../bin/mole")
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(binary, "-config", path, "-init-accounting")
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("initialize mole checkpoint: %v %s", err, output)
+			}
 		}
 		stops = append(stops, startBusinessProcess(t, node, path, routes[cluster.NodeID(node)]))
 	}
@@ -180,5 +197,70 @@ func TestSettlementMoleProcessesLiveMySQL(t *testing.T) {
 	if balance["amount"] != hit["balance"] {
 		t.Fatalf("memory and persistent balances differ: %v %v", hit, balance)
 	}
-	t.Log("独立 online/mole/settlement 进程已完成：绑定 → 进入 → 命中即时结果 → MySQL 入账查询")
+	client, err := redisclient.New(redisAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	deadline = time.Now().Add(3 * time.Second)
+	verified := false
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		encoded, err := client.Get(ctx, "gsrdemo:test:mole").Bytes()
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var checkpoint struct {
+			Pool     struct{ Hits, Debit, Credit int64 }
+			Sequence uint64
+			Pending  json.RawMessage
+		}
+		if err := json.Unmarshal(encoded, &checkpoint); err != nil {
+			t.Fatal(err)
+		}
+		if checkpoint.Sequence == 1 && checkpoint.Pool.Hits == 1 && len(checkpoint.Pending) == 0 {
+			if checkpoint.Pool.Debit != hit["debit"] || checkpoint.Pool.Credit != hit["credit"] {
+				t.Fatal("Redis statistics differ from confirmed hit")
+			}
+			verified = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !verified {
+		t.Fatal("Redis checkpoint was not finalized")
+	}
+	t.Log("独立 online/mole/settlement 进程已完成：绑定 → 命中即时结果 → MySQL 入账 → Redis 统计及检查点确认")
+}
+
+func startBusinessRedis(t *testing.T) string {
+	t.Helper()
+	binary, err := exec.LookPath("redis-server")
+	if err != nil {
+		t.Skip("redis-server is required for process integration")
+	}
+	address := freeBusinessAddress(t)
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "yes", "--appendfsync", "always", "--dir", t.TempDir())
+	command.Env = append(os.Environ(), "LC_ALL=C")
+	command.Stdout, command.Stderr = io.Discard, io.Discard
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = command.Process.Kill(); _ = command.Wait() })
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
+			return address
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("temporary Redis did not listen")
+	return ""
 }

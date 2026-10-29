@@ -164,9 +164,7 @@ func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 	if _, err := settlementRPC(t, address, getBalanceCommand, uint64(99)); !errors.Is(err, errWalletNotFound) {
 		t.Fatalf("missing wallet was auto-funded: %v", err)
 	}
-	mock.ExpectQuery("SELECT COUNT").WithArgs("demo").WillReturnRows(sqlmock.NewRows([]string{"count", "debit", "credit"}).AddRow(3, 200, 198))
-	value, err = settlementRPC(t, address, summaryCommand, "demo")
-	if err != nil || value.(map[string]any)["operation_count"] != int64(3) {
-		t.Fatalf("generic summary: %v %v", value, err)
+	if _, err := settlementRPC(t, address, runtime.CommandID(5), "demo"); !errors.Is(err, runtime.ErrUnknownCommand) {
+		t.Fatalf("removed Summary command remains callable: %v", err)
 	}
 }
