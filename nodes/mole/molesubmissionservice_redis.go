@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -20,6 +19,7 @@ type moleCheckpoint struct {
 
 type moleCheckpointState struct {
 	Version     int        `json:"version"`
+	Routing     int        `json:"routing,omitempty"`
 	Pool        molePool   `json:"pool"`
 	Sequence    uint64     `json:"sequence"`
 	LastBatchID string     `json:"last_batch_id"`
@@ -36,7 +36,7 @@ func (store moleCheckpoint) initialize(ctx context.Context, pool molePool) error
 	if pool.Hits < 0 || pool.Debit < 0 || pool.Credit < 0 {
 		return errInvalidMoleInput
 	}
-	encoded, err := json.Marshal(moleCheckpointState{Version: 1, Pool: pool})
+	encoded, err := json.Marshal(moleCheckpointState{Version: 1, Routing: moleSubmissionCount, Pool: pool})
 	if err != nil {
 		return err
 	}
@@ -57,14 +57,14 @@ func (store moleCheckpoint) read(ctx context.Context) (moleCheckpointState, stri
 		return state, "", fmt.Errorf("read mole checkpoint (initialize explicitly if missing): %w", err)
 	}
 	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return state, "", fmt.Errorf("decode mole checkpoint: %w", err)
+		return state, "", fmt.Errorf("%w: decode checkpoint: %v", errInvalidMoleInput, err)
 	}
 	if state.Version != 1 || state.Pool.Hits < 0 || state.Pool.Debit < 0 || state.Pool.Credit < 0 ||
 		(state.Sequence == 0 && state.LastBatchID != "") || (state.Sequence != 0 && !validMoleIdentifier(state.LastBatchID)) {
-		return state, "", errors.New("invalid mole checkpoint")
+		return state, "", fmt.Errorf("%w: invalid checkpoint", errInvalidMoleInput)
 	}
 	if state.Pending != nil && (state.Sequence == math.MaxUint64 || state.Pending.Sequence != state.Sequence+1 || !validMoleBatch(*state.Pending)) {
-		return state, "", errors.New("invalid pending mole batch")
+		return state, "", fmt.Errorf("%w: invalid pending batch", errInvalidMoleInput)
 	}
 	return state, raw, nil
 }
@@ -160,4 +160,41 @@ func validMoleBatch(batch moleBatch) bool {
 		seen[event.HitID] = true
 	}
 	return true
+}
+
+// lane 0 保留原 key 和统计，其余 key 独立保存序号/批次，避免相互 CAS 竞争。
+func (store moleCheckpoint) forLane(lane int) moleCheckpoint {
+	if lane != 0 {
+		store.key = fmt.Sprintf("%s:lane:%d", store.key, lane)
+	}
+	return store
+}
+
+func (store moleCheckpoint) initializeLanes(ctx context.Context) error {
+	if err := store.initialize(ctx, molePool{}); err != nil {
+		return err
+	}
+	state, raw, err := store.read(ctx)
+	if err != nil {
+		return err
+	}
+	if state.Routing == 0 {
+		// 旧批次可能同时含多个新通道的用户。先用旧版结清，防止新通道提前加载旧余额。
+		if state.Pending != nil {
+			return fmt.Errorf("legacy checkpoint has pending batch: recover it with the previous version before initializing lanes")
+		}
+		state.Routing = moleSubmissionCount
+		if err := store.replace(ctx, raw, state); err != nil {
+			return err
+		}
+	}
+	if state.Routing != moleSubmissionCount {
+		return fmt.Errorf("unsupported checkpoint routing count: %d", state.Routing)
+	}
+	for lane := 0; lane < moleSubmissionCount; lane++ {
+		if err := store.forLane(lane).initialize(ctx, molePool{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

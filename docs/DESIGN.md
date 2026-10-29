@@ -124,7 +124,7 @@ Online 实现后，先验证 12,000 条记录下的持续混合调用和上述�
 
 ### 8.1 已确认边界与参考
 
-- 首版单个 mole、多个 access、独立 settlement；一个进程一个 Runtime/Cluster。mole 全节点不连接数据库，不含 SQL、建表或源端持久化。
+- 首版单个 mole、多个 access、独立 settlement；一个进程一个 Runtime/Cluster。mole 不访问 SQL；源批次和确认统计持久化到业务 Redis，权威余额和账务归 Settlement。
 - 一个 AttackService 管一个组，最多 3 人、9 洞，有人即可玩、空位可补、随时退出，无固定局长。每秒产生一个目标、有效 2 秒；每锤扣 100，返 0 或 198 各 50%，规则版本 demo-99-v1。期望返还 99，长期收益期望 1%，不动态控奖。
 - 不引入通用 FSM、PlayerService、技能、资金冻结或任务框架。只读参考 GoServerActorFsm 的分组、共享时间线、SpawnSeq/命中窗口和快照，不复制其 Actor/FSM 层次。GSR 接线依据 v1.0.2 的 Service owner、Call/Send/Timer 约定。
 
@@ -133,22 +133,28 @@ Online 实现后，先验证 12,000 条记录下的持续混合调用和上述�
 | 类型/角色 | 唯一拥有的数据 | 职责 |
 | --- | --- | --- |
 | MainService | 启动参数 | 创建并命名 Service、OpenCluster 后退出，资源由 Run 管理 |
-| MoleService（mole） | UserID → AttackName/登录/成员实例路由、组人数 | 冷路径分组/重连、条件清理、将余额校正转给当前连接 |
+| MoleService（mole） | UserID → AttackName/登录/成员实例路由、组人数 | 返回进入地址、短回调预留分组、条件清理、转发余额校正；不等待 Online/SQL/Join |
+| MoleEntryService（固定 8 个） | 通道编号，无权威业务状态 | 核对 Online、加载缓存缺失的余额、请求目录预留并 Join；UserID 固定分配，慢请求限制在一个进入通道 |
 | AttackService（每组一个） | 成员/座位/连接地址、地鼠时间线、有限请求记录 | 校验命中、固定扣返、本地 Call 内存记账、立即完成目标、快照与推送 |
-| MoleAccountingService（唯一） | 确认余额/版本、内存修订号、待确认扣返、跨组缓冲/在途批次、统计池 | 纯内存预检查与接纳、同步返回结果、归批、应用结算回执；不执行 SQL 或远端 Call |
-| MoleSubmissionService（唯一） | Redis 检查点、单个不可变批次及待交付回执 | 查询初始余额、保存源批次、结算重试、持久统计；不处理 SQL |
+| MoleAccountingService（唯一） | 确认余额/版本、内存修订号、待确认扣返、4 条通道各自的缓冲/在途批次/序号/统计 | 纯内存预检查与接纳、同步返回结果、归批、应用结算回执；不执行 SQL 或远端 Call |
+| MoleSubmissionService（固定 4 个） | 各自 Redis 检查点、一个不可变批次及回执 | 保存源批次、结算重试、持久统计；不处理 SQL，通道之间不共享等待队列 |
+| MolePulse（私有） | 目标 ServiceID、周期、失败边界 | 只接收自身 Timer；非阻塞唤醒 owner，满队列跳过一次而不停止后续推进 |
 
 统计池是 mole 的业务值对象：Redis 保存确认统计，Accounting 持有本地视图，累计唯一已入账锤数、扣除、返还及净留存。等待中或被拒绝的操作不计入；它不是可支出的资金账户，也不决定回报。
 
 ```mermaid
 flowchart LR
-    A["多个 access：Gate / Agent"] -->|"进入 / 重连"| E
+    A["多个 access：Gate / Agent"] -->|"查询进入地址"| E
+    A -->|"进入 / 重连"| I
     A -->|"命中 / 快照 / 离开"| G
     subgraph M["单个 mole 节点：无 SQL"]
-        E["MoleService：分组 / 路由"] --> G["每组 AttackService"]
+        E["MoleService：分组 / 路由"]
+        I["8 个进入通道：Online / 初始余额 / Join"] -->|"预留 / 清理"| E
+        I -->|"Join"| G["每组 AttackService"]
+        E -->|"Send 余额校正"| G
         G -->|"本地 Call"| B["MoleAccountingService：纯内存账 / 统计"]
         B -->|"立即返回扣返和余额"| G
-        B -->|"Send 不可变批次"| T["MoleSubmissionService：远端等待 / 重试"]
+        B -->|"Send 不可变批次"| T["4 个 Submission：各自等待 / 重试"]
         T -->|"回执"| B
         B -->|"仅余额不一致时"| E
     end
@@ -160,9 +166,9 @@ flowchart LR
 
 ### 8.3 命中、余额与 UI
 
-1. Enter 冷路径核对 Online 当前绑定，先由 Accounting 复用本地余额视图并取消延迟回收，仅缓存缺失时才经 Submission 查询确认余额进行初始化。错误不当作缓存缺失，未知余额不放行。查询结果实际应用时再次检查该用户的待确认操作：有 pending 就保留确认基线，只有带明确操作结果的回执可推进，防止已入账但回执未到的命中被重复计算。Join 前保留路由，超时重试仍进入同一组；热点直达 AttackName，不逐锤查询 Online。
+1. 调用方先向 mole / 1 获取 entry_name，再向该进入通道 / 1 调用 Enter；进入通道核对 Online 当前绑定，先由 Accounting 复用本地余额视图并取消延迟回收，仅缓存缺失时才直接向 Settlement 查询确认余额进行初始化，不与 Submission 排队。错误不当作缓存缺失，未知余额不放行。查询结果实际应用时再次检查该用户的待确认操作：有 pending 就保留确认基线，只有带明确操作结果的回执可推进，防止已入账但回执未到的命中被重复计算。Join 前保留路由，超时重试仍进入同一组；热点直达 AttackName，不逐锤查询 Online。
 2. 优先补足人数较多的未满组，分配真实空座位；同用户重连保留组/座位、替换连接。旧 LoginID 不得操作新成员；退出还匹配成员实例，隔离同 LoginID 离开后重进的迟到清理。空组退出，异常组在下次 Enter 时清理目录。
-3. Timer 使用一次性 After，处理后再登记；命中和快照按服务端截止时间校验，Timer 迟到不延长窗口。注册失败明确报错。客户端只传 ActionID、SpawnSeq 和洞位，不决定成本/奖励。
+3. 每个需要周期推进的 owner 配一个未命名 MolePulse，只有它自己向自己的 Mailbox 投递 Timer，无业务请求争用。唤醒 owner 失败仍继续下一周期，owner 不再自续约。命中和快照按服务端截止时间校验，Timer 迟到不延长窗口。客户端只传 ActionID、SpawnSeq 和洞位，不决定成本/奖励。
 4. AttackService 校验登录、目标实例、窗口和占用，生成 HitID（随机组实例 + 单调候选序号），固定抽样一次，然后有限本地 Call Accounting。Accounting 只做内存计算，返回 accepted、Debit、Credit、显示余额、可用额和修订号。命中流程始终处理同一条请求记录，事件只保存在该记录的结果中，不按 HitID 再遍历查找。目标当即完成，客户端直接展示结果，不等待远端回执。
 5. 相同 LoginID/ActionID 和内容返回原结果，冲突拒绝；同目标只允许一锤。明确的内存拒绝可释放仍有效的原目标；Call 超时表示未知，保留 HitID/占用，按原请求重试，不重抽样、不当作失败撤销。重试缓存缺失返回 operation_unknown，查询原操作而不重新扣款。
 6. 显示余额 = 确认余额 + 全部待确认操作的净变化；可用银子 = 确认余额 − 全部待确认 Debit。待确认返还可显示但不可支付下一锤，按完整 Debit 检查，不只检查净额。金额使用 int64，校验非负成本/返还及溢出。
@@ -171,16 +177,19 @@ flowchart LR
 
 ### 8.4 跨组归批、退出与恢复边界
 
-- Accounting 每 100ms 归批，500 操作或约 256KiB 提前封存；实际批次不超上限。一次只保留一个在途批次，确认后立即推进后续积压。全节点待确认最多 4,096 项，确认结果缓存最多 4,096 项，用户目录/账户缓存最多 100,000 条，每组请求最多 1,024 条；达到上限返回忙，不建无界队列。
-- Accounting 用一张账户表保存每个用户的确认余额、修订号和退出标记，一次遍历待确认操作计算显示余额与可用额。归批后只保存在途 BatchID 和单调序号，完整提交副本由 Submission 持有并在 SQL 调用前写入 Redis。Accounting 只 Send 不可变批次给 Submission。发送未接纳时保留原缓冲和待扣，继续按周期尝试；不会撤销已返回的内存结果。Submission 以有限 Cluster.Call 直接 SettleBatch，依赖 settlement 的同 ID/同内容幂等契约；超时保留原 BatchID 和内容，100ms 后直接重提，不做 GetBatch 前置查询、不重新抽奖。回执发送未接纳则保留回执重试。
-- hitEvent 只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule；LoginID 仅用于请求键和成员身份，接入地址只在成员表。不在每锤上复制连接信息。OperationID=HitID；BatchID 封存后内容与顺序不变。
-- 退出释放成员而不取消已接纳操作；无待扣即可回收余额缓存，有待扣则等回执后回收。校正按当前 UserID 路由和 LoginID 投递，旧 Agent 不接收新连接结果。组退出不停止独立记账/提交 Service。
-- 启动先读取 Redis，并恢复其中原批次，完成确认统计后初始化 Accounting；首次进入或缓存已回收时查询余额，重连优先使用本地账，初始化未完成拒绝计费进入。进程内按原批次重试，重复/旧回执不重复记账或累计统计，旧余额不覆盖新版本。
-- **可靠性边界：尚未保存到 Redis 的内存命中可丢失；保存成功的单个批次按原 ID、内容与序号恢复，SQL 提交后丢回执也可补齐统计。** Redis 保存一个版本化 JSON 值：统计、最后序号/BatchID、可选原批次；先读快照再以 Lua CAS 整体替换，避免部分修改和 Lua 大整数运算。统计完成才向 Accounting 发回执；重复完成不再累加，跨批旧操作和拒绝不计入。Lua 仅比较和 SET，不进行数值运算。Redis 故障时不越过检查点调用 SQL，缓冲有界。Redis 由单个 mole 的 Submission 独占访问，不支持两个活跃 mole 共用同一键；宿主只管理客户端生命周期。缺失/损坏检查点拒绝初始化计费，`-init-accounting` 显式以 NX 创建零统计且不覆盖旧值。持久化/备份由 Redis 部署保证，严重丢失时业务离线重建，不承诺跨 Redis/MySQL 原子提交或恢复座位/目标。
+- 固定 4 条提交通道，按 `UserID % 4` 分配，同用户始终有序；每条通道各有序号、一个在途批次、缓冲和最多 4,096 项待确认操作。每 100ms 归批，500 操作或约 256KiB 提前封存；一条通道积压不占用其他通道的额度。确认结果缓存共最多 4,096 项，目录/账户缓存最多 100,000 条，每组请求最多 1,024 条，不建无界队列。
+- Accounting 仍是一个纯内存 owner，但余额计算只遍历本用户的待确认 HitID 索引，不扫描全局 pending；账户索引和通道容量计数在接纳/回执同一回调内更新。各通道仅 Send 不可变批次给对应 Submission，不等待外部 I/O。Send 未接纳保留缓冲，未知结果不撤销已返回的内存奖励。
+- Submission 按原 BatchID、内容与顺序调用 SettleBatch，不做 GetBatch 前置查询、不重新抽奖。临时错误按 100ms～2s 有界退避重试；身份冲突、非法回执、损坏检查点等确定性错误保留原批次并暂停该通道，停止自动冲击后端，状态入口可查询 blocked/batch_id。修复数据或协议后重启恢复，不提供丢弃、换 ID 或强行清零接口。回执未被 Accounting 接纳仍保留重发。
+- hitEvent 只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule；LoginID 和接入地址仅归成员/连接状态。OperationID=HitID；封存后不再改变身份、内容或操作顺序。
+- 退出释放成员而不取消已接纳操作；无待扣即可回收余额缓存，有待扣则等回执。校正按当前路由和 LoginID 投递。Join 超时保留预留组；只有明确房间已退出才清理并重新分配。慢 Join 只阻塞一个进入通道，不阻塞全局目录、其他进入通道和余额校正。
+- 每条 Submission 独立恢复 Redis 原批次及统计，完成后只开放对应 Accounting 通道。Redis 根 key 保留原统计及通道 0，其他通道使用 `:lane:1`～`:lane:3`；统计池是各通道已确认统计的合计，不是跨通道原子快照。任一通道未就绪时汇总查询报不可用，其他已就绪通道仍可玩。
+- 升级需先停止旧 mole，再执行 `-init-accounting`。该入口 NX 创建缺失键，不重置余额、统计或序号；旧根检查点仅在无 Pending 时添加 routing=4 标记。若旧版仍有跨用户待处理批次，拒绝迁移，先使用旧版按原批次恢复，不能一边运行新通道一边补旧账。通道数固定，不能随部署任意修改；不支持两个活跃 mole 共用这些键。
+- **尚未保存到 Redis 的内存命中可丢失；已保存批次按原 ID、内容与序号恢复。** 每个检查点的统计/最后序号/待处理批次由 Lua CAS 整体替换，Lua 不做数值运算。统计保存成功才交付回执；旧跨批操作和拒绝不重复累计。Redis 故障不越过检查点调用 SQL。键无 TTL，需部署持久化、备份及 noeviction；严重数据丢失由业务离线重建，不承诺 Redis/MySQL 跨库事务。
+- 私有 Pulse 在 owner 满队列时继续推进；提交 owner 退出只暂停其通道，房间退出只影响当前组。全局 Accounting 或目录退出则宿主返回失败，由外部进程管理器重启，避免端口存活但业务失效。应用不在 Service 回调中同步写 stderr；日志队列失败不扩大业务阻塞。进程 CPU/内存耗尽、共享 Redis/MySQL 不可用仍是共同故障，不能靠业务通道消除。
 
 ### 8.5 文件与实施范围
 
-源码按职责命名：moleservice.go、attackservice.go、attackservice_game.go、moleaccountingservice.go、molesubmissionservice.go、moleaccountingservice_wire.go、molesubmissionservice_redis.go、molepool.go 及对应测试，沿用 main.go/main_service.go。mole 不含 SQL 适配、schema.sql、MySQL 配置或驱动依赖；此前初始化的源端库不自动删除。
+源码按职责命名：moleservice.go、moleentryservice.go、molepulse.go、attackservice.go、attackservice_game.go、moleaccountingservice.go、molesubmissionservice.go、moleaccountingservice_wire.go、molesubmissionservice_redis.go、molepool.go 及对应测试，沿用 main.go/main_service.go。mole 不含 SQL 适配、schema.sql、MySQL 配置或驱动依赖；此前初始化的源端库不自动删除。
 
 仅本节点使用的命令和 DTO 留在具体 Service 文件中；本地值对象不走远程 ValueCodec，远程契约使用规范 uint64/int64/map/列表，见 PROTOCOL.md。不新增通用 FSM、公共 GameService 或内部 Protobuf。后续按已确认阶段实现短 ID、日期表和归档，再接 access 多实例与 TypeScript。
 
@@ -191,6 +200,8 @@ flowchart LR
 多 Runtime 在同一测试进程中经真实 TCP 验证分组补位、跨接入地址重连、旧登录/成员清理隔离、Join 超时沿用原路由、退出继续提交、Online 不可用及单组 panic 隔离。结算测试 Service 覆盖丢回复后原批次幂等重提、mole 重启重新加载已处理结果、慢提交不阻塞其他组的内存结果、一致时不重复奖励、拒绝时向当前连接校正余额且不复活目标。另覆盖已入账但回执缺失时重连不再查询或重复计算；查询发出后新增命中不被普通快照重设基线，旧批次回执保留后续命中。这里没有真实 MySQL，也不代表多个独立 OS 节点或客户端闭环。
 
 2026-10-27：旧源端 SQL 方案已移除。`./scripts/dev.sh check`（全部 Go test/vet 和 TS 类型检查）、`./scripts/dev.sh build mole`、mole 的 `GOWORK=off go test -race ./... -timeout=2m` 通过。实际 bin/mole 使用公开 YAML、无数据库配置启动监听，经 SIGTERM 正常退出，只回收本次子进程。该次检查时 settlement 仍是骨架；后续独立结算实现见第 9 节。慢客户端出站积压、Timer admission 丢失、12,000/100,000 在线业务负载、真实结算吞吐与约 0.5～1 秒入账目标仍待后续实测。
+
+2026-10-29 局部隔离验证：最终源码通过统一 `./scripts/dev.sh check`（全部 Go test/vet、TS 类型检查）；Mole 全量 race 通过。故障用例覆盖三个周期 owner 满队列后继续推进、慢 Join 不阻塞其他进入通道、单通道 4,096 项积压不占其他通道额度、永久冲突停止自动重试且保留原批次、单 Submission panic/损坏检查点不影响其他通道入账、全局目录/Accounting panic 使宿主明确退出，以及旧检查点无损迁移与在途批次迁移拒绝。重建 online/mole/settlement 后，独立进程用例实际通过：两步进入 → 内存命中结果 → MySQL 入账 → 对应通道 Redis 统计/序号确认；仅创建和清理独占样本及临时 Redis。未重跑大数据负载，未验收端到端热点钱包隔离、实际客户端或生产进程自动拉起。
 
 ## 9. settlement 节点与结算实现
 
@@ -385,9 +396,9 @@ Summary 失败的业务影响：当前 MoleSubmission.advance 在 ready=false �
 
 2026-10-29 第一阶段验证：统一 `./scripts/dev.sh check`（全部 Go test/vet、TS 类型检查）通过；mole、settlement 受影响包 race 及新增缺失检查点/大整数用例 race 通过。真实 MySQL 用例和独立 online/mole/settlement 进程用例通过，后者使用自己的 AOF always Redis，并核对最终统计、序号和待处理批次清除。覆盖 SQL 已提交但回执不可见后 mole 重启恢复、Redis 已更新但回复丢失、Redis 故障阻止 SQL、初始化不覆盖旧统计、缺失/损坏不当作零，以及大于 2^53 的整数精度。只清理本次测试钱包、账务和临时进程；未重跑大库负载，也未验证 Redis 宿主宕机后的持久化恢复或真实客户端链路。
 
-2026-10-29 待优化：结算执行与提交通道的阻塞隔离。用户明确后续处理，本轮不改，也不作为短 ID、日表与归档的前置条件。
+2026-10-29 用户进一步确认优先处理局部故障隔离。Mole 已实施第 8 节的进入通道、独立周期驱动、按用户索引余额计算及 4 条提交通道；Settlement 本轮业务代码不变。待后续逐节点处理：
 
-- 当前仅一个 SettlementService，同步等待 SQL 时其他结算和余额查询一起排队；2 秒超时限制单次等待，但不等于业务隔离。
-- mole 全节点仅一个在途批次，慢批次或持续重试会阻止其他组提交；内存命中暂可继续，待确认队列满后会拒绝新命中。当前不能宣称满足无关结算互不阻塞的要求。
-- 后续同时评估 Settlement 有界并发执行与 mole 多条独立提交通道，保持钱包行锁、多人事务原子性和幂等；Sequence 与 Redis 检查点的作用域随通道调整，不能为了序号简单而强制全局串行。仅增加结算执行 Service 不能消除源端单批瓶颈。
-- 验收补充：人为阻塞一个钱包或批次，验证无关钱包/组仍能提交，同钱包余额不透支、多人结算不部分生效，并核对超时重试及各通道恢复不重复记账或统计。
+- Settlement：少量、有界并行执行，钱包行锁、多人事务原子性和幂等保持不变；补热点钱包锁等待、慢查询、并发重试验证。当前仍只有一个同步 SQL Service，不能宣称端到端无关钱包互不阻塞。
+- Login：少量认证 Service，避免一个慢数据库查询拖住所有新登录。
+- Access：接入实际业务后验证每连接等待、出站背压、多节点重连；Online 保持短回调，补节点恢复后的重新绑定。
+- 基础可用性：生产进程拉起、健康检查、MySQL/Redis 部署冗余和资源隔离另行验收。本轮没有建设数据库高可用或通用监督框架。

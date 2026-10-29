@@ -22,6 +22,7 @@ const (
 	accountingTickCommand       runtime.CommandID = 11
 	accountingForgetCommand     runtime.CommandID = 12
 	accountingSettledCommand    runtime.CommandID = 13
+	accountingStopLaneCommand   runtime.CommandID = 14
 	accountingPeriod                              = 100 * time.Millisecond
 	maxBatchOperations                            = 500
 	maxBatchBytes                                 = 256 * 1024
@@ -93,6 +94,19 @@ type moleAccount struct {
 	Balance  silverBalance
 	Revision uint64
 	Departed bool
+	// Pending 只索引本人的待确认 HitID，内容仍由全局幂等索引唯一持有。
+	Pending map[string]struct{}
+}
+
+// accountingLane 的顺序、容量和检查点互相独立；一个失败批次不占住其他通道。
+type accountingLane struct {
+	buffer       []hitEvent
+	bufferBytes  int
+	inFlightID   string
+	pool         molePool
+	sequence     uint64
+	ready        bool
+	pendingCount int
 }
 
 // moleAccountingService 只拥有内存账；不得执行 SQL、远端 Call 或等待提交 Service。
@@ -101,26 +115,22 @@ type moleAccountingService struct {
 	pending        map[string]accountingEntry
 	completed      map[string]accountingEntry
 	completedOrder []string
-	buffer         []hitEvent
-	bufferBytes    int
-	inFlightID     string
-	pool           molePool
-	sequence       uint64
-	ready          bool
+	lanes          []accountingLane
+	onStopped      func(error)
 	dispatcher     *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*moleAccountingService)(nil)
 
-func newMoleAccountingService() *moleAccountingService {
+func newMoleAccountingService(laneCount int) *moleAccountingService {
 	service := &moleAccountingService{
-		accounts: make(map[uint64]*moleAccount), pending: make(map[string]accountingEntry),
+		lanes: make([]accountingLane, laneCount), accounts: make(map[uint64]*moleAccount), pending: make(map[string]accountingEntry),
 		completed: make(map[string]accountingEntry),
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		accountingLoadCommand: service.loadBalance, accountingStatusCommand: service.operationStatus,
 		accountingSetBalanceCommand: service.setBalance, accountingPoolCommand: service.poolSnapshot,
-		accountingInitPoolCommand: service.initPool, accountingResumeCommand: service.resumeBalance,
+		accountingInitPoolCommand: service.initPool, accountingStopLaneCommand: service.stopLane, accountingResumeCommand: service.resumeBalance,
 		accountingHitCommand:  service.hit,
 		accountingTickCommand: service.tick, accountingForgetCommand: service.forgetBalance,
 		accountingSettledCommand: service.settled,
@@ -128,9 +138,8 @@ func newMoleAccountingService() *moleAccountingService {
 	return service
 }
 
-func (service *moleAccountingService) OnStart(_ context.Context, self gsr.ServiceContext) error {
-	_, err := self.After(accountingPeriod, accountingTickCommand)
-	return err
+func (service *moleAccountingService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	return startMolePulse(ctx, self, accountingPeriod, accountingTickCommand, service.onStopped)
 }
 
 func (service *moleAccountingService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
@@ -142,18 +151,43 @@ func (service *moleAccountingService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *moleAccountingService) initPool(_ gsr.CommandContext, pool molePool, sequence uint64) error {
-	if !service.ready {
-		service.pool, service.sequence, service.ready = pool, sequence, true
+func (service *moleAccountingService) initPool(_ gsr.CommandContext, pool molePool, sequence, index uint64) error {
+	if index >= uint64(len(service.lanes)) {
+		return errInvalidMoleInput
+	}
+	lane := &service.lanes[index]
+	if !lane.ready {
+		lane.pool, lane.sequence, lane.ready = pool, sequence, true
 	}
 	return nil
 }
 
-func (service *moleAccountingService) poolSnapshot(_ gsr.CommandContext) (map[string]any, error) {
-	if !service.ready {
-		return nil, errAccountingUnavailable
+func (service *moleAccountingService) stopLane(_ gsr.CommandContext, index uint64) error {
+	if index >= uint64(len(service.lanes)) {
+		return errInvalidMoleInput
 	}
-	return service.pool.snapshot(), nil
+	service.lanes[index].ready = false
+	return nil
+}
+
+func (service *moleAccountingService) lane(userID uint64) *accountingLane {
+	return &service.lanes[userID%uint64(len(service.lanes))]
+}
+
+func (service *moleAccountingService) poolSnapshot(_ gsr.CommandContext) (map[string]any, error) {
+	var pool molePool
+	for _, lane := range service.lanes {
+		if !lane.ready {
+			return nil, errAccountingUnavailable
+		}
+		if pool.Hits > math.MaxInt64-lane.pool.Hits || pool.Debit > math.MaxInt64-lane.pool.Debit || pool.Credit > math.MaxInt64-lane.pool.Credit {
+			return nil, errInvalidMoleInput
+		}
+		pool.Hits += lane.pool.Hits
+		pool.Debit += lane.pool.Debit
+		pool.Credit += lane.pool.Credit
+	}
+	return pool.snapshot(), nil
 }
 
 func (service *moleAccountingService) loadBalance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
@@ -165,7 +199,7 @@ func (service *moleAccountingService) resumeBalance(_ gsr.CommandContext, userID
 	if userID == 0 {
 		return nil, errInvalidMoleInput
 	}
-	if !service.ready {
+	if !service.lane(userID).ready {
 		return nil, errAccountingUnavailable
 	}
 	account := service.accounts[userID]
@@ -180,7 +214,7 @@ func (service *moleAccountingService) setBalance(_ gsr.CommandContext, userID ui
 	if userID == 0 {
 		return nil, errInvalidMoleInput
 	}
-	if !service.ready {
+	if !service.lane(userID).ready {
 		return nil, errAccountingUnavailable
 	}
 	if service.accounts[userID] == nil && len(service.accounts) >= maxMoleUsers {
@@ -202,7 +236,7 @@ func (service *moleAccountingService) setBalance(_ gsr.CommandContext, userID ui
 func (service *moleAccountingService) updateBalance(userID uint64, balance silverBalance) *moleAccount {
 	account := service.accounts[userID]
 	if account == nil {
-		account = &moleAccount{Balance: balance, Revision: 1}
+		account = &moleAccount{Balance: balance, Revision: 1, Pending: make(map[string]struct{})}
 		service.accounts[userID] = account
 	} else if balance.Version > account.Balance.Version {
 		account.Balance = balance
@@ -211,19 +245,17 @@ func (service *moleAccountingService) updateBalance(userID uint64, balance silve
 	return account
 }
 
-// balanceAmounts 一次遍历计算显示余额和可用额，不新增需要同步维护的累计状态。
+// balanceAmounts 只遍历本人的待确认操作，其他用户积压不增加本次余额计算量。
 func (service *moleAccountingService) balanceAmounts(userID uint64) (int64, int64, error) {
 	account := service.accounts[userID]
-	if !service.ready || account == nil {
+	if !service.lane(userID).ready || account == nil {
 		return 0, 0, errAccountingUnavailable
 	}
 	var debit, delta int64
-	for _, entry := range service.pending {
-		event := entry.Result.Event
-		if event.UserID == userID {
-			debit += event.Debit
-			delta += event.Credit - event.Debit
-		}
+	for hitID := range account.Pending {
+		event := service.pending[hitID].Result.Event
+		debit += event.Debit
+		delta += event.Credit - event.Debit
 	}
 	amount := account.Balance.Amount
 	if delta > 0 && amount > math.MaxInt64-delta {
@@ -259,10 +291,10 @@ func (service *moleAccountingService) accept(event hitEvent, retry bool) (memory
 		return memoryHitResult{}, errMoleOperationUnknown
 	}
 	account := service.accounts[event.UserID]
-	if !service.ready || account == nil {
+	if !service.lane(event.UserID).ready || account == nil {
 		return memoryHitResult{}, errAccountingUnavailable
 	}
-	if len(service.pending) >= maxPendingHits {
+	if service.lane(event.UserID).pendingCount >= maxPendingHits {
 		return memoryHitResult{}, errMoleBusy
 	}
 	amount, available, err := service.balanceAmounts(event.UserID)
@@ -283,8 +315,11 @@ func (service *moleAccountingService) accept(event hitEvent, retry bool) (memory
 	result := memoryHitResult{Event: event, Balance: amount - event.Debit + event.Credit,
 		Available: available - event.Debit, Revision: account.Revision}
 	service.pending[event.HitID] = accountingEntry{Result: result, Status: "accepted"}
-	service.buffer = append(service.buffer, event)
-	service.bufferBytes += len(encoded) + 1
+	account.Pending[event.HitID] = struct{}{}
+	lane := service.lane(event.UserID)
+	lane.pendingCount++
+	lane.buffer = append(lane.buffer, event)
+	lane.bufferBytes += len(encoded) + 1
 	return result, nil
 }
 
@@ -293,7 +328,8 @@ func (service *moleAccountingService) hit(self gsr.CommandContext, event hitEven
 	if err != nil {
 		return memoryHitResult{}, err
 	}
-	if len(service.buffer) >= maxBatchOperations || service.bufferBytes >= maxBatchBytes-128 {
+	lane := service.lane(event.UserID)
+	if len(lane.buffer) >= maxBatchOperations || lane.bufferBytes >= maxBatchBytes-128 {
 		if err := service.flush(self); err != nil {
 			logMoleError(self, "提交队列未接纳，保留内存操作", err)
 		}
@@ -302,18 +338,29 @@ func (service *moleAccountingService) hit(self gsr.CommandContext, event hitEven
 }
 
 func (service *moleAccountingService) flush(self gsr.ServiceContext) error {
-	if service.inFlightID != "" || len(service.buffer) == 0 {
+	var first error
+	for index := range service.lanes {
+		if err := service.flushLane(self, index); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (service *moleAccountingService) flushLane(self gsr.ServiceContext, index int) error {
+	lane := &service.lanes[index]
+	if !lane.ready || lane.inFlightID != "" || len(lane.buffer) == 0 {
 		return nil
 	}
-	if service.sequence == math.MaxUint64 {
+	if lane.sequence == math.MaxUint64 {
 		return errMoleBusy
 	}
 	id, err := randomInstance("mole-batch-")
 	if err != nil {
 		return err
 	}
-	count := min(len(service.buffer), maxBatchOperations)
-	batch := moleBatch{ID: id, Sequence: service.sequence + 1, Events: append([]hitEvent(nil), service.buffer[:count]...)}
+	count := min(len(lane.buffer), maxBatchOperations)
+	batch := moleBatch{ID: id, Sequence: lane.sequence + 1, Events: append([]hitEvent(nil), lane.buffer[:count]...)}
 	for batchSize(batch) > maxBatchBytes && count > 1 {
 		count /= 2
 		batch.Events = batch.Events[:count]
@@ -321,14 +368,14 @@ func (service *moleAccountingService) flush(self gsr.ServiceContext) error {
 	if batchSize(batch) > maxBatchBytes {
 		return errInvalidMoleInput
 	}
-	if err := self.SendName(moleSubmissionName, submissionBatchCommand, batch.clone()); err != nil {
+	if err := self.SendName(submissionName(index), submissionBatchCommand, batch.clone()); err != nil {
 		return err
 	}
-	service.inFlightID, service.sequence = batch.ID, batch.Sequence
-	service.buffer = service.buffer[count:]
-	service.bufferBytes = 0
-	if len(service.buffer) > 0 {
-		service.bufferBytes = batchSize(moleBatch{Events: service.buffer})
+	lane.inFlightID, lane.sequence = batch.ID, batch.Sequence
+	lane.buffer = lane.buffer[count:]
+	lane.bufferBytes = 0
+	if len(lane.buffer) > 0 {
+		lane.bufferBytes = batchSize(moleBatch{Events: lane.buffer})
 	}
 	return nil
 }
@@ -338,15 +385,15 @@ func (service *moleAccountingService) tick(self gsr.CommandContext) error {
 	if err != nil {
 		logMoleError(self, "地鼠归批未完成，保留内存操作", err)
 	}
-	if _, timerErr := self.After(accountingPeriod, accountingTickCommand); timerErr != nil {
-		service.ready = false
-		return timerErr
-	}
 	return err
 }
 
-func (service *moleAccountingService) settled(self gsr.CommandContext, receipt batchReceipt) error {
-	if service.inFlightID == "" || service.inFlightID != receipt.BatchID {
+func (service *moleAccountingService) settled(self gsr.CommandContext, receipt batchReceipt, index uint64) error {
+	if index >= uint64(len(service.lanes)) {
+		return errInvalidMoleInput
+	}
+	lane := &service.lanes[index]
+	if lane.inFlightID == "" || lane.inFlightID != receipt.BatchID {
 		return nil
 	}
 	before := make(map[uint64]int64)
@@ -354,7 +401,7 @@ func (service *moleAccountingService) settled(self gsr.CommandContext, receipt b
 		before[userID], _, _ = service.balanceAmounts(userID)
 	}
 	service.applyReceipt(receipt)
-	service.inFlightID = ""
+	lane.inFlightID = ""
 	for userID := range receipt.Balances {
 		view, err := service.balanceView(userID)
 		if err == nil && view["balance"] != before[userID] {
@@ -377,12 +424,15 @@ func (service *moleAccountingService) applyReceipt(receipt batchReceipt) {
 			continue
 		}
 		delete(service.pending, result.HitID)
+		lane := service.lane(entry.Result.Event.UserID)
+		lane.pendingCount--
+		delete(service.accounts[entry.Result.Event.UserID].Pending, result.HitID)
 		entry.Status = result.Status
 		service.completed[result.HitID] = entry
 		service.completedOrder = append(service.completedOrder, result.HitID)
 		if result.Status == "committed" && result.OriginBatch == receipt.BatchID {
-			if err := service.pool.add(entry.Result.Event.Debit, entry.Result.Event.Credit); err != nil {
-				service.ready = false
+			if err := lane.pool.add(entry.Result.Event.Debit, entry.Result.Event.Credit); err != nil {
+				lane.ready = false
 			}
 		}
 	}
@@ -429,12 +479,8 @@ func (service *moleAccountingService) evictIfIdle(userID uint64) {
 }
 
 func (service *moleAccountingService) hasPending(userID uint64) bool {
-	for _, entry := range service.pending {
-		if entry.Result.Event.UserID == userID {
-			return true
-		}
-	}
-	return false
+	account := service.accounts[userID]
+	return account != nil && len(account.Pending) != 0
 }
 
 func validHitEvent(event hitEvent) bool {

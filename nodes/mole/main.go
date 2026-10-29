@@ -86,15 +86,21 @@ func run() (result error) {
 	if *initialize {
 		wait, stop := context.WithTimeout(ctx, moleCallTimeout)
 		defer stop()
-		return checkpoint.initialize(wait, molePool{})
+		return checkpoint.initializeLanes(wait)
 	}
 
 	nodes := make(map[cluster.NodeID]string, len(config.Node.Nodes))
 	for name, address := range config.Node.Nodes {
 		nodes[cluster.NodeID(name)] = address
 	}
-	return gsr.Run(ctx, gsr.Config{
+	runContext, fail := context.WithCancelCause(ctx)
+	defer fail(nil)
+	err = gsr.Run(runContext, gsr.Config{
 		Logging: logging.Config{Directory: config.Node.LogDirectory},
 		Cluster: gsr.ClusterConfig{Nodes: nodes},
-	}, NewMain(cluster.NodeID(config.Node.Listen), checkpoint))
+	}, NewMain(cluster.NodeID(config.Node.Listen), checkpoint, fail))
+	if cause := context.Cause(runContext); cause != nil && !errors.Is(cause, context.Canceled) {
+		return errors.Join(err, cause)
+	}
+	return err
 }

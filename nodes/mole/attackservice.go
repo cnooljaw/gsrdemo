@@ -49,13 +49,12 @@ func newAttackService(name string) *attackService {
 	return service
 }
 
-func (service *attackService) OnStart(_ context.Context, self gsr.ServiceContext) error {
+func (service *attackService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
 	if err := self.Node().RegisterService(cluster.ServiceName(service.game.name), self.Self()); err != nil {
 		return err
 	}
 	service.game.spawn(time.Now())
-	_, err := self.After(spawnPeriod, attackTickCommand)
-	return err
+	return startMolePulse(ctx, self, spawnPeriod, attackTickCommand, nil)
 }
 
 func (service *attackService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
@@ -171,12 +170,6 @@ func (service *attackService) leave(self gsr.CommandContext, userID uint64, logi
 func (service *attackService) tick(self gsr.CommandContext) error {
 	service.game.spawn(time.Now())
 	service.broadcast(self, "snapshot")
-	_, err := self.After(spawnPeriod, attackTickCommand)
-	if err != nil {
-		logMoleError(self, "地鼠 Timer 登记失败，停止当前组", err)
-		self.Exit()
-		return err
-	}
 	return nil
 }
 

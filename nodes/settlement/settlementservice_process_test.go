@@ -146,8 +146,12 @@ func TestSettlementMoleProcessesLiveMySQL(t *testing.T) {
 	for time.Now().Before(deadline) {
 		value, err := businessRPC(t, routes, "mole", "mole", 1, userID, "login-live", "access-01", "agent-live")
 		if err == nil {
-			snapshot = value.(map[string]any)
-			break
+			address := value.(map[string]any)["entry_name"].(string)
+			value, err = businessRPC(t, routes, "mole", address, 1, userID, "login-live", "access-01", "agent-live")
+			if err == nil {
+				snapshot = value.(map[string]any)
+				break
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -206,7 +210,11 @@ func TestSettlementMoleProcessesLiveMySQL(t *testing.T) {
 	verified := false
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		encoded, err := client.Get(ctx, "gsrdemo:test:mole").Bytes()
+		key := "gsrdemo:test:mole"
+		if lane := userID % 4; lane != 0 {
+			key = fmt.Sprintf("%s:lane:%d", key, lane)
+		}
+		encoded, err := client.Get(ctx, key).Bytes()
 		cancel()
 		if err != nil {
 			t.Fatal(err)

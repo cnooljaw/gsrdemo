@@ -22,7 +22,7 @@ access 只处理连接生命周期：客户端 → Gate → Agent → GSR 协议
 
 工作规则见 [AGENTS.md](AGENTS.md)，目标和逐节点计划见 [docs/DESIGN.md](docs/DESIGN.md)，Go 规范见 [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)。
 
-mole 包含 MoleService、每组一个 AttackService、唯一 MoleAccountingService 和 MoleSubmissionService。命中同步返回内存扣返结果，提交 Service 独立等待 settlement 批量入账；mole 不使用 SQL，游戏持续运行，无固定局长。节点内实现与边界见 [mole 方案](docs/DESIGN.md#8-mole-方案与首版实现)，独立结算见 [settlement 实现](docs/DESIGN.md#9-settlement-节点与结算实现)。
+mole 包含短回调目录、8 个进入通道、每组一个 AttackService、纯内存 Accounting 和 4 条独立提交通道。命中同步返回内存扣返结果，提交 Service 独立等待 settlement 批量入账；mole 不使用 SQL，游戏持续运行，无固定局长。节点内实现与边界见 [mole 方案](docs/DESIGN.md#8-mole-方案与首版实现)，独立结算见 [settlement 实现](docs/DESIGN.md#9-settlement-节点与结算实现)。
 
 ## 准备与使用
 
@@ -125,9 +125,9 @@ GOWORK=off GSRDEMO_ONLINE_LOAD=1 go test -run '^TestOnlineClusterLoad$' -v -time
 
 mole 配置增加 `redis_url` 和 `redis_key`；带认证的 URL 写在被忽略的 `configs/mole-01.local.yaml` 中，并设为 0600。Redis 只由 Submission 访问，客户端由宿主在 Runtime 结束后关闭；使用与 GSR 一致的 go-redis v9.18.0，标准库没有 Redis 协议客户端。mole 不访问 SQL，余额、幂等凭据和完整账务仍归 settlement。
 
-Redis 的一个检查点值保存统计、最后完成的序号/BatchID，以及最多一个原始待处理批次。先保存批次再提交结算，核对回执后 CAS 整体替换统计并清除批次。键无 TTL，需使用持久化且不淘汰该键的 Redis；本机示例推荐 AOF `appendfsync always`、`maxmemory-policy noeviction`，配置 Redis 由操作者管理，程序不修改全局设置。`-init-accounting` 仅用于新业务零统计，不能用来导入已有账务的统计；存量统计由业务离线核对后导入，启动不扫描账本。缺失、损坏或不可用的检查点不自动当成零统计。
+每条提交通道用一个 Redis 检查点保存统计、最后完成的序号/BatchID，以及最多一个原始待处理批次；根 key 为通道 0，其余追加 `:lane:1`～`:lane:3`。先保存批次再提交结算，核对回执后 CAS 整体替换统计并清除批次。键无 TTL，需使用持久化且不淘汰该键的 Redis；本机示例推荐 AOF `appendfsync always`、`maxmemory-policy noeviction`，配置 Redis 由操作者管理，程序不修改全局设置。`-init-accounting` 仅用于新业务零统计，不能用来导入已有账务的统计；存量统计由业务离线核对后导入，启动不扫描账本。缺失、损坏或不可用的检查点不自动当成零统计。
 
-启动先恢复原批次及 Redis 统计，再开放进入；首次用户余额仍查询 settlement。默认跨节点用例会自行启动、回收临时 Redis；需要本机安装 redis-server。尚未保存到检查点的内存命中仍可能因 mole 崩溃丢失，已保存批次可按原身份恢复。Redis 严重数据丢失需由业务离线重放恢复，不能承诺 Redis 与 MySQL 的跨库原子提交。客户端即时显示不代表持久化入账。access/TypeScript 仍未接入游戏。
+各通道独立恢复，再开放对应用户；首次用户余额由进入通道直接查询 settlement。升级时先停止旧 mole，执行 `-init-accounting` 补齐固定 4 个通道的检查点。旧检查点若仍有 Pending，必须先用旧版恢复完再迁移；初始化不重置存量统计和序号。默认跨节点用例会自行启动、回收临时 Redis；需要本机安装 redis-server。尚未保存到检查点的内存命中仍可能因 mole 崩溃丢失，已保存批次可按原身份恢复。Redis 严重数据丢失需由业务离线重放恢复，不能承诺 Redis 与 MySQL 的跨库原子提交。客户端即时显示不代表持久化入账。access/TypeScript 仍未接入游戏。
 
 ## settlement 使用
 

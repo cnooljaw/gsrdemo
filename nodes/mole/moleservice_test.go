@@ -15,6 +15,7 @@ import (
 type delayedAttackFixture struct {
 	attack  *attackService
 	delayed bool
+	started chan struct{}
 }
 
 var _ gsr.Service = (*delayedAttackFixture)(nil)
@@ -26,6 +27,9 @@ func (service *delayedAttackFixture) OnStart(ctx context.Context, self gsr.Servi
 func (service *delayedAttackFixture) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	if command == attackJoinCommand && !service.delayed {
 		service.delayed = true
+		if service.started != nil {
+			close(service.started)
+		}
 		time.Sleep(650 * time.Millisecond)
 	}
 	return service.attack.Handle(self, command, args...)
@@ -35,7 +39,10 @@ func (service *delayedAttackFixture) OnStop(ctx context.Context) error {
 	return service.attack.OnStop(ctx)
 }
 
-type seededMoleFixture struct{ checkpoint moleCheckpoint }
+type seededMoleFixture struct {
+	checkpoint  moleCheckpoint
+	slowStarted chan struct{}
+}
 
 var _ gsr.Service = (*seededMoleFixture)(nil)
 
@@ -51,7 +58,7 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 		root.routes[userID] = moleRoute{Attack: attack.game.name, LoginID: "seeded", Membership: "seeded"}
 		root.groups[attack.game.name]++
 	}
-	for _, child := range []gsr.Service{&delayedAttackFixture{attack: slow}, other} {
+	for _, child := range []gsr.Service{&delayedAttackFixture{attack: slow, started: service.slowStarted}, other} {
 		if _, err := self.CreateService(ctx, child); err != nil {
 			return err
 		}
@@ -60,8 +67,8 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 		name    cluster.ServiceName
 		service gsr.Service
 	}{
-		{moleAccountingName, newMoleAccountingService()},
-		{moleSubmissionName, newMoleSubmissionService(service.checkpoint)},
+		{moleAccountingName, newMoleAccountingService(moleSubmissionCount)},
+
 		{moleServiceName, root},
 	} {
 		id, err := self.CreateService(ctx, child.service)
@@ -72,11 +79,68 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 			return err
 		}
 	}
+	for lane := 0; lane < moleSubmissionCount; lane++ {
+		id, err := self.CreateService(ctx, newMoleSubmissionService(service.checkpoint.forLane(lane), uint64(lane)))
+		if err != nil {
+			return err
+		}
+		if err := self.Node().RegisterService(submissionName(lane), id); err != nil {
+			return err
+		}
+	}
+	if err := createMoleEntries(ctx, self); err != nil {
+		return err
+	}
 	if err := self.Node().OpenCluster("mole"); err != nil {
 		return err
 	}
 	self.Exit()
 	return nil
+}
+
+// TestMoleSlowJoinDoesNotBlockOtherEntryOrDirectory 保护一个慢组的 Join 不占住目录和另一个进入通道。
+func TestMoleSlowJoinDoesNotBlockOtherEntryOrDirectory(t *testing.T) {
+	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: newSettlementFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
+	started := make(chan struct{})
+	address, _ := startMoleTestNode(t, "mole", routes, &seededMoleFixture{checkpoint: testMoleCheckpoint(t), slowStarted: started})
+	routes["mole"] = address
+	for _, userID := range []uint64{1, 5} {
+		if _, err := moleRPC(t, routes, "online", "online", 1, userID, "login", "access-01", "agent"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 等待内存账初始化；不通过待测的进入路径判断准备就绪。
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := callMoleEnter(t, routes, uint64(1), "login", "access-01", "agent"); done <- err }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("slow Join did not start")
+	}
+	begin := time.Now()
+	value, err := callMoleEnter(t, routes, uint64(5), "login", "access-01", "agent")
+	if err != nil || value.(map[string]any)["attack_name"] != "attack-b-other" {
+		t.Fatalf("other entry: %v %v", value, err)
+	}
+	if elapsed := time.Since(begin); elapsed > 300*time.Millisecond {
+		t.Errorf("unrelated entry waited for slow Join: %v", elapsed)
+	}
+	if err := <-done; !errors.Is(err, runtime.ErrCallTimeout) {
+		t.Fatalf("slow Join: %v", err)
+	}
 }
 
 func (service *seededMoleFixture) Handle(gsr.CommandContext, runtime.CommandID, ...any) (any, error) {
@@ -96,7 +160,7 @@ func TestMoleJoinTimeoutKeepsOneReservedRoute(t *testing.T) {
 	routes["mole"] = address
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		_, err := moleRPC(t, routes, "mole", moleSubmissionName, submissionBalanceCommand, uint64(1))
+		_, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand)
 		if err == nil {
 			break
 		}
@@ -108,7 +172,7 @@ func TestMoleJoinTimeoutKeepsOneReservedRoute(t *testing.T) {
 	if _, err := moleRPC(t, routes, "online", "online", 1, uint64(1), "login", "access-01", "agent"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := moleRPC(t, routes, "mole", moleServiceName, moleEnterCommand, uint64(1), "login", "access-01", "agent")
+	_, err := callMoleEnter(t, routes, uint64(1), "login", "access-01", "agent")
 	if !errors.Is(err, runtime.ErrCallTimeout) {
 		t.Fatalf("expected Join timeout: %v", err)
 	}
