@@ -59,6 +59,53 @@ gate:
 
 access 的 WebSocket 测试使用与 GSR 相同的 gorilla/websocket v1.5.3，因为 Go 标准库不提供 WebSocket 客户端；protobuf v1.36.1 只用来构造和检查框架已生成的通用测试帧，不生成业务协议。
 
+## 节点间调用示例
+
+已有跨节点调用，下面这些入口可以直接阅读和运行。每个节点有自己的 Runtime，节点间通过真实 TCP 通信。
+
+| 场景 | 调用方与接收方 |
+| --- | --- |
+| 最小 Call：两个模拟接入节点绑定、查询、解绑 Online | [onlineAccessCaller / callOnline](nodes/online/onlineservice_cluster_test.go) → [OnlineService](nodes/online/onlineservice.go) |
+| 业务 Call：进入游戏时查询当前位置 | [MoleEntryService.enter](nodes/mole/moleentryservice.go) → OnlineService |
+| 业务 Call：批量入账及余额、操作查询 | [callSettlement](nodes/mole/molesubmissionservice.go) → [写入口](nodes/settlement/settlementservice.go) / [读入口](nodes/settlement/settlementqueryservice.go)，地址由 [routing.go](common/settlement/routing.go) 选择 |
+| 主动 Send：游戏快照与余额校正 | [AttackService.push](nodes/mole/attackservice.go) → [moleAgentFixture.Handle / push](nodes/mole/mole_cluster_test.go)；接收端目前是测试 Agent，真实 access 尚未接入 |
+
+例如，在 Service 回调内查询 Online（Command 2 为 Lookup），返回位置快照或 nil：
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+location, err := self.Cluster().Call(ctx, "online", "online", runtime.CommandID(2), uint64(7))
+if err != nil {
+    return nil, err
+}
+return location, nil
+```
+
+这里两个 `online` 分别是节点路由名和该节点内注册的 Service 名，`uint64(7)` 是 UserID；参数类型须与接收 Handler 一致。调用方的 ClusterConfig 提供目标路由，接收方通过 RegisterService 发布名称、OpenCluster 开放监听。项目路由集中在 configs/nodes.yaml；测试使用临时端口。
+
+主动推送使用同样的 Node + Service 名寻址：
+
+```go
+err := self.Cluster().Send(
+    cluster.NodeID(member.AccessNode), cluster.ServiceName(member.AgentName),
+    molePushCommand, member.LoginID, kind, payload,
+)
+```
+
+此片段来自 AttackService.push，错误处置见原函数。Send 返回 nil 只表示接纳，不代表接收方处理完成；需要业务结果时使用有超时的 Call，Call 超时后也不能假定操作未执行。self 仅在当前 Service 回调内使用。
+
+从项目根目录运行已有示例用例，无需手动启动节点：
+
+```sh
+# 三个独立 Runtime，经 TCP 验证跨接入节点替换及旧连接迟到解绑；无 MySQL/Redis 依赖。
+GOWORK=off go -C nodes/online test -run '^TestOnlineTwoAccessNodesReplaceAndDisconnect$' -v -timeout=30s
+# 多节点 Call + Send，验证余额校正推给当前登录；需 redis-server，账务与 Online 使用测试替身。
+GOWORK=off go -C nodes/mole test -run '^TestMoleCorrectionUsesCurrentLogin$' -v -timeout=30s
+```
+
+以上用例在同一测试进程内运行多个节点。三个独立 OS 进程配合真实 MySQL、Redis 的完整命中入账示例，见下方 [settlement 使用](#settlement-使用) 中的 TestSettlementMoleProcessesLiveMySQL；它仍不包含客户端 → access 的业务接线。
+
 ## login 使用
 
 login 只接受内部 Cluster 认证请求，access 和 TypeScript 尚未接入客户端登录。账号密码按确认使用无盐 SHA-256，仅用于示例。先由管理员初始化专用库，脚本为已有的本机 gsr_demo 用户授予账号表权限：
