@@ -6,10 +6,18 @@
     "node": ">=22.15.0"
   },
   "scripts": {
-    "check": "tsc --project tsconfig.json --noEmit",
-    "build": "tsc --project tsconfig.json"
+    "check": "npm test",
+    "build": "tsc --project tsconfig.json",
+    "client": "npm run build && node dist/index.js",
+    "test": "npm run build && node --test dist/*.test.js"
   },
   "devDependencies": {
+    "@bufbuild/buf": "1.73.0",
+    "@bufbuild/protoc-gen-es": "2.15.0",
+    "@types/node": "22.20.3",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.15.0"
   }
 }

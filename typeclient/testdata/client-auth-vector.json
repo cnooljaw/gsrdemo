@@ -1,0 +1,19 @@
+{
+  "reference": "RFC 7748 section 6.1 Alice/Bob X25519 vector; HKDF and MAC derived independently by this reference generator.",
+  "client_private_key": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+  "server_private_key": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+  "client_public_key": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+  "server_public_key": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+  "shared_secret": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+  "salt_label": "gsr/wss/hkdf-salt/v1",
+  "salt_input": "6773722f7773732f686b64662d73616c742f76318520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6ade9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+  "salt": "7b8a9cc99169d09000b5fdade3f25bfada58c4027382fb9f179fb3b737af9a28",
+  "info": "gsr/wss/c2s-hmac-sha256/v1",
+  "hkdf_prk": "8aec99a58bfb10473716cbd9156de1485652f785e09c6d485ef640828f3d85e7",
+  "mac_key": "de53384573ac343d562d796318e9337972c4c4b9c36f5745b4da3fa4041d04f1",
+  "seq": "fedcba9876543210",
+  "seq_bytes": "fedcba9876543210",
+  "envelope_bytes": "08e90710ac021a030a01ff",
+  "hmac_sha256": "755526bfa7e8b3931a38804cd0abca54cdf1053a86b9f8bdf845f21996a803fc",
+  "mac": "755526bfa7e8b3931a38804cd0abca54"
+}

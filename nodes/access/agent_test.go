@@ -9,6 +9,7 @@ import (
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
 type testClientSession struct {
@@ -41,7 +42,7 @@ func (ctx *exitContext) Exit() {
 
 // TestAgentDisconnectExitsAndStopClosesClient 保护未知命令不退出、断线通知退出、停止关闭当前连接且保留关闭错误。
 func TestAgentDisconnectExitsAndStopClosesClient(t *testing.T) {
-	registry, err := protocol.NewRegistry()
+	registry, err := protocol.NewRegistry(demopb.MessageCatalogDemoV1Game)
 	if err != nil {
 		t.Fatal(err)
 	}

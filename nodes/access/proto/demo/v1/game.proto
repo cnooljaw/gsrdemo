@@ -1,0 +1,167 @@
+syntax = "proto3";
+package demo.v1;
+
+import "gsr/protocol/v1/options.proto";
+
+option go_package = "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1;demopb";
+
+// 客户端业务编号独立于内部 Cluster CommandID。
+enum MsgId {
+  MSG_ID_UNSPECIFIED = 0;
+  C2S_LOGIN = 1001 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LoginRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LOGIN = 1002 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LoginResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_ENTER = 1011 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.EnterRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_ENTER = 1012 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.EnterResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_HIT = 1021 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.HitRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_HIT = 1022 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.HitResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_SNAPSHOT = 1031 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.SnapshotRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_SNAPSHOT = 1032 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.SnapshotResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_LEAVE = 1041 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LeaveRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LEAVE = 1042 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LeaveResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_OPERATION = 1051 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.OperationRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_OPERATION = 1052 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.OperationResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  S2C_SNAPSHOT_PUSH = 1061 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.SnapshotPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  S2C_BALANCE_PUSH = 1062 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.BalancePush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+message LoginResponse {
+  uint64 user_id = 1;
+}
+message EnterRequest {}
+message EnterResponse {
+  Snapshot snapshot = 1;
+  Balance silver = 2;
+}
+message HitRequest {
+  string action_id = 1;
+  uint64 spawn_seq = 2;
+  int64 hole = 3;
+}
+message HitResponse {
+  Hit hit = 1;
+  Balance silver = 2;
+}
+message SnapshotRequest {}
+message SnapshotResponse {
+  Snapshot snapshot = 1;
+}
+message LeaveRequest {}
+message LeaveResponse {
+  bool left = 1;
+}
+message OperationRequest {
+  string hit_id = 1;
+}
+message OperationResponse {
+  bool found = 1;
+  string hit_id = 2;
+  string status = 3;
+  string reason = 4;
+}
+message SnapshotPush {
+  Snapshot snapshot = 1;
+}
+message BalancePush {
+  Balance silver = 1;
+}
+
+// 银子和版本使用 64 位整数；TypeScript 端使用 bigint。
+message Balance {
+  int64 balance = 1;
+  ConfirmedSilver confirmed = 2;
+  int64 available = 3;
+  reserved 4;
+  uint64 revision = 5;
+}
+// 确认金额与数据库版本一起出现；即时命中可以不携带此消息。
+message ConfirmedSilver {
+  int64 amount = 1;
+  uint64 version = 2;
+}
+message Member {
+  uint64 user_id = 1;
+  int64 seat = 2;
+}
+message Target {
+  uint64 spawn_seq = 1;
+  int64 hole = 2;
+  int64 deadline_ms = 3;
+  bool claimed = 4;
+}
+message Hit {
+  string hit_id = 1;
+  string action_id = 2;
+  string status = 3;
+  int64 debit = 4;
+  int64 credit = 5;
+  uint64 spawn_seq = 6;
+  int64 hole = 7;
+}
+message Snapshot {
+  string attack_name = 1;
+  int64 server_ms = 2;
+  int64 seat = 3;
+  repeated Member members = 4;
+  repeated Target targets = 5;
+  repeated Hit hits = 6;
+}

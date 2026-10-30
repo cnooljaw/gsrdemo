@@ -9,6 +9,7 @@ import (
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
 type mainService struct {
@@ -27,7 +28,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 	if err := self.Node().OpenCluster(service.node); err != nil {
 		return err
 	}
-	registry, err := protocol.NewRegistry()
+	registry, err := protocol.NewRegistry(demopb.MessageCatalogDemoV1Game)
 	if err != nil {
 		return err
 	}
@@ -38,7 +39,9 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		MaxFrameBytes:         service.gate.MaxFrameBytes,
 		MaxOutboundQueueBytes: service.gate.MaxOutboundQueueBytes,
 		NewAgent: func(client gate.ClientSession) gsr.Service {
-			return newAgent(client, registry)
+			agent := newAgent(client, registry)
+			agent.node = service.node
+			return agent
 		},
 	})
 	if err != nil {

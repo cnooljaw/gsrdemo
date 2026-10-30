@@ -1,24 +1,24 @@
 # GSR Demo
 
-这是一个多项目工作区，按节点逐步设计和实现。当前完成 access 的连接基础、login 的内部密码认证、online 的内部位置目录和 mole 的节点内首版业务；settlement 已实现通用银子结算及 MySQL 持久化，TypeScript 保持骨架，客户端游戏仍未接入。
+这是一个多项目工作区，按节点逐步设计和实现。当前已接通 TypeScript 命令行客户端 → access → login/online → mole → settlement/MySQL 的打地鼠业务闭环；客户端使用 MAC WebSocket 和 Protobuf，尚无图形界面。
 
 每个节点角色一个独立 Go module，依赖已发布的 `github.com/cnooljaw/gsr v1.0.2`；入口和源码默认放项目根目录。节点通过 `gsr.Run + MainService` 启动，组装使用 `self.Node()`，跨节点通信使用 `self.Cluster()`。版本及资源归属见 [接入知识](docs/DESIGN.md#v102-接入知识)。
 
 | 目录 | 当前内容 |
 | --- | --- |
-| nodes/access | Cluster、Gate 和每连接一个 Agent，相关源码与测试都在根目录 |
+| nodes/access | Gate、每连接一个 Agent、登录/地鼠路由、业务 Protobuf 与测试 |
 | nodes/login | 密码认证、MySQL 账号表、账号创建管理命令及测试 |
 | nodes/online | 内存位置目录、跨接入节点绑定替换、条件解绑及测试 |
 | nodes/mole | 分组、持续地鼠、同步内存扣返、统计池、跨组批量提交及测试 |
 | nodes/settlement | 单人、批量单人、多人原子结算，MySQL 幂等及明细归档 |
 | common/model | YAML 宿主配置加载与校验 |
-| typeclient | 独立 TypeScript 项目，src/index.ts 仅为入口占位 |
+| typeclient | MAC 命令行客户端、Protobuf 类型、推送与响应分发及测试 |
 | configs | 一份节点地址表和各实例的宿主配置 |
 | scripts | 一个 dev.sh，负责构建、检查和单节点启动 |
 
 旧演示实现已移除，现有业务仅按确认的节点范围加入。common 根据实际调用提取共享内容，节点不导入彼此实现。内部契约见 [PROTOCOL.md](docs/PROTOCOL.md)。
 
-access 只处理连接生命周期：客户端 → Gate → Agent → GSR 协议 Dispatcher。Gate 固定使用 `SecurityModeMAC`：客户端先完成 33 字节 X25519 握手，上行发送 `seq | Envelope | MAC`，下行仍为 Envelope；未握手的 Plain 客户端会被关闭。本机使用 WS，TLS 配置独立于 MAC 模式。每个 Agent 只有 ClientSession 与协议 Dispatcher，业务 Handler 表为空；使用 GSR 通用 Envelope/ErrorResponse，没有本项目 .proto 或生成步骤。收到断线通知后 Agent 退出，停止时关闭当前连接；进程停机由 GSR 管理。
+access 负责连接身份和业务路由：客户端 → Gate → Agent → GSR 协议 Dispatcher。Gate 固定使用 `SecurityModeMAC`：客户端先完成 33 字节 X25519 握手，上行发送 `seq | Envelope | MAC`，下行仍为 Envelope；未握手的 Plain 客户端会被关闭。本机使用 WS，TLS 配置独立于 MAC 模式。Agent 保存当前 UserID/LoginID 与节点内具名地址、地鼠路由，不拥有钱包或游戏状态；业务协议在 nodes/access/proto/demo/v1/game.proto，沿用 GSR Envelope/ErrorResponse。普通断线先尽力离开地鼠、按自己的 LoginID 解绑后退出；进程停机由 GSR 管理，OnStop 只关闭连接。
 
 工作规则见 [AGENTS.md](AGENTS.md)，目标和逐节点计划见 [docs/DESIGN.md](docs/DESIGN.md)，Go 规范见 [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)。
 
@@ -35,9 +35,9 @@ npm --prefix typeclient ci
 ./scripts/dev.sh run access
 ```
 
-check 执行各 Go module 的 test/vet 和 TS 类型检查，其中 access/login/online/mole/settlement 用例会打开临时本机端口；build 输出 bin/<节点名> 和 typeclient/dist。run 只前台启动指定节点，优先读取 configs/<节点>-01.local.yaml，Ctrl-C/SIGTERM 由该节点有序退出。
+check 执行各 Go module 的 test/vet 和 TS 编译/单测，其中 access/login/online/mole/settlement 用例会打开临时本机端口；build 输出 bin/<节点名> 和 typeclient/dist。run 只前台启动指定节点，优先读取 configs/<节点>-01.local.yaml，Ctrl-C/SIGTERM 由该节点有序退出。
 
-按节点工作时可执行 `./scripts/dev.sh check access` 和 `./scripts/dev.sh build access`，仅处理 common 与 access。TypeScript 当前只做类型检查与编译，没有连接或业务功能。Go 命令使用 GOWORK=off 和 .cache/go-build，保留缓存；编辑器需要时执行 `cp go.work.example go.work`。
+按节点工作时可执行 `./scripts/dev.sh check access` 和 `./scripts/dev.sh build access`，仅处理 common 与 access。TypeScript 客户端运行方法见下方“客户端闭环演示”。Go 命令使用 GOWORK=off 和 .cache/go-build，保留缓存；编辑器需要时执行 `cp go.work.example go.work`。
 
 若编辑器出现 `go.work requires go >= 1.24.0 (running go 1.23.3)`，先检查 `go version` 和 `go env GOROOT`。终端自动选择的新工具链可能与 gopls 实际执行的 `go` 不同；在本机 `.vscode/settings.json` 中将 `go.goroot` 设为 Go 1.24 或更新 SDK 的目录，并通过 `go.toolsEnvVars.PATH` 把该目录的 `bin` 放在 `${env:PATH}` 前，`GOTOOLCHAIN` 设为 `auto`。配置后执行 `Go: Restart Language Server`；仍沿用旧环境时执行 `Developer: Reload Window`。此文件含本机路径，已被 Git 忽略，不降低 go.work/go.mod 的版本要求。工具链选择规则见 [Go 官方文档](https://go.dev/doc/toolchain)。
 
@@ -57,7 +57,7 @@ gate:
 
 宿主配置包含实例、Cluster 路由和日志路径，拒绝未知字段、重复键、多文档和非法开发地址。Gate 参数只在 access 的私有配置类型中声明，由 GSR 校验其资源边界；其他节点不接收这些字段。Go 标准库没有 YAML 解析器，因此 common 固定依赖 go.yaml.in/yaml/v3 v3.0.5。私密配置使用被忽略的 configs/*.local.yaml。
 
-access 的 WebSocket 测试使用与 GSR 相同的 gorilla/websocket v1.5.3，因为 Go 标准库不提供 WebSocket 客户端；protobuf v1.36.1 只用来构造和检查框架已生成的通用测试帧，不生成业务协议。
+access 的 WebSocket 测试使用与 GSR 相同的 gorilla/websocket v1.5.3，因为 Go 标准库不提供 WebSocket 客户端；业务协议也使用 protobuf v1.36.1；MySQL 驱动 v1.10.1 仅供显式五进程验收准备和清理独占测试账号/账务，access 运行时不使用 SQL。
 
 ## 节点间调用示例
 
@@ -68,7 +68,7 @@ access 的 WebSocket 测试使用与 GSR 相同的 gorilla/websocket v1.5.3，�
 | 最小 Call：两个模拟接入节点绑定、查询、解绑 Online | [onlineAccessCaller / callOnline](nodes/online/onlineservice_cluster_test.go) → [OnlineService](nodes/online/onlineservice.go) |
 | 业务 Call：进入游戏时查询当前位置 | [MoleEntryService.enter](nodes/mole/moleentryservice.go) → OnlineService |
 | 业务 Call：批量入账及余额、操作查询 | [callSettlement](nodes/mole/molesubmissionservice.go) → [写入口](nodes/settlement/settlementservice.go) / [读入口](nodes/settlement/settlementqueryservice.go)，地址由 [routing.go](common/settlement/routing.go) 选择 |
-| 主动 Send：游戏快照与余额校正 | [AttackService.push](nodes/mole/attackservice.go) → [moleAgentFixture.Handle / push](nodes/mole/mole_cluster_test.go)；接收端目前是测试 Agent，真实 access 尚未接入 |
+| 主动 Send：游戏快照与余额校正 | [AttackService.push](nodes/mole/attackservice.go) → [Agent.Handle / push](nodes/access/agent_mole.go) → protocolDispatcher.Push → 客户端 |
 
 例如，在 Service 回调内查询 Online（Command 2 为 Lookup），返回位置快照或 nil：
 
@@ -104,11 +104,51 @@ GOWORK=off go -C nodes/online test -run '^TestOnlineTwoAccessNodesReplaceAndDisc
 GOWORK=off go -C nodes/mole test -run '^TestMoleCorrectionUsesCurrentLogin$' -v -timeout=30s
 ```
 
-以上用例在同一测试进程内运行多个节点。三个独立 OS 进程配合真实 MySQL、Redis 的完整命中入账示例，见下方 [settlement 使用](#settlement-使用) 中的 TestSettlementMoleProcessesLiveMySQL；它仍不包含客户端 → access 的业务接线。
+以上用例在同一测试进程内运行多个节点。三个独立 OS 进程配合真实 MySQL、Redis 的完整命中入账示例，见下方 [settlement 使用](#settlement-使用) 中的 TestSettlementMoleProcessesLiveMySQL；完整客户端链路见下方“客户端闭环演示”的 TestAccessClientProcessesLiveMySQL。
+
+## 客户端闭环演示
+
+先按下方 login/settlement 说明准备专用库、私密配置和账号，使用真实 UserID 显式初始化钱包；准备好 mole 的 Redis 检查点。启动不建表、不自动注册账号或发银子。然后构建：
+
+```sh
+./scripts/dev.sh build
+```
+
+分别在五个终端启动以下节点：
+
+```sh
+./scripts/dev.sh run login
+./scripts/dev.sh run online
+./scripts/dev.sh run settlement
+./scripts/dev.sh run mole
+./scripts/dev.sh run access
+```
+
+在另一个终端运行 TS 演示（zsh，密码从标准输入读取）：
+
+```sh
+read -rs 'demo_password?示例账号密码: '
+printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo --hits 3
+unset demo_password
+```
+
+默认连接 ws://127.0.0.1:7888/ws，可用 `--url` 指定；`--hits` 为 1～100。程序先输出 login/enter，每锤输出 action 和即时 hit，再轮询原 HitID 输出 settlement，最后 leave；推送另外输出 snapshot/balance_correction。所有 64 位整数在内存中为 bigint，日志转为十进制字符串。超时不自动重发命中，日志保留原 ActionID；未知结果不显示为已入账。
+
+协议源码为 [game.proto](nodes/access/proto/demo/v1/game.proto)，Go 生成类型只供 access 使用，TS 类型放在 typeclient/src/gen。已提交生成产物，普通构建无需生成工具。改协议后执行 `./scripts/dev.sh generate access`，只读取发布模块 v1.0.2 的 schema，工具和输出均在本仓库。TS 固定使用与 GSR 示例相同的 @bufbuild/protobuf/protoc-gen-es 2.15.0、Buf 1.73.0、Node 类型 22.20.3；WebSocket、密码学、计时和标准输入使用 Node 内建能力。
+
+默认 `./scripts/dev.sh check` 包含客户端的 MAC 向量、整数精度、推送/响应交错、修订收敛、超时不重发和关闭等待测试。单独运行用 `npm --prefix typeclient test`。
+
+五个独立节点进程 + TS CLI + 真实 MySQL + 临时 AOF Redis 的显式验收（先构建全部节点和 TS）：
+
+```sh
+GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -run '^TestAccessClientProcessesLiveMySQL$' -v -timeout=1m
+```
+
+只接受本机 gsrdemo_login / gsrdemo_settlement 专用库，创建随机独占账号和钱包，核对 3 次命中入账的余额/版本，最后回收自己的数据与进程。没有自动启动重连、图形 UI 或多 access 部署验收；Online/游戏进程异常后的业务恢复仍按各节点边界处理。
 
 ## login 使用
 
-login 只接受内部 Cluster 认证请求，access 和 TypeScript 尚未接入客户端登录。账号密码按确认使用无盐 SHA-256，仅用于示例。先由管理员初始化专用库，脚本为已有的本机 gsr_demo 用户授予账号表权限：
+login 只接受内部 Cluster 认证请求，客户端统一经过 access 登录。账号密码按确认使用无盐 SHA-256，仅用于示例。先由管理员初始化专用库，脚本为已有的本机 gsr_demo 用户授予账号表权限：
 
 ```sh
 mysql -u root -p < nodes/login/schema.sql
@@ -137,7 +177,7 @@ GOWORK=off GSRDEMO_MYSQL_INTEGRATION=1 go test -run '^TestLoginLiveMySQL$' -time
 
 ## online 使用
 
-online 提供内部 Bind/Lookup/Unbind，按 UserID 保存 LoginID、AccessNode、AgentName。位置保留接入节点名，允许不同 access 使用同名 Agent；旧 LoginID 的断线通知不能删除新连接。当前 access 尚未接入该目录，命令与异常语义见 [内部协议](docs/PROTOCOL.md#online-位置目录)。
+online 提供内部 Bind/Lookup/Unbind，按 UserID 保存 LoginID、AccessNode、AgentName。位置保留接入节点名，允许不同 access 使用同名 Agent；旧 LoginID 的断线通知不能删除新连接。access 登录时绑定、断线时条件解绑，命令与异常语义见 [内部协议](docs/PROTOCOL.md#online-位置目录)。
 
 ```sh
 ./scripts/dev.sh check online
@@ -160,7 +200,7 @@ GOWORK=off GSRDEMO_ONLINE_LOAD=1 go test -run '^TestOnlineClusterLoad$' -v -time
 
 ## mole 使用
 
-演示规则固定为每组最多 3 人、9 洞，每秒产生一个目标、有效 2 秒；一锤扣 100，返 0 或 198 各 50%。AttackService 本地 Call 记账 Service，立即返回扣返和内存余额供 UI 显示；独立 settlement 最终裁决并持久化，不一致时只校正余额。本轮未修改 access/TypeScript，尚无真实客户端闭环。
+演示规则固定为每组最多 3 人、9 洞，每秒产生一个目标、有效 2 秒；一锤扣 100，返 0 或 198 各 50%。AttackService 本地 Call 记账 Service，立即返回扣返和内存余额供 UI 显示；独立 settlement 最终裁决并持久化，不一致时只校正余额。access/TypeScript 已接入最小玩法闭环。
 
 ```sh
 ./scripts/dev.sh check mole
@@ -174,7 +214,7 @@ mole 配置增加 `redis_url` 和 `redis_key`；带认证的 URL 写在被忽略
 
 每条提交通道用一个 Redis 检查点保存统计、最后完成的序号/BatchID，以及最多一个原始待处理批次；根 key 为通道 0，其余追加 `:lane:1`～`:lane:3`。先保存批次再提交结算，核对回执后 CAS 整体替换统计并清除批次。键无 TTL，需使用持久化且不淘汰该键的 Redis；本机示例推荐 AOF `appendfsync always`、`maxmemory-policy noeviction`，配置 Redis 由操作者管理，程序不修改全局设置。`-init-accounting` 仅用于新业务零统计，不能用来导入已有账务的统计；存量统计由业务离线核对后导入，启动不扫描账本。缺失、损坏或不可用的检查点不自动当成零统计。
 
-各通道独立恢复，再开放对应用户；首次用户余额由进入通道直接查询 settlement。升级时先停止旧 mole，执行 `-init-accounting` 补齐固定 4 个通道的检查点。旧检查点若仍有 Pending，必须先用旧版恢复完再迁移；初始化不重置存量统计和序号。默认跨节点用例会自行启动、回收临时 Redis；需要本机安装 redis-server。尚未保存到检查点的内存命中仍可能因 mole 崩溃丢失，已保存批次可按原身份恢复。Redis 严重数据丢失需由业务离线重放恢复，不能承诺 Redis 与 MySQL 的跨库原子提交。客户端即时显示不代表持久化入账。access/TypeScript 仍未接入游戏。
+各通道独立恢复，再开放对应用户；首次用户余额由进入通道直接查询 settlement。升级时先停止旧 mole，执行 `-init-accounting` 补齐固定 4 个通道的检查点。旧检查点若仍有 Pending，必须先用旧版恢复完再迁移；初始化不重置存量统计和序号。默认跨节点用例会自行启动、回收临时 Redis；需要本机安装 redis-server。尚未保存到检查点的内存命中仍可能因 mole 崩溃丢失，已保存批次可按原身份恢复。Redis 严重数据丢失需由业务离线重放恢复，不能承诺 Redis 与 MySQL 的跨库原子提交。客户端即时显示不代表持久化入账。客户端命中后立即展示内存结果，通过原 HitID 查询最终入账。
 
 ## settlement 使用
 
@@ -216,7 +256,7 @@ cd nodes/settlement
 GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_PROCESSES=1 go test -run '^TestSettlementMoleProcessesLiveMySQL$' -v -timeout=1m
 ```
 
-这些用例只接受专用本机 gsrdemo_settlement 库，创建随机独占测试钱包，并清理自己的操作、批次和余额；进程用例只回收自己启动的进程。access/TS 的真实客户端链路、故障负载和入账延迟目标仍需后续验收。
+这些用例只接受专用本机 gsrdemo_settlement 库，创建随机独占测试钱包，并清理自己的操作、批次和余额；进程用例只回收自己启动的进程。access/TS 完整链路另见 TestAccessClientProcessesLiveMySQL；故障负载和入账延迟目标仍需后续验收。
 
 ../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 只用于阅读，构建使用发布模块，不依赖兄弟 GSR checkout。access 后续功能和下一节点仍先展示方案，确认后再实现。
 

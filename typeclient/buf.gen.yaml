@@ -1,0 +1,14 @@
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: nodes/access
+    opt: module=github.com/cnooljaw/gsrdemo/nodes/access
+  - local: protoc-gen-gsr-registry
+    out: nodes/access
+    opt: module_path=github.com/cnooljaw/gsrdemo/nodes/access
+  - local: protoc-gen-es
+    out: typeclient/src/gen
+    include_imports: true
+    opt:
+      - target=ts
+      - import_extension=js

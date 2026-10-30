@@ -1,8 +1,31 @@
-# 内部业务协议
+# 业务协议
+
+## 客户端 access 协议
+
+传输为 GSR v1.0.2 的 MAC WebSocket，业务编码为 Protobuf Envelope。定义见 `nodes/access/proto/demo/v1/game.proto`；请求使用非零 request_id，响应回同一 ID，推送 request_id=0。客户端不提供 UserID、LoginID、节点或 Service 地址。
+
+| 请求 / 响应编号 | 输入 | 成功响应 |
+| --- | --- | --- |
+| 1001 / 1002 Login | username、password | user_id；一条连接成功登录一次，换账号须新建连接 |
+| 1011 / 1012 Enter | 空 | 地鼠快照、silver 余额基线 |
+| 1021 / 1022 Hit | action_id、spawn_seq、hole | hit（含 accepted/rejected）、silver；已拒绝重试结果可无 silver，不能显示奖励 |
+| 1031 / 1032 Snapshot | 空 | 当前组快照 |
+| 1041 / 1042 Leave | 空 | left；成功后不能命中，可继续查询原操作 |
+| 1051 / 1052 Operation | hit_id | found、hit_id、status、reason；只能查询当前用户参与的原操作 |
+| 1061 SnapshotPush | 服务端推送 | 当前组快照 |
+| 1062 BalancePush | 服务端推送 | 绝对余额视图，不是重复奖励 |
+
+`Balance.confirmed` 为确认金额 amount 和数据库版本 version 组成的消息：Enter 和确认校正可携带，普通即时命中可省略；省略不代表零。显示余额按 revision 只采纳新修订，重入以新基线重建。银子、UserID、SpawnSeq、版本和修订号在 TS 中均保持 bigint，不能转 Number 后参与账务显示或判断。
+
+Agent 仅保存当前身份和 entry/attack 路由；每条连接随机生成私有具名地址，每次登录随机生成不可复用 LoginID。Login 验证成功后 Call Online.Bind；绑定成功才开放游戏。Bind 失败/超时不重发绑定，只尝试清理该候选 LoginID 并关闭连接。正常替换后向旧地址 Send Command 101（旧 LoginID），旧 Agent 核对身份后尽力 Leave/Unbind 再退出；普通断线执行相同清理。进程骤停、清理超时或推送失败可能留下旧目录/成员，后续登录和进入覆盖；不承诺 Online 绑定已替换时旧在途操作被撤销，也不承诺网络分区下立即踢下线。
+
+未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。远端推送仍为 Command 100，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
+
+错误沿用框架 ErrorResponse（9001），目前客户端只收到框架通用错误类别和安全文案，内部 Domain Code 留在服务端；不另加一套客户端错误框架。断线清理和进程停止不是持久结算完成证明。
 
 ## login 认证
 
-仅供受信任节点经 GSR Cluster 调用；当前 access 和 TypeScript 尚未接入客户端登录协议。
+仅供受信任节点经 GSR Cluster 调用；客户端凭据由 access 转发，客户端不直接连接 login。
 
 | 项目 | 约定 |
 | --- | --- |
@@ -25,11 +48,11 @@
 
 本示例按用户确认采用无盐 SHA-256，账号表保存 32 字节摘要，仅用于示例，不是生产密码存储方案。
 
-当前命令、Service 名称及错误定义与 LoginService 放在 loginservice.go；真实跨节点调用方接入时，再按实际需要提取共享契约。
+命令、Service 名称及错误定义与 LoginService 放在 loginservice.go；access 按本文契约调用，不导入节点实现。
 
 ## online 位置目录
 
-仅供受信任节点经 Cluster 调用，目标为 Node `online`、Service `online`。当前 access、login 和 TypeScript 的业务尚未调用 Online；命令、名称和错误定义与 Service 放在 onlineservice.go。
+仅供受信任节点经 Cluster 调用，目标为 Node `online`、Service `online`。access 在登录/断线时调用目录，mole 进入时核对；命令、名称和错误定义与 Service 放在 onlineservice.go。
 
 | CommandID | 位置参数 | 成功结果 |
 | --- | --- | --- |
@@ -53,7 +76,7 @@ Domain 错误 `online.invalid_request` 表示字段越界或非法，`online.log
 
 ## mole 与银子结算
 
-mole 已实现下述节点内接口；settlement 已实现通用银子结算接口与 MySQL 适配；真实数据库和独立进程验证按 README 显式启用，不能用默认测试代替。完整职责、可靠性边界和实施顺序见 [DESIGN.md 第 8、9 节](DESIGN.md#8-mole-方案与首版实现)。access 和 TypeScript 尚未接入，无新增客户端 .proto。
+mole 已实现下述节点内接口；settlement 已实现通用银子结算接口与 MySQL 适配；真实数据库和独立进程验证按 README 显式启用，不能用默认测试代替。完整职责、可靠性边界和实施顺序见 [DESIGN.md 第 8、9 节](DESIGN.md#8-mole-方案与首版实现)。access 和 TypeScript 已按下述客户端协议接入；内部 Cluster 参数保持原规范类型。
 
 ### mole 调用链
 
