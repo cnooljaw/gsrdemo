@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cnooljaw/gsr/mysqlclient"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/go-sql-driver/mysql"
 )
@@ -31,7 +30,7 @@ func liveSettlementStore(t *testing.T) (settlementStore, settlementConfig) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	db, err := mysqlclient.Open(ctx, config.MySQLDSN)
+	db, err := openSettlementDatabase(ctx, config.MySQLDSN)
 	if err != nil {
 		t.Fatal(err)
 	}

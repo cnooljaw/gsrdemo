@@ -10,6 +10,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
@@ -188,7 +189,18 @@ func (service *moleSubmissionService) settlePending(self gsr.ServiceContext) (mo
 func callSettlement(self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
 	defer cancel()
-	return self.Cluster().Call(ctx, "settlement", "settlement", command, args...)
+	name := ""
+	if command == settlementSubmitCommand {
+		request := args[0].(map[string]any)
+		name = routing.WriteService(request["batch_id"].(string))
+	} else {
+		key := fmt.Sprint(args[0])
+		if command == settlementOperationCommand {
+			key = fmt.Sprint(args[1])
+		}
+		name = routing.ReadService(key)
+	}
+	return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
 }
 
 func submissionName(lane int) cluster.ServiceName {

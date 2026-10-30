@@ -8,6 +8,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 type mainService struct {
@@ -23,11 +24,23 @@ func NewMain(node cluster.NodeID, db *sql.DB) gsr.Service {
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	id, err := self.CreateService(ctx, newSettlementService(service.db))
-	if err != nil {
-		return err
+	writes, reads := routing.Services()
+	targets := make([]settlementTarget, 0, len(writes)+len(reads))
+	for _, group := range []struct {
+		names    []string
+		readOnly bool
+	}{{writes, false}, {reads, true}} {
+		for _, name := range group.names {
+			target := settlementTarget{name: cluster.ServiceName(name), readOnly: group.readOnly}
+			id, err := self.CreateService(ctx, target.service(service.db))
+			if err != nil {
+				return err
+			}
+			target.id = id
+			targets = append(targets, target)
+		}
 	}
-	if err := self.Node().RegisterService(settlementServiceName, id); err != nil {
+	if _, err := self.CreateService(ctx, &settlementSupervisor{db: service.db, targets: targets}); err != nil {
 		return err
 	}
 	if err := self.Node().OpenCluster(service.node); err != nil {

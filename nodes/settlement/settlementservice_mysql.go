@@ -173,7 +173,7 @@ func loadWallets(ctx context.Context, tx *sql.Tx, ids []uint64) (map[uint64]wall
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT user_id, amount, version FROM silver_balances WHERE user_id IN ("+sqlSlots(len(ids))+") ORDER BY user_id FOR UPDATE", args...)
+	rows, err := tx.QueryContext(ctx, "SELECT user_id, amount, version FROM silver_balances WHERE user_id IN ("+sqlSlots(len(ids))+") ORDER BY user_id FOR UPDATE NOWAIT", args...)
 	if err != nil {
 		return nil, err
 	}

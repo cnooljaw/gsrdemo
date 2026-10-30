@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/go-sql-driver/mysql"
 )
 
 func mockStore(t *testing.T) (settlementStore, sqlmock.Sqlmock) {
@@ -23,6 +24,22 @@ func mockStore(t *testing.T) (settlementStore, sqlmock.Sqlmock) {
 		_ = db.Close()
 	})
 	return settlementStore{db: db}, mock
+}
+
+// TestSettlementLockedWalletDoesNotWaitOrWrite 保护钱包锁冲突快速回滚，不跳过账户或保存部分结算。
+func TestSettlementLockedWalletDoesNotWaitOrWrite(t *testing.T) {
+	store, mock := mockStore(t)
+	batch, err := decodeSettlementBatch(testBatch("locked", testSingle("op-locked", 1, 100, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectNewBatch(mock, batch, emptyOperations())
+	locked := &mysql.MySQLError{Number: 3572, Message: "NOWAIT lock conflict"}
+	mock.ExpectQuery("SELECT user_id, amount, version.*FOR UPDATE NOWAIT").WithArgs(uint64(1)).WillReturnError(locked)
+	mock.ExpectRollback()
+	if _, err := store.settle(context.Background(), batch); !errors.Is(err, locked) {
+		t.Fatalf("lock conflict was not returned: %v", err)
+	}
 }
 
 func emptyOperations() *sqlmock.Rows {

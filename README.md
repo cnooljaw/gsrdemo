@@ -131,7 +131,7 @@ mole 配置增加 `redis_url` 和 `redis_key`；带认证的 URL 写在被忽略
 
 ## settlement 使用
 
-三种写入口分别是 SettleSingle、SettleBatch（独立单人项）、SettleGroup（多人整体）。写协议为 version=2：单人用 UserID + Items，多人用 Changes，均保留 Reason 分类，允许同用户多条明细并汇总校验；同一业务操作跨批次/入口仍按 OperationID 去重；详情见 [协议](docs/PROTOCOL.md#通用银子结算接口)。
+三种写命令分别是 SettleSingle、SettleBatch（独立单人项）、SettleGroup（多人整体）。节点发布 4 个写入 Service 和 2 个只读 Service，由 `common/settlement` 的路由函数按业务身份选择；不经过一个同步中转入口。每个入口最多排队 4 条请求，超额快速返回背压错误。写协议为 version=2：单人用 UserID + Items，多人用 Changes，均保留 Reason 分类，允许同用户多条明细并汇总校验；同一业务操作跨批次/入口仍按 OperationID 去重；详情见 [协议](docs/PROTOCOL.md#通用银子结算接口)。
 
 管理员先执行建表脚本；复制 configs/settlement-01.yaml 为权限 0600 的 settlement-01.local.yaml，填写专用库的 mysql_dsn：
 
@@ -140,6 +140,8 @@ mysql -u root -p < nodes/settlement/schema.sql
 ./scripts/dev.sh check settlement
 ./scripts/dev.sh build settlement
 ```
+
+运行要求 MySQL 8.0+、InnoDB；钱包锁使用 `FOR UPDATE NOWAIT`，冲突返回可重试的 `settlement.store_unavailable`，保持原 ID/内容重试。读写共享由宿主管理的 6 连接池，对应 4 个写入口和 2 个查询入口；单个入口 panic 后在节点内恢复，不自动重放未知请求。MySQL 全局故障和所有执行入口同时繁忙仍会影响整个结算节点。
 
 钱包由用户中心决定创建和初始银子，Settlement 只执行；Demo 用独立管理命令模拟用户中心，普通结算不创建钱包。以下 UserID=1 为示例，替换为 login 创建账号时返回的真实 UserID；初始化银子也保留明细，同用户同金额重试不重复发放，改金额拒绝：
 
@@ -154,7 +156,7 @@ mysql -u root -p < nodes/settlement/schema.sql
 
 ```sh
 cd nodes/settlement
-GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 go test -run '^TestSettlementLiveMySQL$' -v -timeout=1m
+GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 go test -run '^TestSettlement(LiveMySQL|HotWalletLiveMySQL|ConcurrentIdentitiesLiveMySQL|ConflictingConcurrentIdentityLiveMySQL)$' -v -timeout=1m
 ```
 
 独立 online/mole/settlement 进程加真实 MySQL、临时 AOF Redis 的闭环测试，先从根目录构建三个节点，再运行：

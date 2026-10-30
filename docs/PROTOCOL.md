@@ -91,7 +91,7 @@ Mole 的进入通道固定 8 个；调用方应使用 ResolveEntry 返回的地�
 
 ### 通用银子结算接口
 
-目标 Node/Service 均为 settlement，version 固定 uint64=2。所有写入口返回持久事务提交后的回执，不根据游戏类型分派玩法。金额使用 int64 最小银子单位，非负 Debit/Credit，UserID 为非零 uint64。仅供受信任业务节点调用。
+目标 Node 为 settlement，version 固定 uint64=2。写入调用 `common/settlement.WriteService(identity)`：SettleBatch 使用 BatchID，SettleSingle/SettleGroup 使用 OperationID；返回 settlement-write-00～03。只读调用 ReadService(identity)：GetBatch 使用 BatchID、GetOperation 使用 OperationID、GetBalance 使用 UserID 十进制字符串，返回 settlement-read-00～01。FNV-1a 32 位散列后取模，函数与完整入口清单在 common/settlement/routing.go；入口数固定，调用方同步升级，不保留旧 Service=settlement 的转发兼容层。所有写入口返回持久事务提交后的回执，不根据游戏类型分派玩法。金额使用 int64 最小银子单位，非负 Debit/Credit，UserID 为非零 uint64。仅供受信任业务节点调用。
 
 | CommandID | 接口 | 请求与业务成功边界 |
 | --- | --- | --- |
@@ -114,8 +114,10 @@ CommandID=5（原 Summary）已移除且不复用，返回 ErrUnknownCommand。
 
 回执为 batch_id string、results []any、balances []any。每项结果含 operation_id/status/reason/origin_batch string；status 为 committed 或 rejected，reason 是结果失败原因，与资金分类 Reason 分开，可为空、insufficient_silver、balance_overflow、version_overflow。origin_batch 是第一次保存该操作的批次，业务凭此识别跨批重提的旧操作。balances 为本批涉及用户在本次提交后的余额和版本；原批次重试返回历史原回执，不能覆盖调用方较新确认版本。单人/多人接口也返回这一回执结构，results 只有一项。
 
-数据库事务按稳定用户顺序锁定余额，按请求操作顺序先按 UserID 汇总每笔明细，再检查完整 Debit，返还不能抵付本笔扣款。多人操作先检查所有参与者再整体修改；每笔成功 Operation 对每名用户只递增一次版本，批量单人各项独立判定。只对本次新成功的操作集合更新余额与版本，批量写入余额、操作索引、批次原始明细及回执；提交成功才返回结果。SQL/提交失败返回 store_unavailable，表示结果未确认，不当作财务拒绝；按原身份和内容重试即可。GetBatch 是显式查询能力，不是提交前置步骤。
+数据库事务按稳定用户顺序用 FOR UPDATE NOWAIT 锁定余额，遇行锁冲突整体回滚并返回 store_unavailable，调用方按原身份重试，不跳过任何钱包。按请求操作顺序先按 UserID 汇总每笔明细，再检查完整 Debit，返还不能抵付本笔扣款。多人操作先检查所有参与者再整体修改；每笔成功 Operation 对每名用户只递增一次版本，批量单人各项独立判定。只对本次新成功的操作集合更新余额与版本，批量写入余额、操作索引、批次原始明细及回执；提交成功才返回结果。行锁竞争、SQL/提交失败返回 store_unavailable，表示结果未确认，不当作财务拒绝；按原身份和内容重试即可。GetBatch 是显式查询能力，不是提交前置步骤。
 
 稳定 Domain 错误：settlement.invalid_request、settlement.identity_conflict、settlement.wallet_not_found、settlement.store_unavailable。钱包必须显式初始化；缺失钱包拒绝请求且不自动创建/发银子。用户中心决定创建钱包和初始银子，Settlement 只执行初始化账务；Demo 的 -init-wallet 模拟该管理入口，不自动接入 login 注册。initialize(ctx, userID, amount) 与普通 settle(ctx, batch) 分开：确定性 OperationID=wallet-init-{UserID}，BatchID=init-加该 OperationID 的 SHA-256 十六进制；先查初始化凭据，再在同一事务创建零余额钱包、执行 initial_balance 分类的 wallet_init 操作、保存索引/明细/回执并提交。相同金额重试返回原回执，不重置当前余额；不同金额或已有钱包缺少初始化凭据返回冲突。唯一键竞争等 SQL 错误回滚，由调用方按原 ID 重试，不增加内部重试循环。wallet_init 不接受普通 RPC 提交。
 
 settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量阈值归批；棋牌可立即调用多人接口。mole 的各通道累计统计与最多一个待处理批次保存在业务 Redis，不调用结算汇总。固定 4 条提交通道按 UserID % 4 分配，通道 0 为 mole-submission，其余追加 -01～-03；每条序号只用于自己的业务检查点，不传给 Settlement；同一批次的 ID、内容和序号在重试时保持不变。只有 committed 且 origin_batch 等于当前 batch_id 的操作新增统计。Redis 统计和检查点更新成功后才向 Accounting 交付回执。mole 不访问 SQL；尚未保存到 Redis 的内存操作仍可丢失，已保存批次在重启时原样补交。余额、操作幂等索引和完整批次明细归 settlement，冷热归档和短 ID 尚待下一阶段实施。
+
+结算写/读入口只接受各自命令；内部命令 9 仅供本地监督 Service 的非阻塞存活检查。每入口 Mailbox=4，满时返回 runtime.mailbox_full，仍按原身份退避重试，不能换 ID 重做。6 个入口最多保留 30 个执行/排队 Call，低于 GSR v1.0.2 每入站连接 32 个并发名额，避免慢入口占满同连接。进程内监督 Service 不持有钱包，只在执行 Service 已退出后重新发布同名实例，不自动重放请求。Call 超时仍不证明事务未执行。

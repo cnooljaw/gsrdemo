@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,6 +17,7 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/mysqlclient"
 	"github.com/cnooljaw/gsrdemo/common/model"
+	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 func main() {
@@ -61,7 +63,7 @@ func run() (result error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	db, err := mysqlclient.Open(ctx, config.MySQLDSN)
+	db, err := openSettlementDatabase(ctx, config.MySQLDSN)
 	if err != nil {
 		return fmt.Errorf("open settlement database: %w", err)
 	}
@@ -84,6 +86,19 @@ func run() (result error) {
 	}
 	return gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: config.Node.LogDirectory},
+		Runtime: gsr.RuntimeConfig{MailboxCapacity: settlementMailboxCapacity},
 		Cluster: gsr.ClusterConfig{Nodes: nodes},
 	}, NewMain(cluster.NodeID(config.Node.Listen), db))
+}
+
+// openSettlementDatabase 将共享池上限与固定写/读入口的并发数匹配，仍由宿主统一关闭。
+func openSettlementDatabase(ctx context.Context, dsn string) (*sql.DB, error) {
+	db, err := mysqlclient.Open(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	writes, reads := routing.Services()
+	db.SetMaxOpenConns(len(writes) + len(reads))
+	db.SetMaxIdleConns(len(writes) + len(reads))
+	return db, nil
 }

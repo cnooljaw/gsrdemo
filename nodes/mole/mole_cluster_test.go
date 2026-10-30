@@ -14,6 +14,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 // settlementFixture 仅实现 mole 用到的单用户测试契约，不是 settlement 业务实现。
@@ -319,6 +320,14 @@ func (service *moleTestPeer) OnStart(ctx context.Context, self gsr.ServiceContex
 	}
 	if err := self.Node().RegisterService(cluster.ServiceName(service.name), id); err != nil {
 		return err
+	}
+	if service.node == "settlement" {
+		writes, reads := routing.Services()
+		for _, name := range append(writes, reads...) {
+			if err := self.Node().RegisterService(cluster.ServiceName(name), id); err != nil {
+				return err
+			}
+		}
 	}
 	if err := self.Node().OpenCluster(cluster.NodeID(service.node)); err != nil {
 		return err

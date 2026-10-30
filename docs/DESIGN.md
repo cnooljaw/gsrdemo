@@ -207,7 +207,11 @@ flowchart LR
 
 ### 9.1 职责与接口
 
-独立 settlement 进程内先一个 SettlementService，唯一修改用户持久银子及记账记录，不拥有游戏、连接或内存钱包缓存。GSR v1.0.2 接入沿用 MySQL 示例：宿主 mysqlclient.Open 打开数据库池，MainService 创建/命名结算 Service、OpenCluster 后退出，Run 停止后宿主关闭池。Service 在回调内使用有限 SQL context，不保存 self、不启动业务 goroutine。
+独立 settlement 节点唯一负责修改持久银子和账务；进程内固定 4 个 SettlementService 写入口、2 个 SettlementQueryService 只读入口，不持有游戏或内存钱包副本。宿主 mysqlclient.Open 后用 database/sql 将连接池上限设为 6，对应最多 4 个写事务和 2 个查询；MainService 创建并命名入口和私有监督 Service，OpenCluster 后退出，Run 停止后宿主关闭池。Service 仍使用有限 SQL context，不保存 self、不启动业务 goroutine。
+
+入口选择只共享真实调用需要的 common/settlement 路由函数，不共享节点实现。写入按 BatchID 或 OperationID 的 FNV-1a 32 位哈希分到 settlement-write-00～03；查询按 BatchID/OperationID/UserID 分到 settlement-read-00～01。命令字段和 version=2 不变，Mole 与测试工具同步迁移；不保留同步中转或旧 settlement 服务别名。路由仅用于分摊负载，不替代钱包行锁或全局幂等键。
+
+每个入口 Mailbox=4，6 个入口最多保留 6×(4+1)=30 个执行/排队 Call，低于 GSR v1.0.2 入站连接默认的 32 个并发槽位。队列满快速返回背压，调用方原 ID 退避重试，不通过大队列隐藏积压。私有 SettlementSupervisor 只接收自身 Timer，不等待 SQL 或 Call；入口已退出时重建同名无状态实例，不重放未知请求。一个慢入口仍影响其排队请求，但不占住整个节点的公共 Handler。
 
 按场景分三个入口：SettleSingle 单用户一笔，SettleBatch 多笔独立单人操作，SettleGroup 多用户整体操作。接口共享金额校验、幂等和事务实现，调用方不必统一组装多用户结构。地鼠调用批量入口；棋牌一局可立即调用多人入口，批量周期由调用方决定。GetBatch/GetOperation/GetBalance 提供查询，具体字段和编号见 PROTOCOL.md。
 
@@ -217,11 +221,11 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 
 1. 校验规范参数、数量/字节上限、全局操作身份、参与用户/明细数量、非负金额和整数范围；规范化 JSON 后取 SHA-256。批次内操作保持顺序，所有变化按 UserID、Reason、Debit、Credit 排序，保留重复明细。分类或拆分改变即为内容变更。
 2. 同 BatchID 已存在时核对摘要，返回原历史回执。同 OperationID 跨入口/跨批次存在时核对内容，沿用原终局结果和 origin_batch，不重新写操作索引或累计金额；冲突拒绝整次请求。
-3. 一个批次一个 MySQL 事务，按稳定用户顺序锁定涉及钱包。使用事务内普通 map 工作副本，按操作顺序先汇总每名用户的多条分类明细，再检查完整 Debit 能力、余额/版本溢出，最后应用 Credit。每名用户每笔成功 Operation 只递增一次版本。多人先全部检查再一起修改；批量单人每笔分别判定。
+3. 一个批次一个 MySQL 事务，按稳定用户顺序使用 FOR UPDATE NOWAIT 锁定钱包；行锁冲突即回滚并返回可重试的 store_unavailable，不跳过锁定用户，不保存部分多人结果。要求 MySQL 8.0+ / InnoDB；参见 [官方锁定读说明](https://dev.mysql.com/doc/refman/8.0/en/innodb-locking-reads.html)。NOWAIT 只处理行锁，元数据锁、归档读写和磁盘等待仍受 2 秒 SQL 预算限制；复制使用行格式，当前验收环境为 ROW。使用事务内普通 map 工作副本，按操作顺序先汇总每名用户的多条分类明细，再检查完整 Debit 能力、余额/版本溢出，最后应用 Credit。每名用户每笔成功 Operation 只递增一次版本。多人先全部检查再一起修改；批量单人每笔分别判定。
 4. 余额不足等业务拒绝保存为终局结果，同批其他操作可成功。只对新成功操作涉及用户批量更新余额/版本，再批量插入新操作索引和完整批次/回执，Commit 成功才返回。
 5. SQL/连接/提交错误是未知或失败，不保存成余额不足、不假报入账；事务回滚或调用方用原 ID 重试，已提交但丢回复时返回已有结果。数据库唯一键与余额行锁同时保护重复写入；竞争导致 SQL 失败时按原身份重试。
 
-结算 Service 没有进度状态机、后台队列、Timer 或镜像余额缓存。事务临时数据归当前回调；持久终局状态归 MySQL。全局 OperationID 和 BatchID 的去重记录不自动过期。
+写/读执行 Service 没有进度状态机、额外后台队列、归批 Timer 或镜像余额缓存；监督 Service 的 Timer 仅管理实例存活。事务临时数据归当前回调；持久终局状态归 MySQL。全局 OperationID 和 BatchID 的去重记录不自动过期。
 
 ### 9.3 三张表及初始化
 
@@ -247,9 +251,15 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 
 2026-10-28 Reason 契约升级：实施前只读核对本机 silver_balances、settlement_operations、settlement_batches 均为 0 条，写协议直接升级 version=2，无存量迁移；没有清空账务或改写历史摘要。三张表结构不变，mole 逐锤拆成 hammer_cost/hammer_reward 两条 Items；每项操作最多 512 条分类变化，参与用户最多 64 名。新增验证覆盖同用户多条扣款合计不足、版本只递增一次、Reason 重排/变更身份、初始化异常回滚及无凭据钱包冲突；统一 check、mole/settlement race、真实 MySQL 分类明细/版本/初始化幂等及三个独立进程入账验证均通过。
 
+2026-10-29 结算隔离验收：统一 `./scripts/dev.sh check`（全部 Go test/vet、TS 类型检查）、Settlement/Mole 全量 race 通过；Settlement race 同时启用真实 MySQL 用例，新增读入口 panic 恢复与冲突用例另做定向 race。默认故障用例覆盖慢写/慢查询不阻塞其他入口、读写入口互斥、单入口 panic 后同名恢复且健康入口不重建。同一来源节点共用 TCP 的用例在大队列下复现健康请求等待约 630ms；Mailbox=4 后通过健康请求 <300ms 及过载明确返回 MailboxFull 的断言。这是故障边界验证，不是 P99 或容量测量。
+
+真实环境 MySQL 8.0.46、binlog_format=ROW：外部事务持续持锁时，4 个写入口的多人操作均快速返回未确认，未部分入账；无关钱包仍经所有写入口成功扣款，解锁后原 ID 重试只转账一次。跨 4 个入口并发 16 次同身份调用只保存 1 项操作、扣款一次；16 项独立扣款和多人转账在 1000 银子/每项扣 100 下均为 10 成功、6 拒绝，余额/版本及总额一致；同 ID 不同内容并发仅一个成功、另一个冲突。重建三个节点后，独立 online/mole/settlement 进程完成新路由进入、即时命中、MySQL 入账与 Redis 检查点确认。所有测试仅清理独占账务样本和临时进程；未改表结构、数据库全局配置或历史压测数据，未重测大库负载、CPU、长期稳定性及真实客户端链路。
+
 本轮只完成通用银子结算，不实现斗地主牌局、资金冻结、匹配或外部明细导出。mole 崩溃可丢失尚未保存到 Redis 的内存操作；已保存批次可恢复，settlement 保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。
 
 ### 9.5 结算层负载基线
+
+以下为并行入口和 NOWAIT 改动前的历史基线，不作为新配置的容量通过依据。
 
 压测只驱动 Settlement 的公开 Cluster 接口，不改业务规则；地鼠模拟有效命中账务，棋牌模拟整体资金操作，不创建牌局。两套 GSR Runtime 在同一 Go 测试进程内经真实 TCP 通信，MySQL 为独立本机进程。16 个有界调用 Service、256 项发送缓冲，以固定时间表产生请求；落后时追赶原定时间表，缓冲满显式计丢弃，不因响应变慢自动降低目标流量。持续时长默认 30 秒，无独立预热阶段，钱包初始化和清理不计入负载区间。
 
@@ -396,9 +406,9 @@ Summary 失败的业务影响：当前 MoleSubmission.advance 在 ready=false �
 
 2026-10-29 第一阶段验证：统一 `./scripts/dev.sh check`（全部 Go test/vet、TS 类型检查）通过；mole、settlement 受影响包 race 及新增缺失检查点/大整数用例 race 通过。真实 MySQL 用例和独立 online/mole/settlement 进程用例通过，后者使用自己的 AOF always Redis，并核对最终统计、序号和待处理批次清除。覆盖 SQL 已提交但回执不可见后 mole 重启恢复、Redis 已更新但回复丢失、Redis 故障阻止 SQL、初始化不覆盖旧统计、缺失/损坏不当作零，以及大于 2^53 的整数精度。只清理本次测试钱包、账务和临时进程；未重跑大库负载，也未验证 Redis 宿主宕机后的持久化恢复或真实客户端链路。
 
-2026-10-29 用户进一步确认优先处理局部故障隔离。Mole 已实施第 8 节的进入通道、独立周期驱动、按用户索引余额计算及 4 条提交通道；Settlement 本轮业务代码不变。待后续逐节点处理：
+2026-10-29 用户进一步确认优先处理局部故障隔离。Mole 已实施第 8 节的进入通道、独立周期驱动、按用户索引余额计算及 4 条提交通道；随后已推进 Settlement 隔离，具体实现见第 9 节。后续逐节点事项：
 
-- Settlement：少量、有界并行执行，钱包行锁、多人事务原子性和幂等保持不变；补热点钱包锁等待、慢查询、并发重试验证。当前仍只有一个同步 SQL Service，不能宣称端到端无关钱包互不阻塞。
+- Settlement：本轮实施 4 写/2 读入口、钱包锁冲突快速回滚、独立监督恢复及小 Mailbox 背压；详见第 9 节。数据库整体不可用、全部入口饱和、同入口排队、跨节点链路拥塞仍有共同影响，未建设逐钱包调度器或数据库高可用。
 - Login：少量认证 Service，避免一个慢数据库查询拖住所有新登录。
 - Access：接入实际业务后验证每连接等待、出站背压、多节点重连；Online 保持短回调，补节点恢复后的重新绑定。
 - 基础可用性：生产进程拉起、健康检查、MySQL/Redis 部署冗余和资源隔离另行验收。本轮没有建设数据库高可用或通用监督框架。

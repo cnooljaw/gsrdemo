@@ -4,23 +4,25 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"os"
 	"time"
 
 	"github.com/cnooljaw/gsr"
+	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
 )
 
 const (
-	settlementServiceName                   = "settlement"
-	settleBatchCommand    runtime.CommandID = 1
-	getBatchCommand       runtime.CommandID = 2
-	getOperationCommand   runtime.CommandID = 3
-	getBalanceCommand     runtime.CommandID = 4
-	settleSingleCommand   runtime.CommandID = 6
-	settleGroupCommand    runtime.CommandID = 7
-	settlementSQLTimeout                    = 2 * time.Second
+	settleBatchCommand      runtime.CommandID = 1
+	getBatchCommand         runtime.CommandID = 2
+	getOperationCommand     runtime.CommandID = 3
+	getBalanceCommand       runtime.CommandID = 4
+	settleSingleCommand     runtime.CommandID = 6
+	settleGroupCommand      runtime.CommandID = 7
+	settlementSQLTimeout                      = 2 * time.Second
+	settlementHealthCommand runtime.CommandID = 9
+	// 六个入口最多接纳 6*(4+1)=30 个排队/执行中的 Call，低于 v1.0.2 单连接的 32 个槽位。
+	// 不以大队列掩盖慢请求，给同连接的其他目标留出接纳机会。
+	settlementMailboxCapacity = 4
 )
 
 var (
@@ -30,31 +32,34 @@ var (
 	errWalletNotFound        = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.wallet_not_found", "wallet must be explicitly initialized")
 )
 
-// settlementService 唯一管理持久银子；三个写入口共享事务，不持有游戏、连接或内存钱包副本。
+// settlementService 是一个独立写入入口；三个命令共享事务规则，不持有钱包副本。
 type settlementService struct {
+	name       cluster.ServiceName
 	store      settlementStore
 	dispatcher *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*settlementService)(nil)
 
-func newSettlementService(db *sql.DB) *settlementService {
-	service := &settlementService{store: settlementStore{db: db}}
+func newSettlementService(db *sql.DB, name cluster.ServiceName) *settlementService {
+	service := &settlementService{name: name, store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		settleBatchCommand: service.settleBatch, settleSingleCommand: service.settleSingle, settleGroupCommand: service.settleGroup,
-		getBatchCommand: service.getBatch, getOperationCommand: service.getOperation, getBalanceCommand: service.getBalance,
 	})
 	return service
 }
 
-func (service *settlementService) OnStart(_ context.Context, _ gsr.ServiceContext) error {
+func (service *settlementService) OnStart(_ context.Context, self gsr.ServiceContext) error {
 	if service.store.db == nil {
 		return errors.New("settlement requires a database")
 	}
-	return nil
+	return self.Node().RegisterService(service.name, self.Self())
 }
 
 func (service *settlementService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
+	if command == settlementHealthCommand && self.Source() != 0 {
+		return nil, nil
+	}
 	return service.dispatcher.Handle(self, command, args...)
 }
 
@@ -96,42 +101,10 @@ func (service *settlementService) commit(self gsr.ServiceContext, batch settleme
 	return receipt.wire(), nil
 }
 
-func (service *settlementService) getBatch(self gsr.CommandContext, id string) (any, error) {
-	if !validSettlementID(id) {
-		return nil, errInvalidSettlement
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
-	defer cancel()
-	value, err := service.store.getBatch(ctx, id)
-	return value, settlementError(self, err)
-}
-
-func (service *settlementService) getOperation(self gsr.CommandContext, userID uint64, id string) (any, error) {
-	if userID == 0 || !validSettlementID(id) {
-		return nil, errInvalidSettlement
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
-	defer cancel()
-	value, err := service.store.getOperation(ctx, userID, id)
-	return value, settlementError(self, err)
-}
-
-func (service *settlementService) getBalance(self gsr.CommandContext, userID uint64) (map[string]any, error) {
-	if userID == 0 {
-		return nil, errInvalidSettlement
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
-	defer cancel()
-	value, err := service.store.getBalance(ctx, userID)
-	return value, settlementError(self, err)
-}
-
 func settlementError(self gsr.ServiceContext, err error) error {
 	if err == nil || errors.Is(err, errInvalidSettlement) || errors.Is(err, errSettlementConflict) || errors.Is(err, errWalletNotFound) {
 		return err
 	}
-	if logErr := self.Logger().Error("结算数据库操作未确认完成", "error", err.Error()); logErr != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "结算数据库操作未确认完成", err, "log:", logErr)
-	}
+	_ = self.Logger().Error("结算数据库操作未确认完成", "error", err.Error())
 	return errSettlementUnavailable
 }

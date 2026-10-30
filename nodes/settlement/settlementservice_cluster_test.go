@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 type settlementTestMain struct {
@@ -24,14 +26,7 @@ type settlementTestMain struct {
 var _ gsr.Service = (*settlementTestMain)(nil)
 
 func (service *settlementTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	id, err := self.CreateService(ctx, newSettlementService(service.db))
-	if err != nil {
-		return err
-	}
-	if err := self.Node().RegisterService(settlementServiceName, id); err != nil {
-		return err
-	}
-	if err := self.Node().OpenCluster("settlement"); err != nil {
+	if err := NewMain("settlement", service.db).OnStart(ctx, self); err != nil {
 		return err
 	}
 	_, port, err := net.SplitHostPort(self.Node().ClusterListenAddress())
@@ -51,12 +46,17 @@ func (service *settlementTestMain) OnStop(context.Context) error {
 
 func startSettlementTestNode(t *testing.T, db *sql.DB) (string, func()) {
 	t.Helper()
+	main := &settlementTestMain{db: db, ready: make(chan string, 1)}
+	return startSettlementMain(t, main, main.ready)
+}
+
+func startSettlementMain(t *testing.T, main gsr.Service, ready <-chan string) (string, func()) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	main := &settlementTestMain{db: db, ready: make(chan string, 1)}
 	directory := t.TempDir()
 	go func() {
-		done <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: directory}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"settlement": "127.0.0.1:0"}}}, main)
+		done <- gsr.Run(ctx, gsr.Config{Runtime: gsr.RuntimeConfig{MailboxCapacity: settlementMailboxCapacity}, Logging: logging.Config{Directory: directory}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"settlement": "127.0.0.1:0"}}}, main)
 	}()
 	var once sync.Once
 	stop := func() {
@@ -74,7 +74,7 @@ func startSettlementTestNode(t *testing.T, db *sql.DB) (string, func()) {
 	}
 	t.Cleanup(stop)
 	select {
-	case address := <-main.ready:
+	case address := <-ready:
 		return address, stop
 	case err := <-done:
 		done <- err
@@ -107,7 +107,28 @@ func (service *settlementCaller) OnStop(context.Context) error {
 
 func settlementRPC(t *testing.T, address string, command runtime.CommandID, args ...any) (any, error) {
 	t.Helper()
-	return businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementServiceName, command, args...)
+	return businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementRPCTarget(command, args...), command, args...)
+}
+
+// settlementRPCTarget 与真实调用方按业务身份选择入口；请求校验仍在 Service 内。
+func settlementRPCTarget(command runtime.CommandID, args ...any) string {
+	if command == settleBatchCommand || command == settleSingleCommand || command == settleGroupCommand {
+		request, _ := args[0].(map[string]any)
+		field := "operation_id"
+		if command == settleBatchCommand {
+			field = "batch_id"
+		}
+		identity, _ := request[field].(string)
+		return routing.WriteService(identity)
+	}
+	key := ""
+	if len(args) > 0 {
+		key = fmt.Sprint(args[0])
+	}
+	if command == getOperationCommand && len(args) > 1 {
+		key = fmt.Sprint(args[1])
+	}
+	return routing.ReadService(key)
 }
 
 func businessRPC(t *testing.T, routes map[cluster.NodeID]string, node, name string, command runtime.CommandID, args ...any) (any, error) {
@@ -121,7 +142,7 @@ func businessRPC(t *testing.T, routes map[cluster.NodeID]string, node, name stri
 		defer stop()
 		value, callErr = self.Cluster().Call(wait, cluster.NodeID(node), cluster.ServiceName(name), command, args...)
 	}}
-	if err := gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: routes}}, caller); err != nil {
+	if err := gsr.Run(ctx, gsr.Config{Runtime: gsr.RuntimeConfig{MailboxCapacity: settlementMailboxCapacity}, Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: routes}}, caller); err != nil {
 		t.Fatal(err)
 	}
 	return value, callErr
