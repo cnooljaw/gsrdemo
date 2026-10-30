@@ -177,7 +177,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
   -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
 ```
 
-用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。
+用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还会强停自己启动的 access-01，验证另一玩家沿 access-02 原连接继续游戏，以及受影响账号经 access-02 重新登录、回到原组再次命中入账和查询旧 HitID。
 
 ## 源码与文档
 

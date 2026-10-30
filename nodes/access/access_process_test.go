@@ -58,7 +58,7 @@ func freeAccessAddress(t *testing.T) string {
 }
 
 // startAccessProcess 只回收本用例创建的子进程；输出文件归测试临时目录。
-func startAccessProcess(t *testing.T, binary string, arguments []string, address string) {
+func startAccessProcess(t *testing.T, binary string, arguments []string, address string) *os.Process {
 	t.Helper()
 	logPath := filepath.Join(t.TempDir(), "process.log")
 	output, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR, 0600)
@@ -93,7 +93,7 @@ func startAccessProcess(t *testing.T, binary string, arguments []string, address
 		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			return
+			return command.Process
 		}
 		select {
 		case err := <-done:
@@ -105,6 +105,7 @@ func startAccessProcess(t *testing.T, binary string, arguments []string, address
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("integration process listener not ready")
+	return nil
 }
 
 // TestAccessClientProcessesLiveMySQL 保护单客户端通过五个独立进程完成认证、即时命中和真实入账。
@@ -232,6 +233,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	}
 	_, redisPort, _ := net.SplitHostPort(redisAddress)
 	startAccessProcess(t, redisBinary, []string{"--bind", "127.0.0.1", "--port", redisPort, "--save", "", "--appendonly", "yes", "--appendfsync", "always", "--dir", t.TempDir()}, redisAddress)
+	var firstAccess *os.Process
 	for _, node := range nodeNames {
 		role, gate := node, gateAddress
 		if strings.HasPrefix(node, "access-") {
@@ -279,7 +281,10 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 		if role == "access" {
 			address = gate
 		}
-		startAccessProcess(t, binary, []string{"-config", path}, address)
+		process := startAccessProcess(t, binary, []string{"-config", path}, address)
+		if node == "access-01" {
+			firstAccess = process
+		}
 	}
 	clientPath, err := filepath.Abs("../../typeclient/dist/index.js")
 	if err != nil {
@@ -414,6 +419,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	}
 	t.Logf("%d 个接入节点，%d 个并发 CLI，共 %d 个唯一 HitID、%d 次目标失效后继续", accessCount, playerCount, len(seenHits), totalMisses)
 	if accessCount == 2 {
-		verifyAccessReconnect(t, ctx, routes, gateAddresses, &players[0], settlementDB, &operationIDs)
+		hitID := verifyAccessReconnect(t, ctx, routes, gateAddresses, &players[0], settlementDB, &operationIDs)
+		verifyAccessProcessCrash(t, ctx, routes, gateAddresses, players[:2], settlementDB, &operationIDs, firstAccess, hitID)
 	}
 }
