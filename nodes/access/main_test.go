@@ -25,7 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const testNodeYAML = "instance: access-01\nlisten: access\nnodes_file: nodes.yaml\nlog_directory: logs\n"
+const testNodeYAML = "instance: access-01\nlisten: access-01\nnodes_file: nodes.yaml\nlog_directory: logs\n"
 const testGateYAML = "gate:\n  address: 127.0.0.1:7888\n  max_connections: 4\n  max_frame_bytes: 256\n  max_outbound_queue_bytes: 1024\n"
 
 func accessConfigFile(t *testing.T, node, routes string) string {
@@ -41,12 +41,12 @@ func accessConfigFile(t *testing.T, node, routes string) string {
 
 // TestAccessConfigKeepsGatePrivateAndResolvesSharedHost 保护 access 私有字段严格解析且地址表/日志按配置目录解析。
 func TestAccessConfigKeepsGatePrivateAndResolvesSharedHost(t *testing.T) {
-	path := accessConfigFile(t, testNodeYAML+testGateYAML, "nodes:\n  access: 127.0.0.1:19001\n")
+	path := accessConfigFile(t, testNodeYAML+testGateYAML, "nodes:\n  access-01: 127.0.0.1:19001\n")
 	config, err := loadAccessConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Node.Nodes["access"] != "127.0.0.1:19001" || config.Node.NodesFile != filepath.Join(filepath.Dir(path), "nodes.yaml") || config.Node.LogDirectory != filepath.Join(filepath.Dir(path), "logs") {
+	if config.Node.Nodes["access-01"] != "127.0.0.1:19001" || config.Node.NodesFile != filepath.Join(filepath.Dir(path), "nodes.yaml") || config.Node.LogDirectory != filepath.Join(filepath.Dir(path), "logs") {
 		t.Fatalf("shared host config lost: %+v", config.Node)
 	}
 	if config.Gate.Address != "127.0.0.1:7888" || config.Gate.MaxConnections != 4 || config.Gate.MaxFrameBytes != 256 || config.Gate.MaxOutboundQueueBytes != 1024 {
@@ -55,18 +55,22 @@ func TestAccessConfigKeepsGatePrivateAndResolvesSharedHost(t *testing.T) {
 	for name, node := range map[string]string{
 		"unknown gate field":   testNodeYAML + testGateYAML + "  unknown: true\n",
 		"duplicate gate field": testNodeYAML + testGateYAML + "  address: 127.0.0.1:7889\n",
-		"wrong host role":      strings.Replace(testNodeYAML, "listen: access", "listen: login", 1) + testGateYAML,
+		"wrong host role":      strings.Replace(testNodeYAML, "listen: access-01", "listen: login", 1) + testGateYAML,
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := accessConfigFile(t, node, "nodes:\n  access: 127.0.0.1:19001\n")
+			path := accessConfigFile(t, node, "nodes:\n  access-01: 127.0.0.1:19001\n")
 			if _, err := loadAccessConfig(path); err == nil {
 				t.Fatal("invalid config accepted")
 			}
 		})
 	}
 	example, err := loadAccessConfig(filepath.Join("..", "..", "configs", "access-01.yaml"))
-	if err != nil || len(example.Node.Nodes) != 5 || example.Gate.MaxConnections <= 0 {
+	if err != nil || len(example.Node.Nodes) != 6 || example.Gate.MaxConnections <= 0 {
 		t.Fatalf("example access config: %+v, err=%v", example, err)
+	}
+	second, err := loadAccessConfig(filepath.Join("..", "..", "configs", "access-02.yaml"))
+	if err != nil || second.Node.Listen != "access-02" || second.Node.Nodes[second.Node.Listen] == example.Node.Nodes[example.Node.Listen] || second.Gate.Address == example.Gate.Address {
+		t.Fatalf("second access must use independent ports: %+v, err=%v", second, err)
 	}
 }
 
@@ -103,7 +107,7 @@ func startAccess(t *testing.T) (string, string, func()) {
 	t.Helper()
 	clusterAddress, gateAddress := testAddresses(t)
 	gateYAML := strings.Replace(testGateYAML, "127.0.0.1:7888", gateAddress, 1)
-	path := accessConfigFile(t, testNodeYAML+gateYAML, "nodes:\n  access: "+clusterAddress+"\n")
+	path := accessConfigFile(t, testNodeYAML+gateYAML, "nodes:\n  access-01: "+clusterAddress+"\n")
 	config, err := loadAccessConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -114,8 +118,8 @@ func startAccess(t *testing.T) (string, string, func()) {
 	go func() {
 		done <- gsr.Run(ctx, gsr.Config{
 			Logging: logging.Config{Directory: config.Node.LogDirectory},
-			Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access": clusterAddress}},
-		}, &readyMain{Service: NewMain("access", config.Gate), ready: ready})
+			Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access-01": clusterAddress}},
+		}, &readyMain{Service: NewMain("access-01", config.Gate), ready: ready})
 	}()
 	stopped := false
 	stop := func() {
@@ -318,8 +322,8 @@ func TestAccessStartupFailureReleasesCluster(t *testing.T) {
 	defer cancel()
 	err = gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: t.TempDir()},
-		Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access": clusterAddress}},
-	}, NewMain("access", gateOptions{
+		Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access-01": clusterAddress}},
+	}, NewMain("access-01", gateOptions{
 		Address: occupied.Addr().String(), MaxConnections: 4, MaxFrameBytes: 256, MaxOutboundQueueBytes: 1024,
 	}))
 	if err == nil {
@@ -330,4 +334,27 @@ func TestAccessStartupFailureReleasesCluster(t *testing.T) {
 		t.Fatalf("Cluster not released after Gate startup failure: %v", err)
 	}
 	_ = listener.Close()
+}
+
+// TestAccessConfigSupportsIndependentRoutes 保护各接入实例使用自己的路由和端口，同时拒绝其它角色及缺失的节点路由。
+func TestAccessConfigSupportsIndependentRoutes(t *testing.T) {
+	for _, route := range []string{"access-01", "access-02", "access-03", "access-100"} {
+		node := strings.Replace(testNodeYAML, "listen: access-01", "listen: "+route, 1)
+		path := accessConfigFile(t, node+testGateYAML, "nodes:\n  "+route+": 127.0.0.1:29001\n")
+		config, err := loadAccessConfig(path)
+		if err != nil || config.Node.Listen != route || config.Node.Nodes[route] != "127.0.0.1:29001" {
+			t.Fatalf("独立接入路由 %s: %+v %v", route, config, err)
+		}
+	}
+	for _, route := range []string{"login", "access", "access-", "accessor", "access-1", "access-00", "access-001", "access-abc", "access-+1"} {
+		node := strings.Replace(testNodeYAML, "listen: access-01", "listen: "+route, 1)
+		path := accessConfigFile(t, node+testGateYAML, "nodes:\n  "+route+": 127.0.0.1:29001\n")
+		if _, err := loadAccessConfig(path); err == nil {
+			t.Fatalf("非法接入路由 %s 被接纳", route)
+		}
+	}
+	node := strings.Replace(testNodeYAML, "listen: access-01", "listen: access-02", 1)
+	if _, err := loadAccessConfig(accessConfigFile(t, node+testGateYAML, "nodes:\n  access-01: 127.0.0.1:29001\n")); err == nil {
+		t.Fatal("路由未配置时不应退回 access-01")
+	}
 }

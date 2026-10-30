@@ -1,0 +1,9 @@
+instance: access-02
+listen: access-02
+nodes_file: nodes.yaml
+log_directory: ../logs/access-02
+gate:
+  address: 127.0.0.1:7889
+  max_connections: 128
+  max_frame_bytes: 4096
+  max_outbound_queue_bytes: 65536

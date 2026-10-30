@@ -103,9 +103,12 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 | 2 | online：保存在线位置 | `./scripts/dev.sh run online` | Cluster `127.0.0.1:19003` |
 | 3 | settlement：余额校验和持久记账 | `./scripts/dev.sh run settlement` | Cluster `127.0.0.1:19005` |
 | 4 | mole：分组、目标和命中计算 | `./scripts/dev.sh run mole` | Cluster `127.0.0.1:19004` |
-| 5 | access：客户端接入和业务路由 | `./scripts/dev.sh run access` | Cluster `127.0.0.1:19001`；WS `127.0.0.1:7888` |
+| 5 | access-01：客户端接入和业务路由 | `./scripts/dev.sh run access` | Cluster `127.0.0.1:19001`；WS `127.0.0.1:7888` |
+| 6（可选） | access-02：第二个接入实例 | `./bin/access -config configs/access-02.yaml` | Cluster `127.0.0.1:19006`；WS `127.0.0.1:7889` |
 
 `run` 前台运行节点，优先读取 `configs/<节点>-01.local.yaml`，没有时读取对应 `.yaml`。mole 监听启动后会恢复 Redis 检查点，恢复成功才接纳玩家；全部服务正常运行后再启动客户端。日志在 `logs/<实例名>/`。
+
+两个 access 共用同一个二进制，第二个实例另开终端执行表中命令。所有节点的地址表仍只维护 `configs/nodes.yaml`；各实例的配置文件、`instance` 和 `listen` 统一使用 `access-01`、`access-02`、`access-03` 等编号名称，不保留 `access` 路由别名。每个实例使用独立的 Cluster、WS 端口和日志目录；修改地址表后，重启所有节点以加载新路由。
 
 ### 6. 启动多个客户端
 
@@ -137,13 +140,24 @@ unset demo_password
 
 客户端默认连接 `ws://127.0.0.1:7888/ws`，可用 `--url` 修改；`--hits` 为 1～100。每组最多 3 人、9 洞，每秒产生一个目标、有效 2 秒。有效命中每锤扣 100 银子，返 0 或 198，各 50%。
 
+已启动第二接入时，可在终端 B 运行以下命令，代替上面的终端 B 命令，让三个账号跨接入进入同一个游戏组：
+
+```shell
+read -rs 'demo_password?demo2 密码: '
+printf '%s\n' "$demo_password" | node typeclient/dist/index.js \
+  --url ws://127.0.0.1:7889/ws --username demo2 --hits 10
+unset demo_password
+```
+
+同账号可以从另一接入重新登录，服务端会替换旧连接；随后重新 Enter 获取快照和余额。CLI 不自动重连，跨接入替换、断线后重新登录和原 HitID 查询由下方自动验收覆盖。
+
 输出顺序为 `login → enter → action → hit → settlement`，完成指定锤数后输出 `leave` 并退出。`hit` 是即时内存结果，`settlement` 才是最终入账；期间还会收到 `snapshot` 和有差异时的 `balance_correction` 推送。
 
 同组玩家共享目标，同一目标只有一个玩家能命中。目标被抢走或过期时，CLI 输出 `miss`，刷新快照后继续寻找目标；`--hits` 只统计成功命中。每次等待/争抢预算默认 15 秒（`--timeout-ms` 更大时按该值，各次 RPC 另有超时）。超时、断线或其他错误仍停止，不自动重发结果未知的命中；保留输出中的 ActionID / HitID 供复查。
 
 ### 7. 停止演示
 
-先让客户端完成并看到 `settlement`，再在各服务终端按 Ctrl-C，顺序为 **access → mole → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中不保证崩溃恢复。
+先让客户端完成并看到 `settlement`，再在各服务终端按 Ctrl-C，顺序为 **两个 access → mole → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中不保证崩溃恢复。
 
 ## 开发与验证
 
@@ -156,11 +170,11 @@ unset demo_password
 
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 
-五个独立节点、单/三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建）：
+单/双接入的独立节点进程、单/三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建）：
 
 ```shell
 GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
-  -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
+  -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
 ```
 
 用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。

@@ -65,19 +65,30 @@ func TestLoadNodeConfigRejectsUnsafeOrAmbiguousInput(t *testing.T) {
 	}
 }
 
-// TestExampleHostConfigsShareOneTable 保护纯宿主配置的节点示例共用地址表；access/login 私有字段由节点测试负责。
+// TestExampleHostConfigsShareOneTable 保护各实例的宿主字段共用地址表；私有字段的严格解析由各节点测试负责。
 func TestExampleHostConfigsShareOneTable(t *testing.T) {
-	var table string
-	for _, role := range []string{"online", "mole", "settlement"} {
-		cfg, err := LoadNodeConfig(filepath.Join("..", "..", "configs", role+"-01.yaml"), role)
+	table, err := filepath.Abs(filepath.Join("..", "..", "configs", "nodes.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for instance, route := range map[string]string{
+		"access-01": "access-01", "access-02": "access-02", "login-01": "login",
+		"online-01": "online", "mole-01": "mole", "settlement-01": "settlement",
+	} {
+		var config struct {
+			Node    NodeConfig     `yaml:",inline"`
+			Private map[string]any `yaml:",inline"`
+		}
+		path := filepath.Join("..", "..", "configs", instance+".yaml")
+		if err := ReadYAMLFile(path, &config); err != nil {
+			t.Fatalf("%s: %v", instance, err)
+		}
+		cfg, err := ResolveNodeConfig(config.Node, path, route)
 		if err != nil {
-			t.Fatalf("%s: %v", role, err)
+			t.Fatalf("%s: %v", instance, err)
 		}
-		if table == "" {
-			table = cfg.NodesFile
-		}
-		if cfg.NodesFile != table || len(cfg.Nodes) != 5 {
-			t.Fatal("example config uses another table", role)
+		if cfg.NodesFile != table || len(cfg.Nodes) != 6 || cfg.Nodes["access-02"] != "127.0.0.1:19006" {
+			t.Fatal("example config uses another table", instance)
 		}
 	}
 }

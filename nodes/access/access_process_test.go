@@ -109,12 +109,12 @@ func startAccessProcess(t *testing.T, binary string, arguments []string, address
 
 // TestAccessClientProcessesLiveMySQL 保护单客户端通过五个独立进程完成认证、即时命中和真实入账。
 func TestAccessClientProcessesLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 1)
+	runAccessClientsLiveMySQL(t, 1, 1)
 }
 
 // TestAccessThreeClientsLiveMySQL 保护三个不同账号并发进入同组、共享目标且各完成三次入账，余额/版本与逐锤结果一致。
 func TestAccessThreeClientsLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 3)
+	runAccessClientsLiveMySQL(t, 3, 1)
 }
 
 type accessDemoPlayer struct {
@@ -124,7 +124,7 @@ type accessDemoPlayer struct {
 	output             bytes.Buffer
 }
 
-func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
+func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	t.Helper()
 	if os.Getenv("GSRDEMO_ACCESS_PROCESSES") != "1" {
 		t.Skip("build all nodes/typeclient and set GSRDEMO_ACCESS_PROCESSES=1 for dedicated local databases")
@@ -207,12 +207,20 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
 	})
 	directory := t.TempDir()
 	routes := make(map[string]string)
-	for _, node := range []string{"access", "login", "online", "mole", "settlement"} {
+	nodeNames := []string{"login", "online", "settlement", "mole", "access-01"}
+	if accessCount == 2 {
+		nodeNames = append(nodeNames, "access-02")
+	}
+	for _, node := range nodeNames {
 		routes[node] = freeAccessAddress(t)
 	}
-	gateAddress, redisAddress := freeAccessAddress(t), freeAccessAddress(t)
+	gateAddresses := []string{freeAccessAddress(t)}
+	if accessCount == 2 {
+		gateAddresses = append(gateAddresses, freeAccessAddress(t))
+	}
+	gateAddress, redisAddress := gateAddresses[0], freeAccessAddress(t)
 	nodes := "nodes:\n"
-	for _, node := range []string{"access", "login", "online", "mole", "settlement"} {
+	for _, node := range nodeNames {
 		nodes += "  " + node + ": " + routes[node] + "\n"
 	}
 	if err := os.WriteFile(filepath.Join(directory, "nodes.yaml"), []byte(nodes), 0600); err != nil {
@@ -224,8 +232,15 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
 	}
 	_, redisPort, _ := net.SplitHostPort(redisAddress)
 	startAccessProcess(t, redisBinary, []string{"--bind", "127.0.0.1", "--port", redisPort, "--save", "", "--appendonly", "yes", "--appendfsync", "always", "--dir", t.TempDir()}, redisAddress)
-	for _, node := range []string{"login", "online", "settlement", "mole", "access"} {
-		body := fmt.Sprintf("instance: %s-e2e\nlisten: %s\nnodes_file: nodes.yaml\nlog_directory: %s\n", node, node, strconv.Quote(filepath.Join(directory, "logs-"+node)))
+	for _, node := range nodeNames {
+		role, gate := node, gateAddress
+		if strings.HasPrefix(node, "access-") {
+			role = "access"
+		}
+		if node == "access-02" {
+			gate = gateAddresses[1]
+		}
+		body := fmt.Sprintf("instance: %s\nlisten: %s\nnodes_file: nodes.yaml\nlog_directory: %s\n", node, node, strconv.Quote(filepath.Join(directory, "logs-"+node)))
 		if node == "login" {
 			body += "mysql_dsn: " + strconv.Quote(loginDSN) + "\n"
 		}
@@ -235,14 +250,14 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
 		if node == "mole" {
 			body += "redis_url: redis://" + redisAddress + "/0\nredis_key: gsrdemo:test:access\n"
 		}
-		if node == "access" {
-			body += fmt.Sprintf("gate:\n  address: %s\n  max_connections: 8\n  max_frame_bytes: 4096\n  max_outbound_queue_bytes: 65536\n", gateAddress)
+		if role == "access" {
+			body += fmt.Sprintf("gate:\n  address: %s\n  max_connections: 8\n  max_frame_bytes: 4096\n  max_outbound_queue_bytes: 65536\n", gate)
 		}
 		path := filepath.Join(directory, node+".yaml")
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
-		binary, err := filepath.Abs("../../bin/" + node)
+		binary, err := filepath.Abs("../../bin/" + role)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,8 +276,8 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
 			}
 		}
 		address := routes[node]
-		if node == "access" {
-			address = gateAddress
+		if role == "access" {
+			address = gate
 		}
 		startAccessProcess(t, binary, []string{"-config", path}, address)
 	}
@@ -278,7 +293,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
 	// 全部 Start 后再 Wait，确保是并发客户端，而不是逐个跑完的单客户端样本。
 	for index := range players {
 		player := &players[index]
-		player.command = exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", player.username, "--hits", "3")
+		player.command = exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddresses[index%accessCount]+"/ws", "--username", player.username, "--hits", "3")
 		player.command.Stdin = strings.NewReader(player.password + "\n")
 		player.command.Stdout, player.command.Stderr = &player.output, &player.output
 		if err := player.command.Start(); err != nil {
@@ -397,5 +412,8 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
 	if playerCount == 3 && !sawThreeMembers {
 		t.Error("no snapshot showed all three members")
 	}
-	t.Logf("%d 个并发 CLI，共 %d 个唯一 HitID、%d 次目标失效后继续", playerCount, len(seenHits), totalMisses)
+	t.Logf("%d 个接入节点，%d 个并发 CLI，共 %d 个唯一 HitID、%d 次目标失效后继续", accessCount, playerCount, len(seenHits), totalMisses)
+	if accessCount == 2 {
+		verifyAccessReconnect(t, ctx, routes, gateAddresses, &players[0], settlementDB, &operationIDs)
+	}
 }

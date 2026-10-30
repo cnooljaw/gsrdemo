@@ -1,5 +1,5 @@
 instance: access-01
-listen: access
+listen: access-01
 nodes_file: nodes.yaml
 log_directory: ../logs/access-01
 gate:

@@ -171,7 +171,7 @@ func startAccessBusiness(t *testing.T, scenarios ...string) (string, string, <-c
 	backendDone := make(chan error, 1)
 	backendLogs := t.TempDir()
 	go func() {
-		backendDone <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: backendLogs}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"backend": "127.0.0.1:0", "access": accessAddress}}}, &accessFixtureMain{ready: ready, hits: hits, scenario: scenario})
+		backendDone <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: backendLogs}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"backend": "127.0.0.1:0", "access-01": accessAddress}}}, &accessFixtureMain{ready: ready, hits: hits, scenario: scenario})
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -188,12 +188,12 @@ func startAccessBusiness(t *testing.T, scenarios ...string) (string, string, <-c
 	case <-time.After(3 * time.Second):
 		t.Fatal("backend startup timed out")
 	}
-	routes := map[cluster.NodeID]string{"access": accessAddress, "login": backend, "online": backend, "mole": backend}
+	routes := map[cluster.NodeID]string{"access-01": accessAddress, "login": backend, "online": backend, "mole": backend}
 	accessReady, accessDone := make(chan error, 1), make(chan error, 1)
 	accessCtx, stopAccess := context.WithCancel(context.Background())
 	accessLogs := t.TempDir()
 	go func() {
-		accessDone <- gsr.Run(accessCtx, gsr.Config{Logging: logging.Config{Directory: accessLogs}, Cluster: gsr.ClusterConfig{Nodes: routes}}, &readyMain{Service: NewMain("access", gateOptions{Address: gateAddress, MaxConnections: 8, MaxFrameBytes: 4096, MaxOutboundQueueBytes: 65536}), ready: accessReady})
+		accessDone <- gsr.Run(accessCtx, gsr.Config{Logging: logging.Config{Directory: accessLogs}, Cluster: gsr.ClusterConfig{Nodes: routes}}, &readyMain{Service: NewMain("access-01", gateOptions{Address: gateAddress, MaxConnections: 8, MaxFrameBytes: 4096, MaxOutboundQueueBytes: 65536}), ready: accessReady})
 	}()
 	t.Cleanup(func() {
 		stopAccess()
@@ -354,7 +354,7 @@ func TestAccessReplacedConnectionCannotUnbindNewLogin(t *testing.T) {
 		t.Fatal("旧连接未关闭")
 	}
 	now := accessFixtureRPC(t, backend, 99).(map[string]any)
-	if now["login_id"] == previous["login_id"] || now["access_node"] != "access" {
+	if now["login_id"] == previous["login_id"] || now["access_node"] != "access-01" {
 		t.Fatal(fmt.Sprint(now))
 	}
 	_ = old.Close()

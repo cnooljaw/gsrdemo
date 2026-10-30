@@ -35,7 +35,7 @@
 
 access、login、online、mole/settlement 内部实现已完成；2026-10-30 已确认并实施 access/TS 最小业务接入，见第 3 节。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。业务契约见 [PROTOCOL.md](PROTOCOL.md)，按使用范围决定是否需要 .proto。
 
-完成五个节点后再联调打地鼠全流程。三人斗地主、access 多实例和第三方登录分别先确认方案，不提前开工。
+打地鼠全流程、三客户端和 access 双实例接入已完成联调，见第 3 节。三人斗地主和第三方登录仍需分别确认方案。
 
 2026-10-30 优先级调整：Demo 先保持简单，下一阶段优先完成 TypeScript 客户端 → access 登录 → Online 绑定 → 进入地鼠 → 即时命中反馈与结算确认的业务闭环，具体接入方案已随后确认并实施，见第 3 节。Login 保持单个认证 Service，多认证入口、小队列背压及实例监督恢复暂缓，仅作为后续优化备忘；其他非必要的隔离扩展也不抢在闭环之前实施。已完成的 Mole/Settlement 隔离保留。
 
@@ -59,7 +59,7 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 - Command 100 接收现有 Mole 推送，先核对 LoginID，快照另核对当前组，再经 protocolDispatcher.Push 写回。客户端请求与推送使用 nodes/access/proto/demo/v1/game.proto，内部 Cluster 继续传规范 Go 参数；节点不导入彼此实现。客户端身份/节点/路由均不接受外部指定。
 - 协议生成器使用发布 GSR v1.0.2 的 schema/目录插件、protobuf Go v1.36.1；TS 使用与该示例一致的 protobuf/protoc-gen-es 2.15.0、Buf 1.73.0、Node 类型 22.20.3。标准库不提供 Protobuf；WebSocket、X25519/MAC 和 CLI I/O 使用 Node 内建功能。Go/TS 生成产物入库，生成操作合并进 scripts/dev.sh generate access，仅写本仓库。
 - TS CLI 从 stdin 读取密码，完成 MAC 握手、登录、进入、选目标、命中即时显示、按原 HitID 轮询入账、离开；一次演示 1～100 锤。64 位值保持 bigint，显示余额采用绝对值及 revision 收敛，缺省确认余额/版本不覆盖已知值，重入以新快照重建基线。超时保留 ActionID 日志并停止，不自动重发；没有自动重连或图形 UI。
-- 未修改 Login/Online/Mole/Settlement 的业务实现、表结构或配置；账号与钱包仍走显式管理入口。多 access 部署和其它节点恢复后的重新绑定留待后续单独确认；不扩展 Login 隔离或通用监督机制。
+- 未修改 Login/Online/Mole/Settlement 的业务实现、表结构或配置；账号与钱包仍走显式管理入口。多 access 部署随后在第 3.4 节实施，其它节点恢复后的重新绑定另行确认；不扩展 Login 隔离或通用监督机制。
 
 本轮验证：新增默认用例通过真实 MAC WebSocket + Cluster TCP 验证错误密码不绑定、Online 绑定失败关闭连接、同连接重复登录拒绝、未登录禁止操作、服务端身份转发、原 ActionID 不改写、拒绝重试无伪造余额、旧 LoginID 推送被忽略、旧连接退出不误删新绑定。TS 单测覆盖固定 MAC 向量、64 位精度、推送/响应交错、旧修订与确认版本、超时迟到和关闭等待。五个独立节点进程 + TS CLI + MySQL + 临时 AOF Redis 已完成 3 次命中/3 次入账：本次扣 300、返 198、初始 10000 → 余额 9898、版本 4；样本数据和进程均由用例独占并清理。统一 check（Go test/vet、TS 编译）通过，TS 检查入口现包含 7 项单测；access 最终全量 race（启用五节点真实 MySQL/TS 用例）和 vet 通过，全部节点与 TS 构建通过。该结果不作为容量或入账延迟目标验收。
 
@@ -68,6 +68,14 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 只在 access 将 Domain 错误 mole.target_unavailable 映射为 HitResponse.rejection=target_unavailable，无 HitID、奖励或余额；该错误由 Mole 在接纳记账前返回。CLI 对此输出 miss、刷新快照、稍作随机间隔后继续选目标，只有成功命中才计入 --hits；每次成功前等待/争抢最多 max(15 秒, --timeout-ms)，拒绝不重置预算。超时、断线、繁忙及其它错误仍停止并保留原 ActionID，不将未知结果当成未扣款，不增加通用重试器、Service 或权威状态。
 
 真实五节点 + MySQL/AOF Redis 验证：三个不同账号的独立 CLI 同时运行，进入同一个组，快照出现三名成员；各完成 3 次命中/3 次入账，共 9 个唯一 HitID，逐人余额与版本（均为 4）一致。该次自然并发未出现目标失效，不把它视为拒绝分支验证。额外确定性用例运行真实 CLI，通过 TCP 测试替身返回一次目标失效后成功：只输出一次 miss，刷新到新目标、使用新 ActionID 后入账；超时和繁忙各仅发一次命中后退出。默认接入用例另保护错误类别不匹配时不转换为明确拒绝。统一 check（全部 Go test/vet、TS 7 项单测）及 access 全量 race（启用单/三客户端真实进程、真实 MySQL 和 CLI 失败边界用例）通过。未修改其它节点业务或表结构，保留原账号/钱包初始化流程。
+
+### 3.4 双 access 与跨接入重连（2026-10-30 已确认并实施）
+
+两个 access 共用二进制与现有 Agent/LoginID/Online 协议，不增加 Service 或业务状态。第一实例为 access-01（Cluster 19001 / WS 7888），第二实例为 access-02（19006 / 7889），日志目录独立；路由集中在 configs/nodes.yaml。配置文件、instance 和 listen 统一按 access-01、access-02、access-03 编号；listen 必须是正整数编号（不足两位补零），且有对应地址表项，不保留 access 别名；其它角色校验不放宽。发布 GSR v1.0.2 的 Cluster 调用教程明确区分 Node 路由名和 Service 名称，推送仍通过 Node + AgentName 定位连接。
+
+真实六节点进程 + MySQL/临时 AOF Redis 验证通过：三个独立 TS CLI 分布在两个接入、进入同组，共 9 个唯一 HitID、9 次入账，逐人余额/版本一致；统一编号后的复测出现 3 次目标失效，CLI 继续完成。另用 MAC WebSocket 客户端验证同账号 access-01 → access-02 → access-01：UserID 不变、LoginID 更新，替换后旧连接关闭；主动注入旧 LoginID 迟到解绑返回 false，新绑定保留；新接入收到组快照推送；原 HitID 在两次切换后查询三次，仅一条数据库操作，钱包版本由 4 增至 5。CLI 仍不自动重连，不扩展节点崩溃恢复或容量承诺。
+
+统一编号后，统一 check（全部 Go test/vet、TS 编译与 7 项单测）及单/三客户端、双接入真实进程用例复测通过；此前 access 包全量 race 亦通过，子节点使用常规构建。共享配置测试同步修正为只核对宿主字段和地址表，各节点保留私有字段的严格解析。
 
 ## 4. GSR 与参考边界
 
@@ -134,7 +142,7 @@ Online 实现后，先验证 12,000 条记录下的持续混合调用和上述�
 ## 7. online 第一步（已确认）
 
 - 一个 OnlineService 独占 `map[uint64]onlineLocation`，按 UserID 保存 LoginID、AccessNode、AgentName。仅提供 Bind/Lookup/Unbind，不保存额外在线布尔值、房间状态、历史登录或墓碑，不访问 MySQL/Redis，不启动业务 goroutine。
-- AccessNode 与 AgentName 共同定位连接，支持多个 access 使用相同 Agent 名称。未来各 access 使用独立 Cluster 路由名；当前 access 的多实例配置、客户端认证与路由接线仍是后续范围，不在本轮修改 common、access 或 TypeScript。
+- AccessNode 与 AgentName 共同定位连接，支持多个 access 使用相同 Agent 名称。各 access 使用独立 Cluster 路由名；双实例配置、客户端认证和路由接线的当前结果见第 3.4 节，此处保留 Online 自身的边界。
 - 新 LoginID 替换当前绑定，返回旧位置；相同当前 LoginID 只接受完全相同的地址。Unbind 仅匹配 LoginID，不按接入节点批量清理。命令使用规范标量参数，结果为独立快照或 nil，具体错误与超时/重试约束见 [PROTOCOL.md](PROTOCOL.md#online-位置目录)。
 - 沿用 GSR v1.0.2 的 Cluster 教程和双节点示例：MainService 创建并命名 OnlineService，OpenCluster 后退出；Runtime 管理 Service，Run 管理节点。Online 不同步调用其他节点；重启清空目录，后续接入重新绑定，不承诺异常时目录实时准确。
 - 代码与命令定义放 onlineservice.go；没有真实业务消费者时不提前提取 common 契约。普通测试覆盖跨节点替换、同 ID 冲突、独立快照、非法输入、两接入节点竞争、旧连接迟到清理、真实 TCP 及重启空目录。
@@ -214,7 +222,7 @@ flowchart LR
 
 源码按职责命名：moleservice.go、moleentryservice.go、molepulse.go、attackservice.go、attackservice_game.go、moleaccountingservice.go、molesubmissionservice.go、moleaccountingservice_wire.go、molesubmissionservice_redis.go、molepool.go 及对应测试，沿用 main.go/main_service.go。mole 不含 SQL 适配、schema.sql、MySQL 配置或驱动依赖；此前初始化的源端库不自动删除。
 
-仅本节点使用的命令和 DTO 留在具体 Service 文件中；本地值对象不走远程 ValueCodec，远程契约使用规范 uint64/int64/map/列表，见 PROTOCOL.md。不新增通用 FSM、公共 GameService 或内部 Protobuf。TypeScript 最小接入已完成；短 ID、日期表、归档和 access 多实例均作为后续阶段，不能抢在 Demo 业务闭环之前扩展。
+仅本节点使用的命令和 DTO 留在具体 Service 文件中；本地值对象不走远程 ValueCodec，远程契约使用规范 uint64/int64/map/列表，见 PROTOCOL.md。不新增通用 FSM、公共 GameService 或内部 Protobuf。TypeScript 最小接入和 access 双实例已完成；短 ID、日期表和归档仍作为后续阶段。
 
 ### 8.6 验证与后续验收
 

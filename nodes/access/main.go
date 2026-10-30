@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/cnooljaw/gsr"
@@ -35,7 +37,12 @@ func loadAccessConfig(path string) (accessConfig, error) {
 	if err := model.ReadYAMLFile(path, &config); err != nil {
 		return config, err
 	}
-	node, err := model.ResolveNodeConfig(config.Node, path, "access")
+	route := config.Node.Listen
+	instance, err := strconv.Atoi(strings.TrimPrefix(route, "access-"))
+	if err != nil || instance < 1 || route != fmt.Sprintf("access-%02d", instance) {
+		return config, errors.New("listen must be numbered access-01, access-02, ...")
+	}
+	node, err := model.ResolveNodeConfig(config.Node, path, route)
 	if err != nil {
 		return config, err
 	}
