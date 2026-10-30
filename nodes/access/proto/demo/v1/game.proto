@@ -100,6 +100,8 @@ message HitRequest {
 message HitResponse {
   Hit hit = 1;
   Balance silver = 2;
+  // target_unavailable 表示目标已失效且未记账，此时不携带 hit/silver。
+  string rejection = 3;
 }
 message SnapshotRequest {}
 message SnapshotResponse {

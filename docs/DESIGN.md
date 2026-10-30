@@ -63,6 +63,12 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 本轮验证：新增默认用例通过真实 MAC WebSocket + Cluster TCP 验证错误密码不绑定、Online 绑定失败关闭连接、同连接重复登录拒绝、未登录禁止操作、服务端身份转发、原 ActionID 不改写、拒绝重试无伪造余额、旧 LoginID 推送被忽略、旧连接退出不误删新绑定。TS 单测覆盖固定 MAC 向量、64 位精度、推送/响应交错、旧修订与确认版本、超时迟到和关闭等待。五个独立节点进程 + TS CLI + MySQL + 临时 AOF Redis 已完成 3 次命中/3 次入账：本次扣 300、返 198、初始 10000 → 余额 9898、版本 4；样本数据和进程均由用例独占并清理。统一 check（Go test/vet、TS 编译）通过，TS 检查入口现包含 7 项单测；access 最终全量 race（启用五节点真实 MySQL/TS 用例）和 vet 通过，全部节点与 TS 构建通过。该结果不作为容量或入账延迟目标验收。
 
+### 3.3 三客户端演示（2026-10-30 已确认）
+
+只在 access 将 Domain 错误 mole.target_unavailable 映射为 HitResponse.rejection=target_unavailable，无 HitID、奖励或余额；该错误由 Mole 在接纳记账前返回。CLI 对此输出 miss、刷新快照、稍作随机间隔后继续选目标，只有成功命中才计入 --hits；每次成功前等待/争抢最多 max(15 秒, --timeout-ms)，拒绝不重置预算。超时、断线、繁忙及其它错误仍停止并保留原 ActionID，不将未知结果当成未扣款，不增加通用重试器、Service 或权威状态。
+
+真实五节点 + MySQL/AOF Redis 验证：三个不同账号的独立 CLI 同时运行，进入同一个组，快照出现三名成员；各完成 3 次命中/3 次入账，共 9 个唯一 HitID，逐人余额与版本（均为 4）一致。该次自然并发未出现目标失效，不把它视为拒绝分支验证。额外确定性用例运行真实 CLI，通过 TCP 测试替身返回一次目标失效后成功：只输出一次 miss，刷新到新目标、使用新 ActionID 后入账；超时和繁忙各仅发一次命中后退出。默认接入用例另保护错误类别不匹配时不转换为明确拒绝。统一 check（全部 Go test/vet、TS 7 项单测）及 access 全量 race（启用单/三客户端真实进程、真实 MySQL 和 CLI 失败边界用例）通过。未修改其它节点业务或表结构，保留原账号/钱包初始化流程。
+
 ## 4. GSR 与参考边界
 
 - 节点固定 GSR v1.0.2，tag commit 为 6710a766ca40c06a068e52c52456b39f8b3fe78e；节点仅对本仓库 common 使用本地 replace。

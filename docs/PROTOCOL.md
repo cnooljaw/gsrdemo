@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1001 / 1002 Login | username、password | user_id；一条连接成功登录一次，换账号须新建连接 |
 | 1011 / 1012 Enter | 空 | 地鼠快照、silver 余额基线 |
-| 1021 / 1022 Hit | action_id、spawn_seq、hole | hit（含 accepted/rejected）、silver；已拒绝重试结果可无 silver，不能显示奖励 |
+| 1021 / 1022 Hit | action_id、spawn_seq、hole | hit（含 accepted/rejected）、silver；目标失效时返回 rejection=target_unavailable 且无 hit/silver；已拒绝重试结果可无 silver，不能显示奖励 |
 | 1031 / 1032 Snapshot | 空 | 当前组快照 |
 | 1041 / 1042 Leave | 空 | left；成功后不能命中，可继续查询原操作 |
 | 1051 / 1052 Operation | hit_id | found、hit_id、status、reason；只能查询当前用户参与的原操作 |
@@ -21,7 +21,9 @@ Agent 仅保存当前身份和 entry/attack 路由；每条连接随机生成私
 
 未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。远端推送仍为 Command 100，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
 
-错误沿用框架 ErrorResponse（9001），目前客户端只收到框架通用错误类别和安全文案，内部 Domain Code 留在服务端；不另加一套客户端错误框架。断线清理和进程停止不是持久结算完成证明。
+仅 `mole.target_unavailable`（Domain 类别）转换为 HitResponse.rejection=target_unavailable，表示该次目标检查已拒绝且尚未记账；客户端可以输出 miss、刷新快照后用新 ActionID 操作新目标，不累计命中或修改余额。CLI 每次成功命中前的争抢预算为 max(15 秒, --timeout-ms)，明确拒绝不延长该预算。
+
+其它错误沿用框架 ErrorResponse（9001），目前客户端只收到框架通用错误类别和安全文案，内部 Domain Code 留在服务端；不另加一套客户端错误框架。断线清理和进程停止不是持久结算完成证明。
 
 ## login 认证
 

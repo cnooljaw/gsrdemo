@@ -6,7 +6,9 @@
 
 ## 运行 Demo
 
-以下命令均在 **gsrdemo 根目录**执行；密码输入示例使用 **zsh**。首次完成第 1～4 步；以后确认 MySQL、Redis 已运行，再从第 5 步启动。
+打开系统终端（macOS Terminal、iTerm 或编辑器集成终端均可），使用 **zsh**，先用 `cd` 进入 **gsrdemo 根目录**。下面标为 **Shell** 的命令都在该终端执行，包括 `go`、`node`、`npm` 命令；标为 **SQL** 的语句在登录 MySQL 后的 `mysql>` 控制台执行。
+
+首次完成第 1～4 步；以后确认 MySQL、Redis 已运行，再从第 5 步启动。
 
 ### 1. 准备环境
 
@@ -14,7 +16,7 @@
 
 在一个单独终端启动演示用 Redis；已有符合配置的 Redis 时跳过：
 
-```sh
+```shell
 mkdir -p .cache/redis
 LC_ALL=C redis-server --bind 127.0.0.1 --port 6379 \
   --dir "$PWD/.cache/redis" --appendonly yes --appendfsync always \
@@ -23,7 +25,7 @@ LC_ALL=C redis-server --bind 127.0.0.1 --port 6379 \
 
 保持该终端运行。另开终端安装客户端依赖并构建全部节点：
 
-```sh
+```shell
 npm --prefix typeclient ci
 ./scripts/dev.sh build
 ```
@@ -40,7 +42,7 @@ CREATE USER IF NOT EXISTS 'gsr_demo'@'127.0.0.1' IDENTIFIED BY '替换为本机�
 
 执行 `exit` 退出 MySQL，再在终端执行建库建表脚本，脚本同时授予业务账号所需权限：
 
-```sh
+```shell
 mysql -u root -p < nodes/login/schema.sql
 mysql -u root -p < nodes/settlement/schema.sql
 cp -n configs/login-01.yaml configs/login-01.local.yaml
@@ -61,9 +63,12 @@ chmod 600 configs/login-01.local.yaml configs/settlement-01.local.yaml configs/m
 
 ### 3. 创建三个演示账号并初始化银子
 
-多客户端使用不同账号：`demo1`、`demo2`、`demo3`。下面为三个账号设置同一个演示密码，并将每个新账号返回的真实 UserID 用于钱包初始化：
+**执行位置：终端中的 zsh，当前目录为 gsrdemo 根目录。** 完成前两步后，将下面整块命令保留换行粘贴到终端执行；看到密码提示后输入密码并按回车，输入内容不会显示。
 
-```sh
+这段 Shell 会依次调用已经构建的 `bin/login` 和 `bin/settlement`，创建 `demo1`、`demo2`、`demo3`，设置同一个演示密码，并使用返回的真实 UserID 初始化各自的钱包。
+
+```shell
+# Shell（zsh），在 gsrdemo 根目录的终端执行
 read -rs 'demo_password?设置三个账号的演示密码: '
 for demo_user in demo1 demo2 demo3; do
   account_result=$(printf '%s\n' "$demo_password" | ./bin/login \
@@ -82,7 +87,7 @@ unset demo_password
 
 MySQL、Redis 可用后，在 mole 尚未启动时执行：
 
-```sh
+```shell
 ./bin/mole -config configs/mole-01.local.yaml -init-accounting
 ```
 
@@ -108,7 +113,7 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 
 终端 A：
 
-```sh
+```shell
 read -rs 'demo_password?demo1 密码: '
 printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo1 --hits 10
 unset demo_password
@@ -116,7 +121,7 @@ unset demo_password
 
 终端 B：
 
-```sh
+```shell
 read -rs 'demo_password?demo2 密码: '
 printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo2 --hits 10
 unset demo_password
@@ -124,7 +129,7 @@ unset demo_password
 
 终端 C：
 
-```sh
+```shell
 read -rs 'demo_password?demo3 密码: '
 printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo3 --hits 10
 unset demo_password
@@ -134,7 +139,7 @@ unset demo_password
 
 输出顺序为 `login → enter → action → hit → settlement`，完成指定锤数后输出 `leave` 并退出。`hit` 是即时内存结果，`settlement` 才是最终入账；期间还会收到 `snapshot` 和有差异时的 `balance_correction` 推送。
 
-同组玩家共享目标，同一目标只有一个玩家能命中。当前 CLI 会自动选择目标，竞争失败或请求报错时退出，可重新运行进入；它不自动重发结果未知的命中。需要复查时保留输出中的 ActionID / HitID。
+同组玩家共享目标，同一目标只有一个玩家能命中。目标被抢走或过期时，CLI 输出 `miss`，刷新快照后继续寻找目标；`--hits` 只统计成功命中。每次等待/争抢预算默认 15 秒（`--timeout-ms` 更大时按该值，各次 RPC 另有超时）。超时、断线或其他错误仍停止，不自动重发结果未知的命中；保留输出中的 ActionID / HitID 供复查。
 
 ### 7. 停止演示
 
@@ -151,11 +156,11 @@ unset demo_password
 
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 
-五个独立节点、TS 客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建）：
+五个独立节点、单/三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建）：
 
-```sh
+```shell
 GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
-  -run '^TestAccessClientProcessesLiveMySQL$' -v -timeout=1m
+  -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
 ```
 
 用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。

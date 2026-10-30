@@ -1,12 +1,16 @@
 package main
 
 import (
+	"errors"
+
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
+
+var errMoleTargetUnavailable = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.target_unavailable", "target is unavailable")
 
 const (
 	moleResolveEntryCommand runtime.CommandID = 1
@@ -70,6 +74,10 @@ func (agent *agent) onHit(self gsr.CommandContext, reply protocol.Context, reque
 	// 不换 ActionID、不自动重试；未知结果由客户端按原身份查询/重试。
 	value, err := agent.call(self, "mole", agent.attackName, moleHitCommand, agent.userID, agent.loginID,
 		request.GetActionId(), request.GetSpawnSeq(), request.GetHole())
+	if errors.Is(err, errMoleTargetUnavailable) {
+		// 该拒绝发生在 Mole 接纳记账之前；不伪造 HitID、奖励或余额。
+		return reply.Response(uint32(demopb.MsgId_S2C_HIT), &demopb.HitResponse{Rejection: "target_unavailable"})
+	}
 	if err != nil {
 		return err
 	}

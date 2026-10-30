@@ -48,11 +48,13 @@ async function run(): Promise<void> {
     if (!entry.snapshot || !entry.silver) throw new Error("missing entry snapshot/balance");
     client.enter(entry.snapshot, entry.silver);
     print("enter", entry);
-    for (let hitIndex = 0; hitIndex < config.hits; hitIndex++) {
-      const targetDeadline = Date.now() + config.timeout;
+    // 三人共享每秒一个目标，给每次成功命中留有界的争抢时间；失败不延长预算。
+    let targetDeadline = Date.now() + Math.max(15_000, config.timeout);
+    for (let hitIndex = 0; hitIndex < config.hits;) {
+      if (Date.now() >= targetDeadline) throw new Error("no hit accepted within the target wait budget");
       let target = client.snapshot?.targets.find((item) => !item.claimed && item.deadlineMs > BigInt(Date.now() + 50));
       while (!target && Date.now() < targetDeadline) {
-        await delay(100);
+        await delay(100 + Math.floor(Math.random() * 100));
         const view = await client.request(MsgId.C2S_SNAPSHOT, toBinary(SnapshotRequestSchema, create(SnapshotRequestSchema)), MsgId.S2C_SNAPSHOT, SnapshotResponseSchema);
         client.snapshot = view.snapshot;
         target = view.snapshot?.targets.find((item) => !item.claimed && item.deadlineMs > BigInt(Date.now() + 50));
@@ -63,6 +65,15 @@ async function run(): Promise<void> {
       const hit = await client.request(MsgId.C2S_HIT,
         toBinary(HitRequestSchema, create(HitRequestSchema, { actionId: actionID, spawnSeq: target.spawnSeq, hole: target.hole })),
         MsgId.S2C_HIT, HitResponseSchema);
+      if (hit.rejection === "target_unavailable" && !hit.hit && !hit.silver) {
+        print("miss", { actionId: actionID, reason: hit.rejection });
+        // 已明确未记账：刷新目标后发起新的动作，不能把这个策略用于超时/断线。
+        await delay(100 + Math.floor(Math.random() * 100));
+        const view = await client.request(MsgId.C2S_SNAPSHOT, toBinary(SnapshotRequestSchema, create(SnapshotRequestSchema)), MsgId.S2C_SNAPSHOT, SnapshotResponseSchema);
+        client.snapshot = view.snapshot;
+        continue;
+      }
+      if (hit.rejection) throw new Error(`unexpected hit rejection: ${hit.rejection}`);
       if (!hit.hit) throw new Error("missing hit");
       if (hit.hit.status !== "accepted") {
         print("hit", hit);
@@ -88,6 +99,8 @@ async function run(): Promise<void> {
       if (!found) throw new Error(`settlement not confirmed; query original HitID ${hit.hit.hitId}`);
       const view = await client.request(MsgId.C2S_SNAPSHOT, toBinary(SnapshotRequestSchema, create(SnapshotRequestSchema)), MsgId.S2C_SNAPSHOT, SnapshotResponseSchema);
       client.snapshot = view.snapshot;
+      hitIndex++;
+      targetDeadline = Date.now() + Math.max(15_000, config.timeout);
     }
     const leave = await client.request(MsgId.C2S_LEAVE, toBinary(LeaveRequestSchema, create(LeaveRequestSchema)), MsgId.S2C_LEAVE, LeaveResponseSchema);
     print("leave", leave);

@@ -5,6 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +28,8 @@ type accessBackendFixture struct {
 	current  map[string]any
 	hits     chan<- []any
 	failBind bool
+	scenario string
+	attempts int
 }
 
 var _ gsr.Service = (*accessBackendFixture)(nil)
@@ -69,6 +75,9 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 	case "mole":
 		return map[string]any{"entry_name": "entry"}, nil
 	case "entry":
+		if command == 3 {
+			return map[string]any{"operation_id": args[1], "status": "committed", "reason": ""}, nil
+		}
 		snapshot := fixtureSnapshot()
 		snapshot["silver"] = map[string]any{"balance": int64(1000), "available": int64(1000), "revision": uint64(1)}
 		return snapshot, nil
@@ -76,12 +85,35 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 		switch command {
 		case 2:
 			service.hits <- append([]any(nil), args...)
+			service.attempts++
+			if service.attempts == 1 {
+				switch service.scenario {
+				case "target-first":
+					return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "mole.target_unavailable", "target gone")
+				case "timeout-first":
+					return nil, runtime.ErrCallTimeout
+				case "busy-first":
+					return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "mole.busy", "busy")
+				}
+			}
+			switch args[2] {
+			case "target-gone":
+				return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "mole.target_unavailable", "target gone")
+			case "timeout":
+				return nil, runtime.ErrCallTimeout
+			case "busy":
+				return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "mole.busy", "busy")
+			case "wrong-class":
+				return nil, runtime.NewStatusError(runtime.ErrorClassRuntime, "mole.target_unavailable", "wrong class")
+			}
 			if args[2] == "rejected-action" {
 				return map[string]any{"hit_id": "hit-rejected", "action_id": args[2], "status": "rejected"}, nil
 			}
 			return map[string]any{"hit_id": "hit-1", "action_id": args[2], "spawn_seq": args[3], "hole": args[4], "status": "accepted", "debit": int64(100), "credit": int64(0), "balance": int64(900), "available": int64(900), "revision": uint64(2)}, nil
 		case 3:
-			return fixtureSnapshot(), nil
+			snapshot := fixtureSnapshot()
+			snapshot["targets"].([]any)[0].(map[string]any)["spawn_seq"] = uint64(10)
+			return snapshot, nil
 		case 4:
 			return true, nil
 		}
@@ -90,19 +122,20 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 }
 
 func fixtureSnapshot() map[string]any {
-	return map[string]any{"attack_name": "attack", "seat": int64(0), "server_ms": time.Now().UnixMilli(), "targets": []any{}, "members": []any{}, "hits": []any{}}
+	return map[string]any{"attack_name": "attack", "seat": int64(0), "server_ms": time.Now().UnixMilli(), "targets": []any{map[string]any{"spawn_seq": uint64(9), "hole": int64(0), "deadline_ms": time.Now().Add(10 * time.Second).UnixMilli(), "claimed": false}}, "members": []any{}, "hits": []any{}}
 }
 
 type accessFixtureMain struct {
-	ready chan<- string
-	hits  chan<- []any
+	ready    chan<- string
+	hits     chan<- []any
+	scenario string
 }
 
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
 	for _, role := range []string{"login", "online", "mole", "entry", "attack"} {
-		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits})
+		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
 		if err != nil {
 			return err
 		}
@@ -126,15 +159,19 @@ func (*accessFixtureMain) Handle(gsr.CommandContext, runtime.CommandID, ...any) 
 }
 func (*accessFixtureMain) OnStop(context.Context) error { return nil }
 
-func startAccessBusiness(t *testing.T) (string, string, <-chan []any) {
+func startAccessBusiness(t *testing.T, scenarios ...string) (string, string, <-chan []any) {
 	t.Helper()
 	accessAddress, gateAddress := testAddresses(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	ready, hits := make(chan string, 1), make(chan []any, 8)
+	scenario := ""
+	if len(scenarios) != 0 {
+		scenario = scenarios[0]
+	}
 	backendDone := make(chan error, 1)
 	backendLogs := t.TempDir()
 	go func() {
-		backendDone <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: backendLogs}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"backend": "127.0.0.1:0", "access": accessAddress}}}, &accessFixtureMain{ready: ready, hits: hits})
+		backendDone <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: backendLogs}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"backend": "127.0.0.1:0", "access": accessAddress}}}, &accessFixtureMain{ready: ready, hits: hits, scenario: scenario})
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -361,5 +398,65 @@ func TestAccessOnlineFailureDoesNotOpenGame(t *testing.T) {
 	healthy := dialAccess(t, gateAddress)
 	if response := accessRequest(t, healthy, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"}); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
 		t.Fatal("恢复后新连接不能登录", response)
+	}
+}
+
+// TestAccessOnlyKnownTargetRefusalCanContinue 保护只有明确的目标失效才返回可继续响应，超时、繁忙和错误类别不被当成未扣款。
+func TestAccessOnlyKnownTargetRefusalCanContinue(t *testing.T) {
+	gateAddress, _, hits := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if response := accessRequest(t, client, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"}); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(response)
+	}
+	if response := accessRequest(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}); response.MsgId != uint32(demopb.MsgId_S2C_ENTER) {
+		t.Fatal(response)
+	}
+	for _, action := range []string{"target-gone", "timeout", "busy", "wrong-class"} {
+		response := accessRequest(t, client, demopb.MsgId_C2S_HIT, &demopb.HitRequest{ActionId: action, SpawnSeq: 9, Hole: 2})
+		<-hits
+		if action != "target-gone" {
+			if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+				t.Fatalf("%s 不能变为明确拒绝: %v", action, response)
+			}
+			continue
+		}
+		var hit demopb.HitResponse
+		if err := proto.Unmarshal(response.Payload, &hit); err != nil || response.MsgId != uint32(demopb.MsgId_S2C_HIT) || hit.Rejection != "target_unavailable" || hit.Hit != nil || hit.Silver != nil {
+			t.Fatalf("目标失效不应有奖励或余额: %v %v", &hit, err)
+		}
+	}
+}
+
+// TestAccessCLITargetRefusalAndUnknownResult 保护实际 CLI 在目标失效后换目标继续，而超时/繁忙时只发一次命中并停止。
+func TestAccessCLITargetRefusalAndUnknownResult(t *testing.T) {
+	if os.Getenv("GSRDEMO_ACCESS_PROCESSES") != "1" {
+		t.Skip("build typeclient and set GSRDEMO_ACCESS_PROCESSES=1")
+	}
+	for _, scenario := range []string{"target-first", "timeout-first", "busy-first"} {
+		t.Run(scenario, func(t *testing.T) {
+			gateAddress, _, hits := startAccessBusiness(t, scenario)
+			clientPath, err := filepath.Abs("../../typeclient/dist/index.js")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", "alice", "--hits", "1")
+			command.Stdin = strings.NewReader("password\n")
+			output, runErr := command.CombinedOutput()
+			if scenario != "target-first" {
+				if runErr == nil || strings.Contains(string(output), `"event":"miss"`) || len(hits) != 1 {
+					t.Fatalf("未知结果不能继续: %v %s hits=%d", runErr, output, len(hits))
+				}
+				return
+			}
+			if runErr != nil || !strings.Contains(string(output), `"event":"miss"`) || !strings.Contains(string(output), `"event":"settlement"`) || len(hits) != 2 {
+				t.Fatalf("目标拒绝后未继续: %v %s hits=%d", runErr, output, len(hits))
+			}
+			first, second := <-hits, <-hits
+			if first[2] == second[2] || first[3] != uint64(9) || second[3] != uint64(10) {
+				t.Fatalf("应刷新目标、使用新动作: %v %v", first, second)
+			}
+		})
 	}
 }

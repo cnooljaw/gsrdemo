@@ -107,8 +107,25 @@ func startAccessProcess(t *testing.T, binary string, arguments []string, address
 	t.Fatal("integration process listener not ready")
 }
 
-// TestAccessClientProcessesLiveMySQL 保护 TS 客户端通过五个独立进程完成认证、进入、即时命中和 MySQL 入账，错误密码不改变钱包。
+// TestAccessClientProcessesLiveMySQL 保护单客户端通过五个独立进程完成认证、即时命中和真实入账。
 func TestAccessClientProcessesLiveMySQL(t *testing.T) {
+	runAccessClientsLiveMySQL(t, 1)
+}
+
+// TestAccessThreeClientsLiveMySQL 保护三个不同账号并发进入同组、共享目标且各完成三次入账，余额/版本与逐锤结果一致。
+func TestAccessThreeClientsLiveMySQL(t *testing.T) {
+	runAccessClientsLiveMySQL(t, 3)
+}
+
+type accessDemoPlayer struct {
+	id                 uint64
+	username, password string
+	command            *exec.Cmd
+	output             bytes.Buffer
+}
+
+func runAccessClientsLiveMySQL(t *testing.T, playerCount int) {
+	t.Helper()
 	if os.Getenv("GSRDEMO_ACCESS_PROCESSES") != "1" {
 		t.Skip("build all nodes/typeclient and set GSRDEMO_ACCESS_PROCESSES=1 for dedicated local databases")
 	}
@@ -116,31 +133,36 @@ func TestAccessClientProcessesLiveMySQL(t *testing.T) {
 	settlementDB, settlementDSN := accessLiveDatabase(t, "settlement", "gsrdemo_settlement")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	suffix, err := connectionID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	username, password := "access-e2e-"+suffix[:12], "demo-"+suffix
-	hash := sha256.Sum256([]byte(password))
-	result, err := loginDB.ExecContext(ctx, "INSERT INTO accounts (username, password_hash) VALUES (?, ?)", username, hash[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	signedID, err := result.LastInsertId()
-	if err != nil || signedID <= 0 {
-		t.Fatalf("account ID: %v", err)
-	}
-	userID := uint64(signedID)
-	t.Cleanup(func() {
-		if _, err := loginDB.Exec("DELETE FROM accounts WHERE user_id = ? AND username = ?", userID, username); err != nil {
-			t.Error(err)
+	players := make([]accessDemoPlayer, playerCount)
+	operationIDs := []string{}
+	for index := range players {
+		player := &players[index]
+		suffix, err := connectionID()
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	var count int
-	if err := settlementDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM silver_balances WHERE user_id = ?", userID).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("new account requires an unused test wallet, count=%d err=%v", count, err)
+		player.username, player.password = "access-e2e-"+suffix[:12], "demo-"+suffix
+		hash := sha256.Sum256([]byte(player.password))
+		result, err := loginDB.ExecContext(ctx, "INSERT INTO accounts (username, password_hash) VALUES (?, ?)", player.username, hash[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		signedID, err := result.LastInsertId()
+		if err != nil || signedID <= 0 {
+			t.Fatalf("account ID: %v", err)
+		}
+		player.id = uint64(signedID)
+		t.Cleanup(func() {
+			if _, err := loginDB.Exec("DELETE FROM accounts WHERE user_id = ? AND username = ?", player.id, player.username); err != nil {
+				t.Error(err)
+			}
+		})
+		var count int
+		if err := settlementDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM silver_balances WHERE user_id = ?", player.id).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("new account requires an unused test wallet, count=%d err=%v", count, err)
+		}
+		operationIDs = append(operationIDs, fmt.Sprintf("wallet-init-%d", player.id))
 	}
-	operationIDs := []string{fmt.Sprintf("wallet-init-%d", userID)}
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stop()
@@ -150,6 +172,7 @@ func TestAccessClientProcessesLiveMySQL(t *testing.T) {
 			return
 		}
 		defer tx.Rollback()
+		batches := map[string]bool{}
 		for _, id := range operationIDs {
 			var batchID string
 			err := tx.QueryRowContext(cleanup, "SELECT origin_batch FROM settlement_operations WHERE operation_id = ?", id).Scan(&batchID)
@@ -160,18 +183,23 @@ func TestAccessClientProcessesLiveMySQL(t *testing.T) {
 				t.Error(err)
 				return
 			}
+			batches[batchID] = true
 			if _, err := tx.ExecContext(cleanup, "DELETE FROM settlement_operations WHERE operation_id = ?", id); err != nil {
 				t.Error(err)
 				return
 			}
-			if _, err := tx.ExecContext(cleanup, "DELETE FROM settlement_batches WHERE batch_id = ?", batchID); err != nil {
+		}
+		for id := range batches {
+			if _, err := tx.ExecContext(cleanup, "DELETE FROM settlement_batches WHERE batch_id = ?", id); err != nil {
 				t.Error(err)
 				return
 			}
 		}
-		if _, err := tx.ExecContext(cleanup, "DELETE FROM silver_balances WHERE user_id = ?", userID); err != nil {
-			t.Error(err)
-			return
+		for _, player := range players {
+			if _, err := tx.ExecContext(cleanup, "DELETE FROM silver_balances WHERE user_id = ?", player.id); err != nil {
+				t.Error(err)
+				return
+			}
 		}
 		if err := tx.Commit(); err != nil {
 			t.Error(err)
@@ -219,9 +247,11 @@ func TestAccessClientProcessesLiveMySQL(t *testing.T) {
 			t.Fatal(err)
 		}
 		if node == "settlement" {
-			command := exec.CommandContext(ctx, binary, "-config", path, "-init-wallet", strconv.FormatUint(userID, 10), "-silver", "10000")
-			if output, err := command.CombinedOutput(); err != nil {
-				t.Fatalf("wallet initialization: %v %s", err, output)
+			for _, player := range players {
+				command := exec.CommandContext(ctx, binary, "-config", path, "-init-wallet", strconv.FormatUint(player.id, 10), "-silver", "10000")
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("wallet initialization: %v %s", err, output)
+				}
 			}
 		}
 		if node == "mole" {
@@ -240,72 +270,132 @@ func TestAccessClientProcessesLiveMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := func(password string, hits string) ([]byte, error) {
-		command := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", username, "--hits", hits)
-		command.Stdin = strings.NewReader(password + "\n")
-		return command.CombinedOutput()
-	}
-	if output, err := client("wrong", "1"); err == nil || bytes.Contains(output, []byte(`"event":"enter"`)) {
+	wrong := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", players[0].username, "--hits", "1")
+	wrong.Stdin = strings.NewReader("wrong\n")
+	if output, err := wrong.CombinedOutput(); err == nil || bytes.Contains(output, []byte(`"event":"enter"`)) {
 		t.Fatalf("wrong credentials accepted: %v %s", err, output)
 	}
-	output, clientErr := client(password, "3")
-	hitCount, receiptCount := 0, 0
-	var debit, credit int64
-	for _, line := range bytes.Split(output, []byte{'\n'}) {
-		var event struct {
-			Event string          `json:"event"`
-			Value json.RawMessage `json:"value"`
+	// 全部 Start 后再 Wait，确保是并发客户端，而不是逐个跑完的单客户端样本。
+	for index := range players {
+		player := &players[index]
+		player.command = exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", player.username, "--hits", "3")
+		player.command.Stdin = strings.NewReader(player.password + "\n")
+		player.command.Stdout, player.command.Stderr = &player.output, &player.output
+		if err := player.command.Start(); err != nil {
+			t.Fatal(err)
 		}
-		if json.Unmarshal(line, &event) != nil {
-			continue
+		t.Cleanup(func() {
+			// 后续客户端启动失败时，也回收此前已启动但尚未 Wait 的进程。
+			if player.command.ProcessState == nil {
+				_ = player.command.Process.Kill()
+				_ = player.command.Wait()
+			}
+		})
+	}
+	// 先等待所有客户端退出，再解析/断言，避免失败时尚有客户端在写账务。
+	clientErrors := make([]error, len(players))
+	for index := range players {
+		clientErrors[index] = players[index].command.Wait()
+	}
+	group := ""
+	sawThreeMembers, totalMisses := false, 0
+	seenHits := map[string]bool{}
+	for index := range players {
+		player := &players[index]
+		hitCount, receiptCount := 0, 0
+		var debit, credit int64
+		playerGroup := ""
+		for _, line := range bytes.Split(player.output.Bytes(), []byte{'\n'}) {
+			var event struct {
+				Event string          `json:"event"`
+				Value json.RawMessage `json:"value"`
+			}
+			if json.Unmarshal(line, &event) != nil {
+				continue
+			}
+			switch event.Event {
+			case "enter":
+				var value struct {
+					Snapshot struct {
+						AttackName string            `json:"attackName"`
+						Members    []json.RawMessage `json:"members"`
+					} `json:"snapshot"`
+				}
+				if err := json.Unmarshal(event.Value, &value); err != nil {
+					t.Fatal(err)
+				}
+				playerGroup = value.Snapshot.AttackName
+				sawThreeMembers = sawThreeMembers || len(value.Snapshot.Members) == 3
+			case "snapshot":
+				var value struct {
+					Members []json.RawMessage `json:"members"`
+				}
+				if err := json.Unmarshal(event.Value, &value); err != nil {
+					t.Fatal(err)
+				}
+				sawThreeMembers = sawThreeMembers || len(value.Members) == 3
+			case "miss":
+				totalMisses++
+			case "hit":
+				var value struct {
+					Hit struct {
+						ID     string `json:"hitId"`
+						Status string `json:"status"`
+						Debit  string `json:"debit"`
+						Credit string `json:"credit"`
+					} `json:"hit"`
+				}
+				if err := json.Unmarshal(event.Value, &value); err != nil {
+					t.Fatal(err)
+				}
+				if value.Hit.ID == "" || seenHits[value.Hit.ID] || value.Hit.Status != "accepted" {
+					t.Fatalf("invalid/duplicate hit: %s", event.Value)
+				}
+				seenHits[value.Hit.ID] = true
+				operationIDs = append(operationIDs, value.Hit.ID)
+				debitValue, err := strconv.ParseInt(value.Hit.Debit, 10, 64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				creditValue, err := strconv.ParseInt(value.Hit.Credit, 10, 64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				debit += debitValue
+				credit += creditValue
+				hitCount++
+			case "settlement":
+				var value struct {
+					Status string `json:"status"`
+				}
+				if err := json.Unmarshal(event.Value, &value); err != nil || value.Status != "committed" {
+					t.Fatalf("receipt: %s %v", event.Value, err)
+				}
+				receiptCount++
+			}
 		}
-		switch event.Event {
-		case "hit":
-			var value struct {
-				Hit struct {
-					ID     string `json:"hitId"`
-					Debit  string `json:"debit"`
-					Credit string `json:"credit"`
-				} `json:"hit"`
-			}
-			if err := json.Unmarshal(event.Value, &value); err != nil {
-				t.Fatal(err)
-			}
-			operationIDs = append(operationIDs, value.Hit.ID)
-			debitValue, err := strconv.ParseInt(value.Hit.Debit, 10, 64)
-			if err != nil {
-				t.Fatal(err)
-			}
-			creditValue, err := strconv.ParseInt(value.Hit.Credit, 10, 64)
-			if err != nil {
-				t.Fatal(err)
-			}
-			debit += debitValue
-			credit += creditValue
-			hitCount++
-		case "settlement":
-			var value struct {
-				Status string `json:"status"`
-			}
-			if err := json.Unmarshal(event.Value, &value); err != nil || value.Status != "committed" {
-				t.Fatalf("receipt: %s %v", event.Value, err)
-			}
-			receiptCount++
+		if clientErrors[index] != nil {
+			t.Errorf("client %d: %v %s", index+1, clientErrors[index], player.output.Bytes())
 		}
+		if hitCount != 3 || receiptCount != 3 {
+			t.Errorf("client %d incomplete: hits=%d receipts=%d %s", index+1, hitCount, receiptCount, player.output.Bytes())
+		}
+		if playerGroup == "" || (group != "" && group != playerGroup) {
+			t.Errorf("clients did not share a group: %q %q", group, playerGroup)
+		}
+		group = playerGroup
+		var amount int64
+		var version uint64
+		if err := settlementDB.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", player.id).Scan(&amount, &version); err != nil {
+			t.Fatal(err)
+		}
+		if amount != 10000-debit+credit || version != 4 {
+			t.Errorf("client %d wallet amount=%d version=%d debit=%d credit=%d", index+1, amount, version, debit, credit)
+		}
+		t.Logf("客户端 %d：%d 命中 / %d 入账，扣 %d 返 %d，余额 %d，版本 %d", index+1, hitCount, receiptCount, debit, credit, amount, version)
 	}
-	if clientErr != nil {
-		t.Fatalf("TS client: %v %s", clientErr, output)
+	if playerCount == 3 && !sawThreeMembers {
+		t.Error("no snapshot showed all three members")
 	}
-	if hitCount != 3 || receiptCount != 3 {
-		t.Fatalf("incomplete flow: %s", output)
-	}
-	var amount int64
-	var version uint64
-	if err := settlementDB.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", userID).Scan(&amount, &version); err != nil {
-		t.Fatal(err)
-	}
-	if amount != 10000-debit+credit || version != 4 {
-		t.Fatalf("wallet amount=%d version=%d debit=%d credit=%d", amount, version, debit, credit)
-	}
-	t.Logf("五节点 + TS 客户端：3 次命中 / 3 次入账，扣 %d 返 %d，余额 %d，版本 %d", debit, credit, amount, version)
+	t.Logf("%d 个并发 CLI，共 %d 个唯一 HitID、%d 次目标失效后继续", playerCount, len(seenHits), totalMisses)
 }
