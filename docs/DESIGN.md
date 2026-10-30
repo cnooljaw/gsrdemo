@@ -37,6 +37,8 @@ access 连接基础、login 内部认证、online 目录和 mole/settlement 方�
 
 完成五个节点后再联调打地鼠全流程。三人斗地主、access 多实例和第三方登录分别先确认方案，不提前开工。
 
+2026-10-30 优先级调整：Demo 先保持简单，下一阶段优先完成 TypeScript 客户端 → access 登录 → Online 绑定 → 进入地鼠 → 即时命中反馈与结算确认的业务闭环，具体接入方案仍需先确认。Login 保持单个认证 Service，多认证入口、小队列背压及实例监督恢复暂缓，仅作为后续优化备忘；其他非必要的隔离扩展也不抢在闭环之前实施。已完成的 Mole/Settlement 隔离保留。
+
 ## 3. access 第一步（已确认）
 
 - MainService 通过 self.Node().OpenCluster/CreateGate 组装 Cluster 和独立 GateService；每条连接由 Gate 创建一个 Agent。采用 SecurityModeMAC，本机仍使用 WS；先完成 33 字节 X25519 握手，上行使用 seq/Envelope/MAC，下行使用 Envelope，不接受 Plain 降级。监听地址及连接数、帧大小、出站队列上限放在 access 的私有 YAML 配置中，握手等待沿用 GSR 默认 5 秒。
@@ -409,6 +411,6 @@ Summary 失败的业务影响：当前 MoleSubmission.advance 在 ready=false �
 2026-10-29 用户进一步确认优先处理局部故障隔离。Mole 已实施第 8 节的进入通道、独立周期驱动、按用户索引余额计算及 4 条提交通道；随后已推进 Settlement 隔离，具体实现见第 9 节。后续逐节点事项：
 
 - Settlement：本轮实施 4 写/2 读入口、钱包锁冲突快速回滚、独立监督恢复及小 Mailbox 背压；详见第 9 节。数据库整体不可用、全部入口饱和、同入口排队、跨节点链路拥塞仍有共同影响，未建设逐钱包调度器或数据库高可用。
-- Login：少量认证 Service，避免一个慢数据库查询拖住所有新登录。
+- Login（2026-10-30 暂缓）：保留单个认证 Service；多认证入口、小队列背压及实例监督恢复待业务闭环后按实际需要重新评估，不作为当前实施任务。
 - Access：接入实际业务后验证每连接等待、出站背压、多节点重连；Online 保持短回调，补节点恢复后的重新绑定。
 - 基础可用性：生产进程拉起、健康检查、MySQL/Redis 部署冗余和资源隔离另行验收。本轮没有建设数据库高可用或通用监督框架。
