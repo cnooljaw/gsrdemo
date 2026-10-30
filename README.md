@@ -1,298 +1,170 @@
 # GSR Demo
 
-这是一个多项目工作区，按节点逐步设计和实现。当前已接通 TypeScript 命令行客户端 → access → login/online → mole → settlement/MySQL 的打地鼠业务闭环；客户端使用 MAC WebSocket 和 Protobuf，尚无图形界面。
+基于 **GSR v1.0.2** 的多节点打地鼠示例，使用 TypeScript 命令行客户端演示登录、多人分组、命中反馈和银子结算。
 
-每个节点角色一个独立 Go module，依赖已发布的 `github.com/cnooljaw/gsr v1.0.2`；入口和源码默认放项目根目录。节点通过 `gsr.Run + MainService` 启动，组装使用 `self.Node()`，跨节点通信使用 `self.Cluster()`。版本及资源归属见 [接入知识](docs/DESIGN.md#v102-接入知识)。
+调用链：客户端 → access → login / online / mole → settlement → MySQL。Redis 保存 mole 的待结算批次和统计检查点。
 
-| 目录 | 当前内容 |
-| --- | --- |
-| nodes/access | Gate、每连接一个 Agent、登录/地鼠路由、业务 Protobuf 与测试 |
-| nodes/login | 密码认证、MySQL 账号表、账号创建管理命令及测试 |
-| nodes/online | 内存位置目录、跨接入节点绑定替换、条件解绑及测试 |
-| nodes/mole | 分组、持续地鼠、同步内存扣返、统计池、跨组批量提交及测试 |
-| nodes/settlement | 单人、批量单人、多人原子结算，MySQL 幂等及明细归档 |
-| common/model | YAML 宿主配置加载与校验 |
-| typeclient | MAC 命令行客户端、Protobuf 类型、推送与响应分发及测试 |
-| configs | 一份节点地址表和各实例的宿主配置 |
-| scripts | 一个 dev.sh，负责构建、检查和单节点启动 |
+## 运行 Demo
 
-旧演示实现已移除，现有业务仅按确认的节点范围加入。common 根据实际调用提取共享内容，节点不导入彼此实现。内部契约见 [PROTOCOL.md](docs/PROTOCOL.md)。
+以下命令均在 **gsrdemo 根目录**执行；密码输入示例使用 **zsh**。首次完成第 1～4 步；以后确认 MySQL、Redis 已运行，再从第 5 步启动。
 
-access 负责连接身份和业务路由：客户端 → Gate → Agent → GSR 协议 Dispatcher。Gate 固定使用 `SecurityModeMAC`：客户端先完成 33 字节 X25519 握手，上行发送 `seq | Envelope | MAC`，下行仍为 Envelope；未握手的 Plain 客户端会被关闭。本机使用 WS，TLS 配置独立于 MAC 模式。Agent 保存当前 UserID/LoginID 与节点内具名地址、地鼠路由，不拥有钱包或游戏状态；业务协议在 nodes/access/proto/demo/v1/game.proto，沿用 GSR Envelope/ErrorResponse。普通断线先尽力离开地鼠、按自己的 LoginID 解绑后退出；进程停机由 GSR 管理，OnStop 只关闭连接。
+### 1. 准备环境
 
-工作规则见 [AGENTS.md](AGENTS.md)，目标和逐节点计划见 [docs/DESIGN.md](docs/DESIGN.md)，Go 规范见 [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)。
+需要 Go 1.24+、Node.js 22.15+、npm、MySQL 8.0+ 和 Redis。先启动本机 MySQL，监听 `127.0.0.1:3306`。
 
-mole 包含短回调目录、8 个进入通道、每组一个 AttackService、纯内存 Accounting 和 4 条独立提交通道。命中同步返回内存扣返结果，提交 Service 独立等待 settlement 批量入账；mole 不使用 SQL，游戏持续运行，无固定局长。节点内实现与边界见 [mole 方案](docs/DESIGN.md#8-mole-方案与首版实现)，独立结算见 [settlement 实现](docs/DESIGN.md#9-settlement-节点与结算实现)。
+在一个单独终端启动演示用 Redis；已有符合配置的 Redis 时跳过：
 
-## 准备与使用
+```sh
+mkdir -p .cache/redis
+LC_ALL=C redis-server --bind 127.0.0.1 --port 6379 \
+  --dir "$PWD/.cache/redis" --appendonly yes --appendfsync always \
+  --maxmemory-policy noeviction
+```
 
-需要 Go 1.24 或更新、Node.js 22.15 或更新及 npm；mole 的真实检查点用例另需 redis-server，缺少时相应用例会显式跳过。从根目录执行：
+保持该终端运行。另开终端安装客户端依赖并构建全部节点：
 
 ```sh
 npm --prefix typeclient ci
-./scripts/dev.sh check
-./scripts/dev.sh build
-./scripts/dev.sh run access
-```
-
-check 执行各 Go module 的 test/vet 和 TS 编译/单测，其中 access/login/online/mole/settlement 用例会打开临时本机端口；build 输出 bin/<节点名> 和 typeclient/dist。run 只前台启动指定节点，优先读取 configs/<节点>-01.local.yaml，Ctrl-C/SIGTERM 由该节点有序退出。
-
-按节点工作时可执行 `./scripts/dev.sh check access` 和 `./scripts/dev.sh build access`，仅处理 common 与 access。TypeScript 客户端运行方法见下方“客户端闭环演示”。Go 命令使用 GOWORK=off 和 .cache/go-build，保留缓存；编辑器需要时执行 `cp go.work.example go.work`。
-
-若编辑器出现 `go.work requires go >= 1.24.0 (running go 1.23.3)`，先检查 `go version` 和 `go env GOROOT`。终端自动选择的新工具链可能与 gopls 实际执行的 `go` 不同；在本机 `.vscode/settings.json` 中将 `go.goroot` 设为 Go 1.24 或更新 SDK 的目录，并通过 `go.toolsEnvVars.PATH` 把该目录的 `bin` 放在 `${env:PATH}` 前，`GOTOOLCHAIN` 设为 `auto`。配置后执行 `Go: Restart Language Server`；仍沿用旧环境时执行 `Developer: Reload Window`。此文件含本机路径，已被 Git 忽略，不降低 go.work/go.mod 的版本要求。工具链选择规则见 [Go 官方文档](https://go.dev/doc/toolchain)。
-
-节点地址只维护 [configs/nodes.yaml](configs/nodes.yaml)。各实例通过 nodes_file 引用该表，配置中的文件路径以该配置文件所在目录为基准。例如：
-
-```yaml
-instance: access-01
-listen: access
-nodes_file: nodes.yaml
-log_directory: ../logs/access-01
-gate:
-  address: 127.0.0.1:7888
-  max_connections: 128
-  max_frame_bytes: 4096
-  max_outbound_queue_bytes: 65536
-```
-
-宿主配置包含实例、Cluster 路由和日志路径，拒绝未知字段、重复键、多文档和非法开发地址。Gate 参数只在 access 的私有配置类型中声明，由 GSR 校验其资源边界；其他节点不接收这些字段。Go 标准库没有 YAML 解析器，因此 common 固定依赖 go.yaml.in/yaml/v3 v3.0.5。私密配置使用被忽略的 configs/*.local.yaml。
-
-access 的 WebSocket 测试使用与 GSR 相同的 gorilla/websocket v1.5.3，因为 Go 标准库不提供 WebSocket 客户端；业务协议也使用 protobuf v1.36.1；MySQL 驱动 v1.10.1 仅供显式五进程验收准备和清理独占测试账号/账务，access 运行时不使用 SQL。
-
-## 节点间调用示例
-
-已有跨节点调用，下面这些入口可以直接阅读和运行。每个节点有自己的 Runtime，节点间通过真实 TCP 通信。
-
-| 场景 | 调用方与接收方 |
-| --- | --- |
-| 最小 Call：两个模拟接入节点绑定、查询、解绑 Online | [onlineAccessCaller / callOnline](nodes/online/onlineservice_cluster_test.go) → [OnlineService](nodes/online/onlineservice.go) |
-| 业务 Call：进入游戏时查询当前位置 | [MoleEntryService.enter](nodes/mole/moleentryservice.go) → OnlineService |
-| 业务 Call：批量入账及余额、操作查询 | [callSettlement](nodes/mole/molesubmissionservice.go) → [写入口](nodes/settlement/settlementservice.go) / [读入口](nodes/settlement/settlementqueryservice.go)，地址由 [routing.go](common/settlement/routing.go) 选择 |
-| 主动 Send：游戏快照与余额校正 | [AttackService.push](nodes/mole/attackservice.go) → [Agent.Handle / push](nodes/access/agent_mole.go) → protocolDispatcher.Push → 客户端 |
-
-例如，在 Service 回调内查询 Online（Command 2 为 Lookup），返回位置快照或 nil：
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-defer cancel()
-location, err := self.Cluster().Call(ctx, "online", "online", runtime.CommandID(2), uint64(7))
-if err != nil {
-    return nil, err
-}
-return location, nil
-```
-
-这里两个 `online` 分别是节点路由名和该节点内注册的 Service 名，`uint64(7)` 是 UserID；参数类型须与接收 Handler 一致。调用方的 ClusterConfig 提供目标路由，接收方通过 RegisterService 发布名称、OpenCluster 开放监听。项目路由集中在 configs/nodes.yaml；测试使用临时端口。
-
-主动推送使用同样的 Node + Service 名寻址：
-
-```go
-err := self.Cluster().Send(
-    cluster.NodeID(member.AccessNode), cluster.ServiceName(member.AgentName),
-    molePushCommand, member.LoginID, kind, payload,
-)
-```
-
-此片段来自 AttackService.push，错误处置见原函数。Send 返回 nil 只表示接纳，不代表接收方处理完成；需要业务结果时使用有超时的 Call，Call 超时后也不能假定操作未执行。self 仅在当前 Service 回调内使用。
-
-从项目根目录运行已有示例用例，无需手动启动节点：
-
-```sh
-# 三个独立 Runtime，经 TCP 验证跨接入节点替换及旧连接迟到解绑；无 MySQL/Redis 依赖。
-GOWORK=off go -C nodes/online test -run '^TestOnlineTwoAccessNodesReplaceAndDisconnect$' -v -timeout=30s
-# 多节点 Call + Send，验证余额校正推给当前登录；需 redis-server，账务与 Online 使用测试替身。
-GOWORK=off go -C nodes/mole test -run '^TestMoleCorrectionUsesCurrentLogin$' -v -timeout=30s
-```
-
-以上用例在同一测试进程内运行多个节点。三个独立 OS 进程配合真实 MySQL、Redis 的完整命中入账示例，见下方 [settlement 使用](#settlement-使用) 中的 TestSettlementMoleProcessesLiveMySQL；完整客户端链路见下方“客户端闭环演示”的 TestAccessClientProcessesLiveMySQL。
-
-## 客户端闭环演示
-
-先按下方 login/settlement 说明准备专用库、私密配置和账号，使用真实 UserID 显式初始化钱包；准备好 mole 的 Redis 检查点。启动不建表、不自动注册账号或发银子。然后构建：
-
-```sh
 ./scripts/dev.sh build
 ```
 
-分别在五个终端启动以下节点：
+构建产物为 `bin/<节点名>` 和 `typeclient/dist`；普通构建无需重新生成协议。
 
-```sh
-./scripts/dev.sh run login
-./scripts/dev.sh run online
-./scripts/dev.sh run settlement
-./scripts/dev.sh run mole
-./scripts/dev.sh run access
+### 2. 初始化数据库与本机配置
+
+建表脚本使用业务账号 `gsr_demo@127.0.0.1`。该账号不存在时，先执行 `mysql -u root -p` 登录 MySQL 创建，并自行设置密码：
+
+```sql
+CREATE USER IF NOT EXISTS 'gsr_demo'@'127.0.0.1' IDENTIFIED BY '替换为本机密码';
 ```
 
-在另一个终端运行 TS 演示（zsh，密码从标准输入读取）：
-
-```sh
-read -rs 'demo_password?示例账号密码: '
-printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo --hits 3
-unset demo_password
-```
-
-默认连接 ws://127.0.0.1:7888/ws，可用 `--url` 指定；`--hits` 为 1～100。程序先输出 login/enter，每锤输出 action 和即时 hit，再轮询原 HitID 输出 settlement，最后 leave；推送另外输出 snapshot/balance_correction。所有 64 位整数在内存中为 bigint，日志转为十进制字符串。超时不自动重发命中，日志保留原 ActionID；未知结果不显示为已入账。
-
-协议源码为 [game.proto](nodes/access/proto/demo/v1/game.proto)，Go 生成类型只供 access 使用，TS 类型放在 typeclient/src/gen。已提交生成产物，普通构建无需生成工具。改协议后执行 `./scripts/dev.sh generate access`，只读取发布模块 v1.0.2 的 schema，工具和输出均在本仓库。TS 固定使用与 GSR 示例相同的 @bufbuild/protobuf/protoc-gen-es 2.15.0、Buf 1.73.0、Node 类型 22.20.3；WebSocket、密码学、计时和标准输入使用 Node 内建能力。
-
-默认 `./scripts/dev.sh check` 包含客户端的 MAC 向量、整数精度、推送/响应交错、修订收敛、超时不重发和关闭等待测试。单独运行用 `npm --prefix typeclient test`。
-
-五个独立节点进程 + TS CLI + 真实 MySQL + 临时 AOF Redis 的显式验收（先构建全部节点和 TS）：
-
-```sh
-GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -run '^TestAccessClientProcessesLiveMySQL$' -v -timeout=1m
-```
-
-只接受本机 gsrdemo_login / gsrdemo_settlement 专用库，创建随机独占账号和钱包，核对 3 次命中入账的余额/版本，最后回收自己的数据与进程。没有自动启动重连、图形 UI 或多 access 部署验收；Online/游戏进程异常后的业务恢复仍按各节点边界处理。
-
-## login 使用
-
-login 只接受内部 Cluster 认证请求，客户端统一经过 access 登录。账号密码按确认使用无盐 SHA-256，仅用于示例。先由管理员初始化专用库，脚本为已有的本机 gsr_demo 用户授予账号表权限：
+执行 `exit` 退出 MySQL，再在终端执行建库建表脚本，脚本同时授予业务账号所需权限：
 
 ```sh
 mysql -u root -p < nodes/login/schema.sql
-./scripts/dev.sh build login
-```
-
-复制 configs/login-01.yaml 为被忽略的 configs/login-01.local.yaml，将 mysql_dsn 填为该用户在 gsrdemo_login 库的连接串，并将文件权限设为 0600。不在公开模板中填写真实密码。
-
-管理命令从标准输入读取一行密码，创建成功输出 UserID，重复用户名拒绝且不覆盖旧账号。以下为 zsh 用法：
-
-```sh
-read -rs 'login_password?示例密码: '
-printf '%s\n' "$login_password" | ./bin/login -config configs/login-01.local.yaml -create-user demo
-unset login_password
-./scripts/dev.sh run login
-```
-
-默认测试不连接 MySQL；显式启用专用本机数据库测试时执行：
-
-```sh
-cd nodes/login
-GOWORK=off GSRDEMO_MYSQL_INTEGRATION=1 go test -run '^TestLoginLiveMySQL$' -timeout=30s
-```
-
-该用例检查库名和地址，创建独占测试账号，通过真实 TCP Cluster 认证并核对稳定 UserID，测试后删除自己创建的账号。schema.sql 不在应用启动或测试中自动执行。
-
-## online 使用
-
-online 提供内部 Bind/Lookup/Unbind，按 UserID 保存 LoginID、AccessNode、AgentName。位置保留接入节点名，允许不同 access 使用同名 Agent；旧 LoginID 的断线通知不能删除新连接。access 登录时绑定、断线时条件解绑，命令与异常语义见 [内部协议](docs/PROTOCOL.md#online-位置目录)。
-
-```sh
-./scripts/dev.sh check online
-./scripts/dev.sh build online
-./scripts/dev.sh run online
-```
-
-目录仅在内存中，重启后为空；异常退出的接入节点可能留下旧位置，后续新登录覆盖。Online 不处理客户端连接、心跳、游戏状态或持久化。
-
-显式运行约两分钟的多调用节点容量样本（默认 check 跳过）：
-
-```sh
-cd nodes/online
-GOWORK=off GSRDEMO_ONLINE_LOAD=1 go test -run '^TestOnlineClusterLoad$' -v -timeout=3m
-```
-
-测试包含预装记录与最终逐条清理，实际总耗时长于两分钟。目标与结果口径见 [设计文档](docs/DESIGN.md#6-online-容量估算与待测计划)。它不代表实际 access 多进程或 12,000/100,000 条客户端连接已验收。
-
-这些地址用于本机开发。GSR Cluster 的路由地址是拨号地址，不能用它限制监听网卡；节点使用受信任开发网络。
-
-## mole 使用
-
-演示规则固定为每组最多 3 人、9 洞，每秒产生一个目标、有效 2 秒；一锤扣 100，返 0 或 198 各 50%。AttackService 本地 Call 记账 Service，立即返回扣返和内存余额供 UI 显示；独立 settlement 最终裁决并持久化，不一致时只校正余额。access/TypeScript 已接入最小玩法闭环。
-
-```sh
-./scripts/dev.sh check mole
-./scripts/dev.sh build mole
-# 首次使用一个全新的统计键时显式初始化；已有检查点不会覆盖。
-./bin/mole -config configs/mole-01.yaml -init-accounting
-./scripts/dev.sh run mole
-```
-
-mole 配置增加 `redis_url` 和 `redis_key`；带认证的 URL 写在被忽略的 `configs/mole-01.local.yaml` 中，并设为 0600。Redis 只由 Submission 访问，客户端由宿主在 Runtime 结束后关闭；使用与 GSR 一致的 go-redis v9.18.0，标准库没有 Redis 协议客户端。mole 不访问 SQL，余额、幂等凭据和完整账务仍归 settlement。
-
-每条提交通道用一个 Redis 检查点保存统计、最后完成的序号/BatchID，以及最多一个原始待处理批次；根 key 为通道 0，其余追加 `:lane:1`～`:lane:3`。先保存批次再提交结算，核对回执后 CAS 整体替换统计并清除批次。键无 TTL，需使用持久化且不淘汰该键的 Redis；本机示例推荐 AOF `appendfsync always`、`maxmemory-policy noeviction`，配置 Redis 由操作者管理，程序不修改全局设置。`-init-accounting` 仅用于新业务零统计，不能用来导入已有账务的统计；存量统计由业务离线核对后导入，启动不扫描账本。缺失、损坏或不可用的检查点不自动当成零统计。
-
-各通道独立恢复，再开放对应用户；首次用户余额由进入通道直接查询 settlement。升级时先停止旧 mole，执行 `-init-accounting` 补齐固定 4 个通道的检查点。旧检查点若仍有 Pending，必须先用旧版恢复完再迁移；初始化不重置存量统计和序号。默认跨节点用例会自行启动、回收临时 Redis；需要本机安装 redis-server。尚未保存到检查点的内存命中仍可能因 mole 崩溃丢失，已保存批次可按原身份恢复。Redis 严重数据丢失需由业务离线重放恢复，不能承诺 Redis 与 MySQL 的跨库原子提交。客户端即时显示不代表持久化入账。客户端命中后立即展示内存结果，通过原 HitID 查询最终入账。
-
-## settlement 使用
-
-三种写命令分别是 SettleSingle、SettleBatch（独立单人项）、SettleGroup（多人整体）。节点发布 4 个写入 Service 和 2 个只读 Service，由 `common/settlement` 的路由函数按业务身份选择；不经过一个同步中转入口。每个入口最多排队 4 条请求，超额快速返回背压错误。写协议为 version=2：单人用 UserID + Items，多人用 Changes，均保留 Reason 分类，允许同用户多条明细并汇总校验；同一业务操作跨批次/入口仍按 OperationID 去重；详情见 [协议](docs/PROTOCOL.md#通用银子结算接口)。
-
-管理员先执行建表脚本；复制 configs/settlement-01.yaml 为权限 0600 的 settlement-01.local.yaml，填写专用库的 mysql_dsn：
-
-```sh
 mysql -u root -p < nodes/settlement/schema.sql
-./scripts/dev.sh check settlement
-./scripts/dev.sh build settlement
+cp -n configs/login-01.yaml configs/login-01.local.yaml
+cp -n configs/settlement-01.yaml configs/settlement-01.local.yaml
+cp -n configs/mole-01.yaml configs/mole-01.local.yaml
+chmod 600 configs/login-01.local.yaml configs/settlement-01.local.yaml configs/mole-01.local.yaml
 ```
 
-运行要求 MySQL 8.0+、InnoDB；钱包锁使用 `FOR UPDATE NOWAIT`，冲突返回可重试的 `settlement.store_unavailable`，保持原 ID/内容重试。读写共享由宿主管理的 6 连接池，对应 4 个写入口和 2 个查询入口；单个入口 panic 后在节点内恢复，不自动重放未知请求。MySQL 全局故障和所有执行入口同时繁忙仍会影响整个结算节点。
+编辑这三份 `.local.yaml`（已有文件不会被复制命令覆盖）：
 
-钱包由用户中心决定创建和初始银子，Settlement 只执行；Demo 用独立管理命令模拟用户中心，普通结算不创建钱包。以下 UserID=1 为示例，替换为 login 创建账号时返回的真实 UserID；初始化银子也保留明细，同用户同金额重试不重复发放，改金额拒绝：
+| 文件 | 需要填写或核对的字段 |
+| --- | --- |
+| `configs/login-01.local.yaml` | `mysql_dsn: "gsr_demo:本机密码@tcp(127.0.0.1:3306)/gsrdemo_login"` |
+| `configs/settlement-01.local.yaml` | `mysql_dsn: "gsr_demo:本机密码@tcp(127.0.0.1:3306)/gsrdemo_settlement"` |
+| `configs/mole-01.local.yaml` | `redis_url` 默认 `redis://127.0.0.1:6379/0`；`redis_key` 默认 `gsrdemo:mole:accounting` |
+
+`.local.yaml` 不提交到 Git。节点地址统一在 [configs/nodes.yaml](configs/nodes.yaml)，相对文件路径以配置文件所在目录为基准。
+
+### 3. 创建三个演示账号并初始化银子
+
+多客户端使用不同账号：`demo1`、`demo2`、`demo3`。下面为三个账号设置同一个演示密码，并将每个新账号返回的真实 UserID 用于钱包初始化：
 
 ```sh
-./bin/settlement -config configs/settlement-01.local.yaml -init-wallet 1 -silver 10000
-./scripts/dev.sh run settlement
+read -rs 'demo_password?设置三个账号的演示密码: '
+for demo_user in demo1 demo2 demo3; do
+  account_result=$(printf '%s\n' "$demo_password" | ./bin/login \
+    -config configs/login-01.local.yaml -create-user "$demo_user") || break
+  demo_user_id=${account_result#UserID=}
+  printf '%s: UserID=%s\n' "$demo_user" "$demo_user_id"
+  ./bin/settlement -config configs/settlement-01.local.yaml \
+    -init-wallet "$demo_user_id" -silver 10000 || break
+done
+unset demo_password
 ```
 
-节点启动不迁移数据库、不自动创建钱包。MySQL 失败不报告入账成功；调用超时按原身份重试。默认测试使用 go-sqlmock v1.5.2 注入 SQL 失败（标准库不提供对应模拟驱动），不访问外部数据库。
+此步骤只做一次；账号已存在会报错，不会覆盖密码。已有账号可用其 UserID 单独执行 `-init-wallet`：相同初始金额重复执行不会重复发放，改金额会拒绝。服务启动不自动注册账号或创建钱包。
 
-显式真实 MySQL 验证：
+### 4. 初始化地鼠检查点
+
+MySQL、Redis 可用后，在 mole 尚未启动时执行：
 
 ```sh
-cd nodes/settlement
-GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 go test -run '^TestSettlement(LiveMySQL|HotWalletLiveMySQL|ConcurrentIdentitiesLiveMySQL|ConflictingConcurrentIdentityLiveMySQL)$' -v -timeout=1m
+./bin/mole -config configs/mole-01.local.yaml -init-accounting
 ```
 
-独立 online/mole/settlement 进程加真实 MySQL、临时 AOF Redis 的闭环测试，先从根目录构建三个节点，再运行：
+该命令为新演示创建零统计检查点，不重置已有统计。以后重启沿用同一 Redis 数据和 key，无需重复初始化。
+
+### 5. 按顺序启动服务节点
+
+MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表顺序启动；确认当前节点没有启动报错，再启动下一个。
+
+| 顺序 | 节点与职责 | 启动命令 | 默认地址 |
+| --- | --- | --- | --- |
+| 1 | login：验证账号密码 | `./scripts/dev.sh run login` | Cluster `127.0.0.1:19002` |
+| 2 | online：保存在线位置 | `./scripts/dev.sh run online` | Cluster `127.0.0.1:19003` |
+| 3 | settlement：余额校验和持久记账 | `./scripts/dev.sh run settlement` | Cluster `127.0.0.1:19005` |
+| 4 | mole：分组、目标和命中计算 | `./scripts/dev.sh run mole` | Cluster `127.0.0.1:19004` |
+| 5 | access：客户端接入和业务路由 | `./scripts/dev.sh run access` | Cluster `127.0.0.1:19001`；WS `127.0.0.1:7888` |
+
+`run` 前台运行节点，优先读取 `configs/<节点>-01.local.yaml`，没有时读取对应 `.yaml`。mole 监听启动后会恢复 Redis 检查点，恢复成功才接纳玩家；全部服务正常运行后再启动客户端。日志在 `logs/<实例名>/`。
+
+### 6. 启动多个客户端
+
+另开三个客户端终端，分别运行以下命令。每次输入第 3 步设置的密码；**不要让多个客户端使用同一个账号**，新登录会替换旧连接。
+
+终端 A：
 
 ```sh
-./scripts/dev.sh build online
-./scripts/dev.sh build mole
-./scripts/dev.sh build settlement
-cd nodes/settlement
-GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_PROCESSES=1 go test -run '^TestSettlementMoleProcessesLiveMySQL$' -v -timeout=1m
+read -rs 'demo_password?demo1 密码: '
+printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo1 --hits 10
+unset demo_password
 ```
 
-这些用例只接受专用本机 gsrdemo_settlement 库，创建随机独占测试钱包，并清理自己的操作、批次和余额；进程用例只回收自己启动的进程。access/TS 完整链路另见 TestAccessClientProcessesLiveMySQL；故障负载和入账延迟目标仍需后续验收。
-
-../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 只用于阅读，构建使用发布模块，不依赖兄弟 GSR checkout。access 后续功能和下一节点仍先展示方案，确认后再实现。
-
-结算层负载测试（不执行地鼠目标判定或棋牌局内逻辑）：
+终端 B：
 
 ```sh
-cd nodes/settlement
-GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_LOAD=1 go test -run '^TestSettlementLoad$' -v -timeout=5m
+read -rs 'demo_password?demo2 密码: '
+printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo2 --hits 10
+unset demo_password
 ```
 
-默认依次执行 A～D，每组 30 秒；可用 `GSRDEMO_SETTLEMENT_LOAD_DURATION=60s` 调整，较长测试同步调整 Go 的 timeout。A 为 600 钱包、3000 笔地鼠操作/秒，每 100ms 提交 300 笔；B 为 2500 桌的 7500 钱包、100 笔三人整体操作/秒；C 叠加；D 把约 20% 的两类操作集中到同一钱包。每笔保留 Reason 分类，结束后核对余额、版本、唯一成功操作及扣返总额，仅清理本次样本。详情见 [设计文档](docs/DESIGN.md#95-结算层负载基线)。结果写入被忽略的 `.cache/settlement-load.json`（项目根目录），不会提交原始运行数据。
-
-5000 桌四人配置及独立进程 CPU 采样：
+终端 C：
 
 ```sh
-./scripts/dev.sh build settlement
-cd nodes/settlement
-GOWORK=off GSRDEMO_SETTLEMENT_MYSQL=1 GSRDEMO_SETTLEMENT_LOAD=1 \
-  GSRDEMO_SETTLEMENT_LOAD_PROFILE=four GSRDEMO_SETTLEMENT_LOAD_DURATION=60s \
-  go test -run '^TestSettlementLoad$' -v -timeout=10m
+read -rs 'demo_password?demo3 密码: '
+printf '%s\n' "$demo_password" | node typeclient/dist/index.js --username demo3 --hits 10
+unset demo_password
 ```
 
-该配置依次测试 A（600 地鼠钱包/3000 hit/s）、B（5000 桌四人/200 桌结算/s）、C（两者合计 20,600 钱包）、D（C 加热点钱包）。独立启动并回收本次 settlement 子进程，MySQL 仅观察，不停止；每秒通过 `ps` 累计 CPU 时间之差计算进程负载，100% 表示一个逻辑核。需要本机仅有一个 mysqld 进程，CPU 采样仅在显式负载测试中启用。结果及逐秒样本写入 `.cache/settlement-load-four.json`。正式容量测试勿启用 race；race 用短程测试单独检查。
+客户端默认连接 `ws://127.0.0.1:7888/ws`，可用 `--url` 修改；`--hits` 为 1～100。每组最多 3 人、9 洞，每秒产生一个目标、有效 2 秒。有效命中每锤扣 100 银子，返 0 或 198，各 50%。
 
-大数据历史压测使用独立库，数据会保留用于后续档位，不能指向日常示例库：
+输出顺序为 `login → enter → action → hit → settlement`，完成指定锤数后输出 `leave` 并退出。`hit` 是即时内存结果，`settlement` 才是最终入账；期间还会收到 `snapshot` 和有差异时的 `balance_correction` 推送。
+
+同组玩家共享目标，同一目标只有一个玩家能命中。当前 CLI 会自动选择目标，竞争失败或请求报错时退出，可重新运行进入；它不自动重发结果未知的命中。需要复查时保留输出中的 ActionID / HitID。
+
+### 7. 停止演示
+
+先让客户端完成并看到 `settlement`，再在各服务终端按 Ctrl-C，顺序为 **access → mole → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中不保证崩溃恢复。
+
+## 开发与验证
+
+| 操作 | 命令 |
+| --- | --- |
+| 全部 Go test/vet 与 TS 编译/单测 | `./scripts/dev.sh check` |
+| 仅检查或构建一个节点 | `./scripts/dev.sh check access` / `./scripts/dev.sh build access` |
+| 重新生成 Go / TS 业务协议 | `./scripts/dev.sh generate access` |
+| TS 客户端单测 | `npm --prefix typeclient test` |
+
+协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
+
+五个独立节点、TS 客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建）：
 
 ```sh
-# 首次由管理员执行；不清空已有库。
-mysql -u root -p < nodes/settlement/load_schema.sql
-# 准备 configs/settlement-load.local.yaml：节点配置结构沿用 settlement，
-# mysql_dsn 的数据库必须是 gsrdemo_settlement_load，文件权限 0600。
-./scripts/dev.sh history settlement
+GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
+  -run '^TestAccessClientProcessesLiveMySQL$' -v -timeout=1m
 ```
 
-参数集中在 `configs/settlement-history.yaml`：100 万钱包，按约 102 万/1000 万/5000 万/1 亿游戏操作分档；钱包初始化另产生 100 万操作及批次。默认每 3200 笔游戏操作生成 210 个批次，保留真实分类、请求摘要和完整回执。工具采用有界事务块，检查点与账务一起提交；再次运行从已提交进度继续，不清空或改写已造历史。造数 ID 按 1024 个前缀交错生成，金额为确定性的演示扣返，不用于验证随机数质量。
+用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。
 
-每档测试固定活跃钱包、每 25 秒轮换且分散到百万钱包空间的用户，再测试历史批次/操作查询、同批重试、跨批重提和内容冲突。线上 Summary 已移除，验收对账按本次操作 ID 分块执行离线 SQL；旧报告中的 Summary 失败保留作优化前基线。读取基线会预热部分数据；首遍/重复访问不等同于严格冷启动。正常结束仅删除本次压力流量并恢复借用钱包；历史数据不会清理。测试被强杀时保留 `.cache/history-wallet-backup-*.json` 和现场，工具发现残留 `load-` 账务会拒绝继续造数，不能绕过检查点或直接删历史。报告为 `.cache/settlement-history-<游戏操作数>.json`，造数和压测可能持续数小时。
+## 源码与文档
 
-自然档位之后，工具会在同库追加每锤单批的真实新操作，将批次表推进到约 1000 万和 3000 万条，不改旧账；因此实际操作总数约为 1.034 亿和 1.234 亿，报告按真实数量记录。已完成档位不会伪装成较小规模重测。外部数据库进度不在 Go 缓存依赖中，`history` 入口显式使用 `-count=1`，普通测试继续保留缓存。
+每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，结算路由在 `common/settlement`，客户端在 `typeclient`。构建依赖发布的 GSR v1.0.2。
+
+- 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)、[Mole 调用结算](nodes/mole/molesubmissionservice.go)。
+- 节点间 Send 与客户端推送：见 [AttackService](nodes/mole/attackservice.go) 和 [Agent 推送接收](nodes/access/agent_mole.go)。
+- [业务协议](docs/PROTOCOL.md)、[设计与恢复边界](docs/DESIGN.md)、[Go 代码规范](docs/GO-CODE-STYLE.md)、[工作规则](AGENTS.md)。
+- 容量测试另见 [Online](docs/DESIGN.md#6-online-容量估算与待测计划)、[结算负载](docs/DESIGN.md#95-结算层负载基线)、[大数据历史压测](docs/DESIGN.md#97-大数据历史压测)，不属于运行 Demo 的必需步骤。
