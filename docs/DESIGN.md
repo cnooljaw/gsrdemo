@@ -85,7 +85,9 @@ Online 骤停演练：玩家完成 Enter 后强停本用例的 Online 并确认�
 
 2026-11-02 结算中断恢复演练：玩家已 Enter 后强停本用例的 Settlement，hit 仍返回 accepted 内存结果，但 Operation 查询明确报错，MySQL 余额/版本不变且没有该 HitID 的账务记录。用原配置重启 Settlement 后，客户端只查询、不重发 hit，Mole 自动按原 ID 补齐一次，余额符合原扣返，版本 7 → 8，重复查询后仍仅一条操作记录。另一变体先确认该 HitID/扣返已保存于 Redis，再强停并重启 Mole，随后恢复 Settlement；重新登录/进入后查询原 HitID，SQL 的 origin_batch 与原批次一致、仅一笔操作，版本 8 → 9；Redis 序号推进到原批次序号、待处理记录清除，命中/扣返统计仅累计一次。检查点验收通过 redis-cli 只读临时 Redis，不新增 Go 依赖；持久化事件字段 HitID 与客户端字段 hit_id 不混用。启用真实进程用例的 access 全量 race 及 vet 通过。Redis/MySQL 全程保持可用，不承诺未保存内存命中、原房间或存储丢失恢复。
 
-命中重提验收：在上述两种恢复路径中，真实 MAC 客户端保持同一连接、LoginID 和房间，在请求缓存有效期内重复提交相同 ActionID/目标/洞位，HitID、奖励和余额视图不变；分别改目标序号或洞位会报错，随后原请求仍返回原结果。最终 SQL 余额/版本、唯一操作及 Redis 统计仍只累计一次。该完整进程用例的定向 race 和 vet 通过；不扩大为跨登录、跨房间或永久的 ActionID 幂等承诺。
+命中重提验收：在各恢复路径中，真实 MAC 客户端保持同一连接、LoginID 和房间，在请求缓存有效期内重复提交相同 ActionID/目标/洞位，HitID、奖励和余额视图不变；分别改目标序号或洞位会报错，随后原请求仍返回原结果。最终 SQL 余额/版本、唯一操作及 Redis 统计仍只累计一次。该完整进程用例的定向 race 和 vet 通过；不扩大为跨登录、跨房间或永久的 ActionID 幂等承诺。
+
+已入账未确认恢复验收：第三个变体在 Mole 停止时，经真实 Settlement 接口提交 Redis 中保存的原批次，先核对 SQL 已入账、Redis 仍保留同一个 pending 且业务统计未变，再启动 Mole。恢复后 origin_batch/HitID 不变，唯一操作及钱包版本仍只增加一次，Redis 统计累计一次后清除 pending。启用真实进程用例的 access 全量 race 及 vet 通过。测试只构造恢复状态，不注入网络丢包，不修改账本或业务代码。
 
 ## 4. GSR 与参考边界
 

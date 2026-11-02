@@ -10,17 +10,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cnooljaw/gsr"
+	"github.com/cnooljaw/gsr/cluster"
+	"github.com/cnooljaw/gsr/logging"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
+	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
 
-// verifyAccessSettlementRecovery 分别验证 Mole 存活及已保存批次后重启两种恢复路径，不重发客户端命中。
+// verifyAccessSettlementRecovery 覆盖 Mole 存活、未入账批次恢复和已入账但未确认三种路径，不重发客户端命中。
 func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddress string,
 	player *accessDemoPlayer, db *sql.DB, operationIDs *[]string,
 	settlement, mole accessNodeProcess, redisAddress string) {
 	t.Helper()
-	for _, restartMole := range []bool{false, true} {
+	for _, scenario := range []string{"settlement-only", "pending-before-commit", "committed-before-receipt"} {
+		restartMole := scenario != "settlement-only"
 		client, snapshot := accessLoginAndEnter(t, gateAddress, player)
 		var before int64
 		var previousVersion uint64
@@ -76,11 +81,25 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 				t.Fatal(err)
 			}
 			waitAccessProcessListenerClosed(t, mole.address)
-			mole.process = startAccessProcess(t, mole.binary, []string{"-config", mole.config}, mole.address)
 		}
 		// 客户端不再提交 Hit，只让 Mole 按已接纳的原 ID 恢复提交。
 		settlement.process = startAccessProcess(t, settlement.binary, []string{"-config", settlement.config}, settlement.address)
 		if restartMole {
+			if scenario == "committed-before-receipt" {
+				applyAccessPreparedBatch(t, ctx, settlement.address, prepared)
+				if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", player.id).
+					Scan(&amount, &version); err != nil || amount != before-hit.Debit+hit.Credit || version != previousVersion+1 {
+					t.Fatalf("未构造出已入账状态: amount=%d version=%d err=%v", amount, version, err)
+				}
+				unconfirmed := waitAccessMoleCheckpoint(t, ctx, redisAddress, player.id, func(state accessMoleCheckpoint) bool {
+					return state.Pending != nil && state.Pending.ID == prepared.Pending.ID && state.Sequence == prepared.Sequence
+				})
+				if unconfirmed.Pool != prepared.Pool {
+					t.Fatal("Mole 停止时业务统计不应提前确认")
+				}
+				t.Log("已构造 SQL 已提交、Mole 检查点仍为 pending 的状态")
+			}
+			mole.process = startAccessProcess(t, mole.binary, []string{"-config", mole.config}, mole.address)
 			t.Log("等待重启后完成原批次确认")
 			confirmed := waitAccessMoleCheckpoint(t, ctx, redisAddress, player.id, func(state accessMoleCheckpoint) bool {
 				return state.Pending == nil && state.Sequence == prepared.Pending.Sequence && state.LastBatchID == prepared.Pending.ID
@@ -112,7 +131,7 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		if !leave.Left {
 			t.Fatal("结算恢复后无法离开")
 		}
-		t.Logf("结算恢复（Mole 重启=%t）：故障时查询失败、钱包不变；原 HitID 补齐一次，余额 %d，版本 %d → %d", restartMole, amount, previousVersion, version)
+		t.Logf("结算恢复（%s）：原 HitID 仅入账一次，余额 %d，版本 %d → %d", scenario, amount, previousVersion, version)
 	}
 }
 
@@ -154,11 +173,54 @@ type accessMoleCheckpoint struct {
 		Sequence uint64 `json:"sequence"`
 		// 持久化 hitEvent 使用 Go 字段名，不能按客户端协议的 hit_id 读取。
 		Events []struct {
-			HitID  string `json:"HitID"`
-			Debit  int64  `json:"debit"`
-			Credit int64  `json:"credit"`
+			HitID      string `json:"HitID"`
+			UserID     uint64
+			ActionID   string
+			AttackName string
+			Sequence   uint64
+			Hole       int64
+			Debit      int64
+			Credit     int64
+			Rule       string
 		} `json:"events"`
 	} `json:"pending"`
+}
+
+// applyAccessPreparedBatch 经已约定的结算接口提交原事件，只用于构造 SQL 已提交但 Mole 未收到结果的恢复边界。
+func applyAccessPreparedBatch(t *testing.T, ctx context.Context, address string, state accessMoleCheckpoint) {
+	t.Helper()
+	batch := state.Pending
+	operations := make([]any, 0, len(batch.Events))
+	for _, event := range batch.Events {
+		operations = append(operations, map[string]any{
+			"operation_id": event.HitID, "business": "mole", "user_id": event.UserID,
+			"business_ref": fmt.Sprintf("%s/%d/%d", event.AttackName, event.Sequence, event.Hole),
+			"items": []any{
+				map[string]any{"reason": "hammer_cost", "debit": event.Debit, "credit": int64(0)},
+				map[string]any{"reason": "hammer_reward", "debit": int64(0), "credit": event.Credit},
+			},
+			"detail": map[string]any{"rule": event.Rule, "action_id": event.ActionID},
+		})
+	}
+	request := map[string]any{"version": uint64(2), "batch_id": batch.ID, "operations": operations}
+	wait, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var result any
+	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
+		var err error
+		result, err = self.Cluster().Call(wait, "settlement", cluster.ServiceName(routing.WriteService(batch.ID)), 1, request)
+		return err
+	}}
+	if err := gsr.Run(wait, gsr.Config{
+		Logging: logging.Config{Directory: t.TempDir()},
+		Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"settlement": address}},
+	}, main); err != nil {
+		t.Fatal(err)
+	}
+	receipt, ok := result.(map[string]any)
+	if !ok || receipt["batch_id"] != batch.ID {
+		t.Fatalf("原批次提交结果不匹配: %v", result)
+	}
 }
 
 func waitAccessMoleCheckpoint(t *testing.T, ctx context.Context, address string, userID uint64,
