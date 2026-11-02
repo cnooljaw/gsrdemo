@@ -81,6 +81,8 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 Online 骤停演练：玩家完成 Enter 后强停本用例的 Online 并确认监听消失，新连接用正确密码登录也无法绑定，接入关闭连接。原游戏连接仍收到故障后生成的快照，完成 Snapshot、Hit、Operation 查询及 Leave；MySQL 核对唯一操作、扣返和版本 7 → 8 一致。启用真实进程用例的 access 全量 race 及 vet 通过。只补测试，未修改业务逻辑；不覆盖 Online 重启后的绑定重建。
 
+2026-11-02 Agent 推送故障注入：同一 Runtime 内两个真实 Agent，分别向一个 ClientSession 注入队列满、连接关闭错误；该 Agent 连续两次推送 Call 均返回 GSR 归一化的 runtime.handler_failed，另一 Agent 连续两次收到正确余额和修订号，旧 LoginID 不触发写回。定向 race 与 vet 通过；未修改业务代码，也未复制 Gate 队列实现。此用例只验证应用层错误边界，真实业务流量下的慢客户端、出站积压及持续负载仍待验收。
+
 ## 4. GSR 与参考边界
 
 - 节点固定 GSR v1.0.2，tag commit 为 6710a766ca40c06a068e52c52456b39f8b3fe78e；节点仅对本仓库 common 使用本地 replace。
