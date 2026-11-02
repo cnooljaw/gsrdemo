@@ -295,6 +295,25 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 	accessWaitCommitted(t, recovered, crashHit.HitId)
 	accessWaitCommitted(t, recovered, oldHitID)
 
+	// HitID 不是查询凭证；两个已登录玩家互查对方的持久结果都应与不存在一致。
+	for _, probe := range []struct {
+		client *accessClient
+		hitID  string
+	}{
+		{recovered, healthyHit.HitId},
+		{peer, crashHit.HitId},
+	} {
+		var hidden demopb.OperationResponse
+		accessProcessResponse(t, probe.client, demopb.MsgId_C2S_OPERATION,
+			&demopb.OperationRequest{HitId: probe.hitID}, &hidden)
+		if hidden.HitId != probe.hitID || hidden.Found || hidden.Status != "" || hidden.Reason != "" {
+			t.Fatalf("暴露了其他用户的账务结果: %v", &hidden)
+		}
+	}
+	accessWaitCommitted(t, recovered, recoveredHit.HitId)
+	accessWaitCommitted(t, peer, healthyHit.HitId)
+	t.Log("两个真实客户端互查对方已入账的 HitID 均返回未找到且不携带状态/原因，各自原记录仍可正常查询")
+
 	for index, hits := range [][]*demopb.Hit{{crashHit, recoveredHit}, {healthyHit}} {
 		var amount int64
 		var version uint64
