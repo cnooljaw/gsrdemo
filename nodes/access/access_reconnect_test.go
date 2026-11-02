@@ -12,6 +12,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
+	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
@@ -113,6 +114,12 @@ func accessWaitCommitted(t *testing.T, client *accessClient, hitID string) {
 
 func accessHitTarget(t *testing.T, client *accessClient, snapshot *demopb.Snapshot, actionID string) *demopb.Hit {
 	t.Helper()
+	response, _ := accessHitTargetResponse(t, client, snapshot, actionID)
+	return response.Hit
+}
+
+func accessHitTargetResponse(t *testing.T, client *accessClient, snapshot *demopb.Snapshot, actionID string) (*demopb.HitResponse, []*commonv1.Envelope) {
+	t.Helper()
 	// 其他玩家不发命中请求，等待一个未过期目标，再仅提交一次命中。
 	var target *demopb.Target
 	deadline := time.Now().Add(5 * time.Second)
@@ -131,12 +138,15 @@ func accessHitTarget(t *testing.T, client *accessClient, snapshot *demopb.Snapsh
 		t.Fatal("没有可命中的目标")
 	}
 	var hit demopb.HitResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_HIT,
-		&demopb.HitRequest{ActionId: actionID, SpawnSeq: target.SpawnSeq, Hole: target.Hole}, &hit)
+	response, pushes := accessRequestAndPushes(t, client, demopb.MsgId_C2S_HIT,
+		&demopb.HitRequest{ActionId: actionID, SpawnSeq: target.SpawnSeq, Hole: target.Hole})
+	if err := proto.Unmarshal(response.Payload, &hit); err != nil || response.MsgId != uint32(demopb.MsgId_S2C_HIT) {
+		t.Fatalf("命中响应错误: %v %v", response, err)
+	}
 	if hit.GetHit().GetHitId() == "" || hit.Hit.Status != "accepted" {
 		t.Fatalf("命中未被接纳: %v", &hit)
 	}
-	return hit.Hit
+	return &hit, pushes
 }
 
 func accessExpectClosed(t *testing.T, client *accessClient) {

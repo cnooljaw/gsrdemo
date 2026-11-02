@@ -445,6 +445,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 		verifyAccessProcessCrash(t, ctx, routes, gateAddresses, players[:2], settlementDB, &operationIDs, processes["access-01"].process, hitID)
 		verifyAccessSettlementRecovery(t, ctx, gateAddresses[1], &players[0], settlementDB, &operationIDs,
 			processes["settlement"], processes["mole"], redisAddress)
+		verifyAccessSettlementRejection(t, ctx, gateAddresses[1], &players[2], settlementDB, &operationIDs, routes["settlement"], redisAddress)
 		verifyAccessOnlineUnavailable(t, ctx, routes["online"], gateAddresses[1], players[:2], settlementDB, &operationIDs, processes["online"].process)
 	}
 }

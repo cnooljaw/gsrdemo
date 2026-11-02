@@ -209,6 +209,13 @@ func startAccessBusiness(t *testing.T, scenarios ...string) (string, string, <-c
 
 func accessRequest(t *testing.T, client *accessClient, id demopb.MsgId, request proto.Message) *commonv1.Envelope {
 	t.Helper()
+	response, _ := accessRequestAndPushes(t, client, id, request)
+	return response
+}
+
+// accessRequestAndPushes 保留请求等待期间交错到达的推送，避免故障用例漏掉早于响应的余额校正。
+func accessRequestAndPushes(t *testing.T, client *accessClient, id demopb.MsgId, request proto.Message) (*commonv1.Envelope, []*commonv1.Envelope) {
+	t.Helper()
 	payload, err := proto.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -221,11 +228,13 @@ func accessRequest(t *testing.T, client *accessClient, id demopb.MsgId, request 
 	if err := client.WriteMessage(websocket.BinaryMessage, client.authenticatedFrame(frame)); err != nil {
 		t.Fatal(err)
 	}
+	var pushes []*commonv1.Envelope
 	for {
 		envelope := readAccessEnvelope(t, client)
 		if envelope.RequestId != 0 {
-			return envelope
+			return envelope, pushes
 		}
+		pushes = append(pushes, envelope)
 	}
 }
 

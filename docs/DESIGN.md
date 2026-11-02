@@ -89,6 +89,8 @@ Online 骤停演练：玩家完成 Enter 后强停本用例的 Online 并确认�
 
 已入账未确认恢复验收：第三个变体在 Mole 停止时，经真实 Settlement 接口提交 Redis 中保存的原批次，先核对 SQL 已入账、Redis 仍保留同一个 pending 且业务统计未变，再启动 Mole。恢复后 origin_batch/HitID 不变，唯一操作及钱包版本仍只增加一次，Redis 统计累计一次后清除 pending。启用真实进程用例的 access 全量 race 及 vet 通过。测试只构造恢复状态，不注入网络丢包，不修改账本或业务代码。
 
+最终拒绝与余额校正验收：玩家进入后，通过 Settlement 单用户接口模拟其他业务将钱包扣至零；Mole 缓存仍允许 hit 并即时返回内存奖励，最终操作以 insufficient_silver 拒绝，当前 MAC 客户端收到较新修订号的绝对余额零值及确认版本。拒绝记录仅一条、钱包版本不再增加，Redis 清除批次但不累计该命中的奖池统计。测试保留响应前交错到达的推送，避免漏检校正；启用真实进程用例的 access 全量 race 及 vet 通过，仅扩展测试，不修改业务代码。
+
 ## 4. GSR 与参考边界
 
 - 节点固定 GSR v1.0.2，tag commit 为 6710a766ca40c06a068e52c52456b39f8b3fe78e；节点仅对本仓库 common 使用本地 replace。
