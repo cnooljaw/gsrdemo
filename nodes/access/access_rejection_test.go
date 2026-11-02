@@ -13,7 +13,7 @@ import (
 
 // verifyAccessSettlementRejection 模拟其他业务先扣款，验证最终拒绝及客户端绝对余额校正，不直接修改数据库余额。
 func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddress string,
-	player *accessDemoPlayer, db *sql.DB, operationIDs *[]string, settlementAddress, redisAddress string) {
+	player, peer *accessDemoPlayer, db *sql.DB, operationIDs *[]string, settlementAddress, redisAddress string) {
 	t.Helper()
 	client, snapshot := accessLoginAndEnter(t, gateAddress, player)
 	var amount int64
@@ -108,10 +108,99 @@ func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddr
 	if final.Pool != baseline.Pool {
 		t.Fatal("被拒绝命中不应计入奖池统计")
 	}
+	verifyAccessMemoryRejectionIsLocal(t, ctx, gateAddress, client, snapshot.AttackName, peer, db, operationIDs)
 	var leave demopb.LeaveResponse
 	accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
 	if !leave.Left {
 		t.Fatal("余额校正后无法离开")
 	}
 	t.Log("其他业务通过 Settlement 扣至零后，Mole 仍即时接受缓存命中；最终拒绝为 insufficient_silver，客户端余额校正为零，钱包未再次变更、奖池未累计")
+}
+
+// verifyAccessMemoryRejectionIsLocal 保护零余额玩家的失败请求不占用目标，同组玩家仍可命中该目标并入账。
+func verifyAccessMemoryRejectionIsLocal(t *testing.T, ctx context.Context, gateAddress string,
+	empty *accessClient, attackName string, peer *accessDemoPlayer,
+	db *sql.DB, operationIDs *[]string) {
+	t.Helper()
+	healthy, snapshot := accessLoginAndEnter(t, gateAddress, peer)
+	if snapshot.AttackName != attackName {
+		t.Fatal("失败隔离演练需要两个玩家在同一组")
+	}
+	var before int64
+	var previousVersion uint64
+	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", peer.id).
+		Scan(&before, &previousVersion); err != nil {
+		t.Fatal(err)
+	}
+	// 取剩余时间充足的目标，只提交一次失败请求，随后另一玩家使用完全相同的目标实例。
+	var target *demopb.Target
+	deadline := time.Now().Add(5 * time.Second)
+	for target == nil && time.Now().Before(deadline) {
+		for _, candidate := range snapshot.Targets {
+			if !candidate.Claimed && candidate.DeadlineMs > time.Now().Add(time.Second).UnixMilli() {
+				target = candidate
+				break
+			}
+		}
+		if target == nil {
+			snapshot = accessNextSnapshot(t, healthy, attackName)
+		}
+	}
+	if target == nil {
+		t.Fatal("未取得可验证局部拒绝的目标")
+	}
+	failure := accessRequest(t, empty, demopb.MsgId_C2S_HIT, &demopb.HitRequest{
+		ActionId: "after-zero-correction", SpawnSeq: target.SpawnSeq, Hole: target.Hole,
+	})
+	if failure.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+		t.Fatalf("余额归零后仍接纳命中: %v", failure)
+	}
+	var refused demopb.SnapshotResponse
+	accessProcessResponse(t, empty, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &refused)
+	var refusedHit *demopb.Hit
+	for _, candidate := range refused.GetSnapshot().GetHits() {
+		if candidate.ActionId == "after-zero-correction" {
+			refusedHit = candidate
+			break
+		}
+	}
+	if refusedHit == nil || refusedHit.HitId == "" {
+		t.Fatalf("未取得被内存拒绝的请求: %v", &refused)
+	}
+	*operationIDs = append(*operationIDs, refusedHit.HitId)
+	if refusedHit.Status != "rejected" {
+		t.Fatalf("零余额请求未被内存拒绝: %v", refusedHit)
+	}
+	for _, candidate := range refused.GetSnapshot().GetTargets() {
+		if candidate.SpawnSeq == target.SpawnSeq && candidate.Hole == target.Hole && candidate.Claimed {
+			t.Fatal("内存拒绝后目标仍被占用")
+		}
+	}
+	var hit demopb.HitResponse
+	accessProcessResponse(t, healthy, demopb.MsgId_C2S_HIT, &demopb.HitRequest{
+		ActionId: "same-target-after-peer-refusal", SpawnSeq: target.SpawnSeq, Hole: target.Hole,
+	}, &hit)
+	if hit.GetHit().GetHitId() == "" || hit.Hit.Status != "accepted" ||
+		hit.Hit.SpawnSeq != target.SpawnSeq || hit.Hit.Hole != target.Hole {
+		t.Fatalf("失败请求占住目标或影响同组玩家: %v", &hit)
+	}
+	*operationIDs = append(*operationIDs, hit.Hit.HitId)
+	accessWaitCommitted(t, healthy, hit.Hit.HitId)
+	var amount int64
+	var version uint64
+	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", peer.id).
+		Scan(&amount, &version); err != nil || amount != before-hit.Hit.Debit+hit.Hit.Credit || version != previousVersion+1 {
+		t.Fatalf("同组玩家入账差异: amount=%d version=%d err=%v", amount, version, err)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", refusedHit.HitId).
+		Scan(&count); err != nil || count != 0 {
+		t.Fatalf("内存拒绝不应提交账务: count=%d err=%v", count, err)
+	}
+	var leave demopb.LeaveResponse
+	accessProcessResponse(t, healthy, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
+	if !leave.Left {
+		t.Fatal("同组玩家入账后无法离开")
+	}
+	t.Log("余额校正为零后再次敲击被拒，未提交新账务；同组玩家命中完全相同的目标实例并完成入账")
 }
