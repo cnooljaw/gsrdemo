@@ -83,7 +83,7 @@ Online 骤停演练：玩家完成 Enter 后强停本用例的 Online 并确认�
 
 2026-11-02 Agent 推送故障注入：同一 Runtime 内两个真实 Agent，分别向一个 ClientSession 注入队列满、连接关闭错误；该 Agent 连续两次推送 Call 均返回 GSR 归一化的 runtime.handler_failed，另一 Agent 连续两次收到正确余额和修订号，旧 LoginID 不触发写回。定向 race 与 vet 通过；未修改业务代码，也未复制 Gate 队列实现。此用例只验证应用层错误边界，真实业务流量下的慢客户端、出站积压及持续负载仍待验收。
 
-2026-11-02 结算中断恢复演练：玩家已 Enter 后强停本用例的 Settlement，hit 仍返回 accepted 内存结果，但 Operation 查询明确报错，MySQL 余额/版本不变且没有该 HitID 的账务记录。用原配置重启 Settlement 后，客户端只查询、不重发 hit，Mole 自动按原 ID 补齐一次，余额符合原扣返，版本 7 → 8，重复查询后仍仅一条操作记录。另一变体先确认该 HitID/扣返已保存于 Redis，再强停并重启 Mole，随后恢复 Settlement；重新登录/进入后查询原 HitID，SQL 的 origin_batch 与原批次一致、仅一笔操作，版本 8 → 9；Redis 序号推进到原批次序号、待处理记录清除，命中/扣返统计仅累计一次。检查点验收通过 redis-cli 只读临时 Redis，不新增 Go 依赖；持久化事件字段 HitID 与客户端字段 hit_id 不混用。启用真实进程用例的 access 全量 race 及 vet 通过。Redis/MySQL 全程保持可用，不承诺未保存内存命中、原房间或存储丢失恢复。
+2026-11-02 结算中断恢复演练：玩家已 Enter 后强停本用例的 Settlement，hit 仍返回 accepted 内存结果，但 Operation 查询明确报错，MySQL 余额/版本不变且没有该 HitID 的账务记录。用原配置重启 Settlement 后，客户端只查询、不重发 hit，Mole 自动按原 ID 补齐一次，余额符合原扣返，版本 7 → 8，重复查询后仍仅一条操作记录。结算仍停止时主动 Leave 后重新 Enter，原待确认扣返、可用余额、确认版本和修订号均保留，退出不取消账务；该扩展的完整进程用例定向 race 通过。另一变体先确认该 HitID/扣返已保存于 Redis，再强停并重启 Mole，随后恢复 Settlement；重新登录/进入后查询原 HitID，SQL 的 origin_batch 与原批次一致、仅一笔操作，版本 8 → 9；Redis 序号推进到原批次序号、待处理记录清除，命中/扣返统计仅累计一次。检查点验收通过 redis-cli 只读临时 Redis，不新增 Go 依赖；持久化事件字段 HitID 与客户端字段 hit_id 不混用。启用真实进程用例的 access 全量 race 及 vet 通过。Redis/MySQL 全程保持可用，不承诺未保存内存命中、原房间或存储丢失恢复。
 
 命中重提验收：在各恢复路径中，真实 MAC 客户端保持同一连接、LoginID 和房间，在请求缓存有效期内重复提交相同 ActionID/目标/洞位，HitID、奖励和余额视图不变；分别改目标序号或洞位会报错，随后原请求仍返回原结果。最终 SQL 余额/版本、唯一操作及 Redis 统计仍只累计一次。该完整进程用例的定向 race 和 vet 通过；不扩大为跨登录、跨房间或永久的 ActionID 幂等承诺。
 

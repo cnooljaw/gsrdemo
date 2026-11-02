@@ -38,7 +38,8 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 			t.Fatal(err)
 		}
 		waitAccessProcessListenerClosed(t, settlement.address)
-		hit := accessHitTarget(t, client, snapshot, "while-settlement-unavailable")
+		memory, _ := accessHitTargetResponse(t, client, snapshot, "while-settlement-unavailable")
+		hit := memory.Hit
 		*operationIDs = append(*operationIDs, hit.HitId)
 		verifyAccessHitReplay(t, client, hit)
 		response := accessRequest(t, client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: hit.HitId})
@@ -58,6 +59,28 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		var count int
 		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", hit.HitId).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("结算停止时出现账务记录: count=%d err=%v", count, err)
+		}
+		if !restartMole {
+			// 主动退出不取消已接纳账务；Settlement 仍停止，重新进入必须沿用待确认内存余额。
+			var leave demopb.LeaveResponse
+			accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
+			if !leave.Left {
+				t.Fatal("结算中断时无法主动离开")
+			}
+			outside := accessRequest(t, client, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{})
+			if outside.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+				t.Fatalf("离开后仍可读取组快照: %v", outside)
+			}
+			var enter demopb.EnterResponse
+			accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &enter)
+			balance := enter.Silver
+			if enter.GetSnapshot().GetAttackName() == "" || balance == nil || balance.Confirmed == nil || memory.Silver == nil ||
+				balance.Balance != before-hit.Debit+hit.Credit || balance.Available != before-hit.Debit ||
+				balance.Confirmed.Amount != before || balance.Confirmed.Version != previousVersion ||
+				balance.Revision != memory.Silver.Revision {
+				t.Fatalf("退出重进丢失待扣或重置确认余额: memory=%v enter=%v", memory, &enter)
+			}
+			t.Log("Settlement 中断时主动 Leave 后重新 Enter 成功，待确认扣返、可用余额、确认版本和修订号均保留")
 		}
 
 		var prepared accessMoleCheckpoint
