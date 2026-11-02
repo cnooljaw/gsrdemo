@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -15,9 +14,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// verifyAccessOnlineUnavailable 强停本用例的 Online，验证拒绝新绑定且已进入的玩家继续推送、命中和入账。
-func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, onlineAddress, gateAddress string,
-	players []accessDemoPlayer, db *sql.DB, operationIDs *[]string, onlineProcess *os.Process) {
+// verifyAccessOnlineUnavailable 验证 Online 中断时游戏继续，重启后显式登录重建绑定且旧身份不能误删。
+func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online accessNodeProcess, gateAddress string,
+	players []accessDemoPlayer, db *sql.DB, operationIDs *[]string) {
 	t.Helper()
 	var before int64
 	var previousVersion uint64
@@ -26,10 +25,11 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, onlineAddr
 		t.Fatal(err)
 	}
 	bound, snapshot := accessLoginAndEnter(t, gateAddress, &players[0])
-	if err := onlineProcess.Kill(); err != nil {
+	previous := accessOnlineRPC(t, online.address, 2, players[0].id).(map[string]any)
+	if err := online.process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	waitAccessProcessListenerClosed(t, onlineAddress)
+	waitAccessProcessListenerClosed(t, online.address)
 	failedAt := time.Now().UnixMilli()
 	accessExpectLoginRejected(t, gateAddress, &players[1])
 
@@ -65,6 +65,48 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, onlineAddr
 		t.Fatal("Online 不可用时已有玩家无法离开")
 	}
 	t.Logf("SIGKILL Online：新登录被拒且连接关闭；已有玩家沿原连接收到新推送、命中并入账，余额 %d，版本 %d → %d", amount, previousVersion, version)
+
+	// Online 不持久化目录；只恢复本测试节点，再由客户端重新登录建立新身份。
+	startAccessProcess(t, online.binary, []string{"-config", online.config}, online.address)
+	if location := accessOnlineRPC(t, online.address, 2, players[0].id); location != nil {
+		t.Fatalf("Online 重启不应保留旧目录: %v", location)
+	}
+	recovered, snapshot := accessLoginAndEnter(t, gateAddress, &players[0])
+	location := accessOnlineRPC(t, online.address, 2, players[0].id).(map[string]any)
+	if location["access_node"] != "access-02" || location["login_id"] == previous["login_id"] {
+		t.Fatalf("Online 重启后未建立新绑定: %v", location)
+	}
+	if removed := accessOnlineRPC(t, online.address, 3, players[0].id, previous["login_id"]); removed != false {
+		t.Fatal("Online 重启后旧 LoginID 删除了新绑定")
+	}
+	current := accessOnlineRPC(t, online.address, 2, players[0].id).(map[string]any)
+	if current["login_id"] != location["login_id"] || current["agent_name"] != location["agent_name"] {
+		t.Fatalf("迟到解绑改变了恢复绑定: %v", current)
+	}
+	_ = bound.Close()
+	snapshot = accessNextSnapshot(t, recovered, snapshot.AttackName)
+	recoveryHit := accessHitTarget(t, recovered, snapshot, "after-online-restart")
+	*operationIDs = append(*operationIDs, recoveryHit.HitId)
+	accessWaitCommitted(t, recovered, recoveryHit.HitId)
+	accessWaitCommitted(t, recovered, hit.HitId)
+	var recoveredAmount int64
+	var recoveredVersion uint64
+	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", players[0].id).
+		Scan(&recoveredAmount, &recoveredVersion); err != nil ||
+		recoveredAmount != amount-recoveryHit.Debit+recoveryHit.Credit || recoveredVersion != version+1 {
+		t.Fatalf("Online 重启后入账差异: amount=%d version=%d err=%v", recoveredAmount, recoveredVersion, err)
+	}
+	for _, id := range []string{hit.HitId, recoveryHit.HitId} {
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", id).
+			Scan(&count); err != nil || count != 1 {
+			t.Fatalf("Online 重启后丢账或重复: count=%d err=%v", count, err)
+		}
+	}
+	accessProcessResponse(t, recovered, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
+	if !leave.Left {
+		t.Fatal("Online 重启后无法离开")
+	}
+	t.Logf("Online 重启清空目录，显式重登重建绑定，旧身份解绑无效；重新进入后命中并唯一入账，余额 %d，版本 %d → %d", recoveredAmount, version, recoveredVersion)
 }
 
 func accessExpectLoginRejected(t *testing.T, address string, player *accessDemoPlayer) {

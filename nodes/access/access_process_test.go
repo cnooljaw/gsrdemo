@@ -447,6 +447,6 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 			processes["settlement"], processes["mole"], redisAddress)
 		verifyAccessSettlementRejection(t, ctx, gateAddresses[1], &players[2], &players[1], settlementDB,
 			&operationIDs, routes["settlement"], redisAddress)
-		verifyAccessOnlineUnavailable(t, ctx, routes["online"], gateAddresses[1], players[:2], settlementDB, &operationIDs, processes["online"].process)
+		verifyAccessOnlineUnavailable(t, ctx, processes["online"], gateAddresses[1], players[:2], settlementDB, &operationIDs)
 	}
 }
