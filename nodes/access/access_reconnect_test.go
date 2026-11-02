@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// TestAccessTwoNodesReconnectLiveMySQL 保护双接入替换/重连、接入或 Online 骤停后的局部隔离及真实入账。
+// TestAccessTwoNodesReconnectLiveMySQL 保护双接入重连、依赖节点故障隔离及结算恢复后的唯一入账。
 func TestAccessTwoNodesReconnectLiveMySQL(t *testing.T) {
 	runAccessClientsLiveMySQL(t, 3, 2)
 }

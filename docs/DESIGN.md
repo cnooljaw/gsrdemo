@@ -79,9 +79,11 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 接入骤停演练：收到内存命中响应后 SIGKILL 本用例的 access-01，跳过 Leave/Unbind，确认 Online 暂留旧位置。access-02 的另一玩家沿原连接继续命中和真实入账；受影响账号在 access-02 重新登录/进入，覆盖旧位置、回到原组和原座位并收到推送，旧 LoginID 迟到解绑返回 false；随后该账号实际再次命中并完成 MySQL 入账。受影响账号的骤停前、恢复后两笔命中各入账一次，版本 5 → 7；另一玩家的一笔命中使版本 4 → 5，余额与各自扣返一致。原 HitID 和三笔新操作均只有一条数据库记录，恢复后再次查询旧 HitID 不重复扣款。真实进程、MySQL 及该用例的定向 race 验证通过。仅补测试，未增加业务状态或自动恢复机制；不代表 Mole、Redis 或 MySQL 同时故障可恢复。
 
-Online 骤停演练：玩家完成 Enter 后强停本用例的 Online 并确认监听消失，新连接用正确密码登录也无法绑定，接入关闭连接。原游戏连接仍收到故障后生成的快照，完成 Snapshot、Hit、Operation 查询及 Leave；MySQL 核对唯一操作、扣返和版本 7 → 8 一致。启用真实进程用例的 access 全量 race 及 vet 通过。只补测试，未修改业务逻辑；不覆盖 Online 重启后的绑定重建。
+Online 骤停演练：玩家完成 Enter 后强停本用例的 Online 并确认监听消失，新连接用正确密码登录也无法绑定，接入关闭连接。原游戏连接仍收到故障后生成的快照，完成 Snapshot、Hit、Operation 查询及 Leave；MySQL 核对唯一操作、扣返及版本递增一次一致。启用真实进程用例的 access 全量 race 及 vet 通过。只补测试，未修改业务逻辑；不覆盖 Online 重启后的绑定重建。
 
 2026-11-02 Agent 推送故障注入：同一 Runtime 内两个真实 Agent，分别向一个 ClientSession 注入队列满、连接关闭错误；该 Agent 连续两次推送 Call 均返回 GSR 归一化的 runtime.handler_failed，另一 Agent 连续两次收到正确余额和修订号，旧 LoginID 不触发写回。定向 race 与 vet 通过；未修改业务代码，也未复制 Gate 队列实现。此用例只验证应用层错误边界，真实业务流量下的慢客户端、出站积压及持续负载仍待验收。
+
+2026-11-02 结算中断恢复演练：玩家已 Enter 后强停本用例的 Settlement，hit 仍返回 accepted 内存结果，但 Operation 查询明确报错，MySQL 余额/版本不变且没有该 HitID 的账务记录。用原配置重启 Settlement 后，客户端只查询、不重发 hit，Mole 自动按原 ID 补齐一次，余额符合原扣返，版本 7 → 8，重复查询后仍仅一条操作记录。启用真实进程用例的 access 全量 race 及 vet 通过。没有停 MySQL、没有修改业务或扩展恢复框架；不将短暂单节点中断等同于持续故障或多节点同时退出验收。
 
 ## 4. GSR 与参考边界
 

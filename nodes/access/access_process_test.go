@@ -57,6 +57,22 @@ func freeAccessAddress(t *testing.T) string {
 	return address
 }
 
+func waitAccessProcessListenerClosed(t *testing.T, address string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = connection.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("stopped process listener still exists: " + address)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // startAccessProcess 只回收本用例创建的子进程；输出文件归测试临时目录。
 func startAccessProcess(t *testing.T, binary string, arguments []string, address string) *os.Process {
 	t.Helper()
@@ -233,7 +249,8 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	}
 	_, redisPort, _ := net.SplitHostPort(redisAddress)
 	startAccessProcess(t, redisBinary, []string{"--bind", "127.0.0.1", "--port", redisPort, "--save", "", "--appendonly", "yes", "--appendfsync", "always", "--dir", t.TempDir()}, redisAddress)
-	var firstAccess, onlineProcess *os.Process
+	var firstAccess, onlineProcess, settlementProcess *os.Process
+	var settlementBinary, settlementConfig string
 	for _, node := range nodeNames {
 		role, gate := node, gateAddress
 		if strings.HasPrefix(node, "access-") {
@@ -287,6 +304,9 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 		}
 		if node == "online" {
 			onlineProcess = process
+		}
+		if node == "settlement" {
+			settlementProcess, settlementBinary, settlementConfig = process, binary, path
 		}
 	}
 	clientPath, err := filepath.Abs("../../typeclient/dist/index.js")
@@ -424,6 +444,8 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	if accessCount == 2 {
 		hitID := verifyAccessReconnect(t, ctx, routes, gateAddresses, &players[0], settlementDB, &operationIDs)
 		verifyAccessProcessCrash(t, ctx, routes, gateAddresses, players[:2], settlementDB, &operationIDs, firstAccess, hitID)
+		verifyAccessSettlementRecovery(t, ctx, gateAddresses[1], &players[0], settlementDB, &operationIDs,
+			settlementProcess, settlementBinary, settlementConfig, routes["settlement"])
 		verifyAccessOnlineUnavailable(t, ctx, routes["online"], gateAddresses[1], players[:2], settlementDB, &operationIDs, onlineProcess)
 	}
 }

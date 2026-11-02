@@ -29,24 +29,12 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, onlineAddr
 	if err := onlineProcess.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	// 确认监听已经消失，再开始新登录，避免 Kill 返回与进程退出之间的竞争。
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		connection, err := net.DialTimeout("tcp", onlineAddress, 100*time.Millisecond)
-		if err != nil {
-			break
-		}
-		_ = connection.Close()
-		if time.Now().After(deadline) {
-			t.Fatal("Online 骤停后监听仍存在")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitAccessProcessListenerClosed(t, onlineAddress)
 	failedAt := time.Now().UnixMilli()
 	accessExpectLoginRejected(t, gateAddress, &players[1])
 
 	// 必须收到故障之后生成的快照，不能把队列中故障前的推送当成继续运行的证据。
-	deadline = time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for snapshot.ServerMs <= failedAt && time.Now().Before(deadline) {
 		snapshot = accessNextSnapshot(t, bound, snapshot.AttackName)
 	}
