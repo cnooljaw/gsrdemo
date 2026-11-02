@@ -233,7 +233,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	}
 	_, redisPort, _ := net.SplitHostPort(redisAddress)
 	startAccessProcess(t, redisBinary, []string{"--bind", "127.0.0.1", "--port", redisPort, "--save", "", "--appendonly", "yes", "--appendfsync", "always", "--dir", t.TempDir()}, redisAddress)
-	var firstAccess *os.Process
+	var firstAccess, onlineProcess *os.Process
 	for _, node := range nodeNames {
 		role, gate := node, gateAddress
 		if strings.HasPrefix(node, "access-") {
@@ -284,6 +284,9 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 		process := startAccessProcess(t, binary, []string{"-config", path}, address)
 		if node == "access-01" {
 			firstAccess = process
+		}
+		if node == "online" {
+			onlineProcess = process
 		}
 	}
 	clientPath, err := filepath.Abs("../../typeclient/dist/index.js")
@@ -421,5 +424,6 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	if accessCount == 2 {
 		hitID := verifyAccessReconnect(t, ctx, routes, gateAddresses, &players[0], settlementDB, &operationIDs)
 		verifyAccessProcessCrash(t, ctx, routes, gateAddresses, players[:2], settlementDB, &operationIDs, firstAccess, hitID)
+		verifyAccessOnlineUnavailable(t, ctx, routes["online"], gateAddresses[1], players[:2], settlementDB, &operationIDs, onlineProcess)
 	}
 }

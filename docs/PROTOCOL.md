@@ -21,6 +21,8 @@ Agent 仅保存当前身份和 entry/attack 路由；每条连接随机生成私
 
 未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。远端推送仍为 Command 100，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
 
+Online 不可用时，新登录不能完成绑定，接入关闭该连接。已进入游戏的连接仍按当前路由执行 Hit/Snapshot/Leave/Operation 并接收推送，不逐次查询 Online；重新登录或 Enter 仍需目录可用。Online 重启后不自动重建绑定。
+
 多个 access 共用上述协议；客户端通过连接 URL 选择接入。跨接入登录仍返回同一 UserID，使用新的 LoginID 和 Agent 地址；重新 Enter 获取当前快照/余额后，可以用 Operation 查询自己的原 HitID，不重新生成命中或奖励。CLI 目前不自动重连。
 
 仅 `mole.target_unavailable`（Domain 类别）转换为 HitResponse.rejection=target_unavailable，表示该次目标检查已拒绝且尚未记账；客户端可以输出 miss、刷新快照后用新 ActionID 操作新目标，不累计命中或修改余额。CLI 每次成功命中前的争抢预算为 max(15 秒, --timeout-ms)，明确拒绝不延长该预算。
