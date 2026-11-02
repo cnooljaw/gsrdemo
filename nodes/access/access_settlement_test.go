@@ -34,6 +34,7 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		waitAccessProcessListenerClosed(t, settlement.address)
 		hit := accessHitTarget(t, client, snapshot, "while-settlement-unavailable")
 		*operationIDs = append(*operationIDs, hit.HitId)
+		verifyAccessHitReplay(t, client, hit)
 		response := accessRequest(t, client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: hit.HitId})
 		if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 			t.Fatalf("结算不可用时不能把查询当成入账结果: %v", response)
@@ -113,6 +114,32 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		}
 		t.Logf("结算恢复（Mole 重启=%t）：故障时查询失败、钱包不变；原 HitID 补齐一次，余额 %d，版本 %d → %d", restartMole, amount, previousVersion, version)
 	}
+}
+
+// verifyAccessHitReplay 保持同一连接/房间，验证原请求重提与内容冲突不会产生新的命中结果。
+func verifyAccessHitReplay(t *testing.T, client *accessClient, hit *demopb.Hit) {
+	t.Helper()
+	request := &demopb.HitRequest{ActionId: hit.ActionId, SpawnSeq: hit.SpawnSeq, Hole: hit.Hole}
+	var original demopb.HitResponse
+	accessProcessResponse(t, client, demopb.MsgId_C2S_HIT, request, &original)
+	if !proto.Equal(original.Hit, hit) || original.Silver == nil || original.Rejection != "" {
+		t.Fatalf("原请求重提改变了 HitID/奖励: %v", &original)
+	}
+	for _, conflict := range []*demopb.HitRequest{
+		{ActionId: hit.ActionId, SpawnSeq: hit.SpawnSeq + 1, Hole: hit.Hole},
+		{ActionId: hit.ActionId, SpawnSeq: hit.SpawnSeq, Hole: (hit.Hole + 1) % 9},
+	} {
+		response := accessRequest(t, client, demopb.MsgId_C2S_HIT, conflict)
+		if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+			t.Fatalf("同一 ActionID 改目标必须拒绝: %v", response)
+		}
+		var replay demopb.HitResponse
+		accessProcessResponse(t, client, demopb.MsgId_C2S_HIT, request, &replay)
+		if !proto.Equal(&original, &replay) {
+			t.Fatalf("重复或冲突改变了原命中/余额: before=%v after=%v", &original, &replay)
+		}
+	}
+	t.Log("同一 ActionID/内容多次提交保持原 HitID、奖励和余额；更改目标序号或洞位被拒，原请求仍返回原结果")
 }
 
 // accessMoleCheckpoint 只读取验收所需字段，不导入 Mole 实现或修改检查点。
