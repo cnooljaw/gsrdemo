@@ -170,14 +170,14 @@ unset demo_password
 
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 
-单/双接入的独立节点进程、单/三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建）：
+单/双接入的独立节点进程、单/三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）：
 
 ```shell
 GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
   -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
 ```
 
-用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还会分别强停自己的 access-01、Settlement 和 Online，验证跨接入恢复后继续命中、结算恢复后按原 HitID 唯一入账，以及 Online 不可用时拒绝新绑定但已有游戏继续。
+用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还会强停自己的节点，验证跨接入恢复后继续命中、Mole 从 Redis 恢复已保存批次后按原 HitID 唯一入账，以及 Online 不可用时拒绝新绑定但已有游戏继续。
 
 ## 源码与文档
 

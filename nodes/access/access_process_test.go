@@ -23,6 +23,14 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
+const accessRedisKey = "gsrdemo:test:access"
+
+// accessNodeProcess 仅保存本用例的进程及启动参数；回收仍由 startAccessProcess 统一负责。
+type accessNodeProcess struct {
+	process                 *os.Process
+	binary, config, address string
+}
+
 func accessLiveDatabase(t *testing.T, node, database string) (*sql.DB, string) {
 	t.Helper()
 	var config struct {
@@ -249,8 +257,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	}
 	_, redisPort, _ := net.SplitHostPort(redisAddress)
 	startAccessProcess(t, redisBinary, []string{"--bind", "127.0.0.1", "--port", redisPort, "--save", "", "--appendonly", "yes", "--appendfsync", "always", "--dir", t.TempDir()}, redisAddress)
-	var firstAccess, onlineProcess, settlementProcess *os.Process
-	var settlementBinary, settlementConfig string
+	processes := make(map[string]accessNodeProcess)
 	for _, node := range nodeNames {
 		role, gate := node, gateAddress
 		if strings.HasPrefix(node, "access-") {
@@ -267,7 +274,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 			body += "mysql_dsn: " + strconv.Quote(settlementDSN) + "\n"
 		}
 		if node == "mole" {
-			body += "redis_url: redis://" + redisAddress + "/0\nredis_key: gsrdemo:test:access\n"
+			body += "redis_url: redis://" + redisAddress + "/0\nredis_key: " + accessRedisKey + "\n"
 		}
 		if role == "access" {
 			body += fmt.Sprintf("gate:\n  address: %s\n  max_connections: 8\n  max_frame_bytes: 4096\n  max_outbound_queue_bytes: 65536\n", gate)
@@ -299,15 +306,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 			address = gate
 		}
 		process := startAccessProcess(t, binary, []string{"-config", path}, address)
-		if node == "access-01" {
-			firstAccess = process
-		}
-		if node == "online" {
-			onlineProcess = process
-		}
-		if node == "settlement" {
-			settlementProcess, settlementBinary, settlementConfig = process, binary, path
-		}
+		processes[node] = accessNodeProcess{process: process, binary: binary, config: path, address: address}
 	}
 	clientPath, err := filepath.Abs("../../typeclient/dist/index.js")
 	if err != nil {
@@ -443,9 +442,9 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	t.Logf("%d 个接入节点，%d 个并发 CLI，共 %d 个唯一 HitID、%d 次目标失效后继续", accessCount, playerCount, len(seenHits), totalMisses)
 	if accessCount == 2 {
 		hitID := verifyAccessReconnect(t, ctx, routes, gateAddresses, &players[0], settlementDB, &operationIDs)
-		verifyAccessProcessCrash(t, ctx, routes, gateAddresses, players[:2], settlementDB, &operationIDs, firstAccess, hitID)
+		verifyAccessProcessCrash(t, ctx, routes, gateAddresses, players[:2], settlementDB, &operationIDs, processes["access-01"].process, hitID)
 		verifyAccessSettlementRecovery(t, ctx, gateAddresses[1], &players[0], settlementDB, &operationIDs,
-			settlementProcess, settlementBinary, settlementConfig, routes["settlement"])
-		verifyAccessOnlineUnavailable(t, ctx, routes["online"], gateAddresses[1], players[:2], settlementDB, &operationIDs, onlineProcess)
+			processes["settlement"], processes["mole"], redisAddress)
+		verifyAccessOnlineUnavailable(t, ctx, routes["online"], gateAddresses[1], players[:2], settlementDB, &operationIDs, processes["online"].process)
 	}
 }
