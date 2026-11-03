@@ -134,12 +134,12 @@ func startAccessProcess(t *testing.T, binary string, arguments []string, address
 
 // TestAccessClientProcessesLiveMySQL 保护单客户端通过五个独立进程完成认证、即时命中和真实入账。
 func TestAccessClientProcessesLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 1, 1)
+	runAccessClientsLiveMySQL(t, 1, 1, "mole")
 }
 
 // TestAccessThreeClientsLiveMySQL 保护三个不同账号并发进入同组、共享目标且各完成三次入账，余额/版本与逐锤结果一致。
 func TestAccessThreeClientsLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 3, 1)
+	runAccessClientsLiveMySQL(t, 3, 1, "mole")
 }
 
 type accessDemoPlayer struct {
@@ -149,7 +149,7 @@ type accessDemoPlayer struct {
 	output             bytes.Buffer
 }
 
-func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
+func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game string) {
 	t.Helper()
 	if os.Getenv("GSRDEMO_ACCESS_PROCESSES") != "1" {
 		t.Skip("build all nodes/typeclient and set GSRDEMO_ACCESS_PROCESSES=1 for dedicated local databases")
@@ -232,7 +232,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	})
 	directory := t.TempDir()
 	routes := make(map[string]string)
-	nodeNames := []string{"login", "online", "settlement", "mole", "access-01"}
+	nodeNames := []string{"login", "online", "settlement", game, "access-01"}
 	if accessCount == 2 {
 		nodeNames = append(nodeNames, "access-02")
 	}
@@ -273,7 +273,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 		if node == "settlement" {
 			body += "mysql_dsn: " + strconv.Quote(settlementDSN) + "\n"
 		}
-		if node == "mole" {
+		if node == "mole" || node == "landlord" {
 			body += "redis_url: redis://" + redisAddress + "/0\nredis_key: " + accessRedisKey + "\n"
 		}
 		if role == "access" {
@@ -320,7 +320,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	// 全部 Start 后再 Wait，确保是并发客户端，而不是逐个跑完的单客户端样本。
 	for index := range players {
 		player := &players[index]
-		player.command = exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddresses[index%accessCount]+"/ws", "--username", player.username, "--hits", "3")
+		player.command = exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddresses[index%accessCount]+"/ws", "--username", player.username, "--hits", "3", "--game", game)
 		player.command.Stdin = strings.NewReader(player.password + "\n")
 		player.command.Stdout, player.command.Stderr = &player.output, &player.output
 		if err := player.command.Start(); err != nil {
@@ -338,6 +338,11 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int) {
 	clientErrors := make([]error, len(players))
 	for index := range players {
 		clientErrors[index] = players[index].command.Wait()
+	}
+	if game == "landlord" {
+		verifyLandlordCLI(t, ctx, players, clientErrors, settlementDB, &operationIDs)
+		verifyLandlordRecovery(t, ctx, gateAddresses, players, settlementDB, &operationIDs, processes["landlord"], processes["settlement"], redisAddress)
+		return
 	}
 	group := ""
 	sawThreeMembers, totalMisses := false, 0

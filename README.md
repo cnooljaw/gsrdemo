@@ -1,8 +1,8 @@
 # GSR Demo
 
-基于 **GSR v1.0.2** 的多节点打地鼠示例，使用 TypeScript 命令行客户端演示登录、多人分组、命中反馈和银子结算。
+基于 **GSR v1.0.2** 的多节点打地鼠与三人斗地主示例，使用 TypeScript 命令行客户端演示登录、地鼠命中反馈、斗地主叫抢出牌和银子结算。
 
-调用链：客户端 → access → login / online / mole → settlement → MySQL。Redis 保存 mole 的待结算批次和统计检查点。
+调用链：客户端 → access → login / online / mole 或 landlord → settlement → MySQL。Redis 分别保存地鼠批次/统计检查点及斗地主待结算局末结果。
 
 ## 运行 Demo
 
@@ -83,7 +83,7 @@ unset demo_password
 
 此步骤只做一次；账号已存在会报错，不会覆盖密码。已有账号可用其 UserID 单独执行 `-init-wallet`：相同初始金额重复执行不会重复发放，改金额会拒绝。服务启动不自动注册账号或创建钱包。
 
-### 4. 初始化地鼠检查点
+### 4. 初始化地鼠检查点（仅地鼠需要）
 
 MySQL、Redis 可用后，在 mole 尚未启动时执行：
 
@@ -91,7 +91,7 @@ MySQL、Redis 可用后，在 mole 尚未启动时执行：
 ./bin/mole -config configs/mole-01.local.yaml -init-accounting
 ```
 
-该命令为新演示创建零统计检查点，不重置已有统计。以后重启沿用同一 Redis 数据和 key，无需重复初始化。
+该命令为新演示创建零统计检查点，不重置已有统计。以后重启沿用同一 Redis 数据和 key，无需重复初始化。斗地主跳过此步骤，使用 `configs/landlord-01.yaml` 中的独立 `redis_key`，不需要新增 SQL 表。
 
 ### 5. 按顺序启动服务节点
 
@@ -102,9 +102,12 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 | 1 | login：验证账号密码 | `./scripts/dev.sh run login` | Cluster `127.0.0.1:19002` |
 | 2 | online：保存在线位置 | `./scripts/dev.sh run online` | Cluster `127.0.0.1:19003` |
 | 3 | settlement：余额校验和持久记账 | `./scripts/dev.sh run settlement` | Cluster `127.0.0.1:19005` |
-| 4 | mole：分组、目标和命中计算 | `./scripts/dev.sh run mole` | Cluster `127.0.0.1:19004` |
+| 4（地鼠） | mole：分组、目标和命中计算 | `./scripts/dev.sh run mole` | Cluster `127.0.0.1:19004` |
+| 4（斗地主） | landlord：随机凑桌、叫抢与出牌 | `./scripts/dev.sh run landlord` | Cluster `127.0.0.1:19007` |
 | 5 | access-01：客户端接入和业务路由 | `./scripts/dev.sh run access` | Cluster `127.0.0.1:19001`；WS `127.0.0.1:7888` |
 | 6（可选） | access-02：第二个接入实例 | `./bin/access -config configs/access-02.yaml` | Cluster `127.0.0.1:19006`；WS `127.0.0.1:7889` |
+
+演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。
 
 `run` 前台运行节点，优先读取 `configs/<节点>-01.local.yaml`，没有时读取对应 `.yaml`。mole 监听启动后会恢复 Redis 检查点，恢复成功才接纳玩家；全部服务正常运行后再启动客户端。日志在 `logs/<实例名>/`。
 
@@ -155,9 +158,21 @@ unset demo_password
 
 同组玩家共享目标，同一目标只有一个玩家能命中。目标被抢走或过期时，CLI 输出 `miss`，刷新快照后继续寻找目标；`--hits` 只统计成功命中。每次等待/争抢预算默认 15 秒（`--timeout-ms` 更大时按该值，各次 RPC 另有超时）。超时、断线或其他错误仍停止，不自动重发结果未知的命中；保留输出中的 ActionID / HitID 供复查。
 
+斗地主同样使用三个不同账号，在终端 A/B/C 分别将下面命令中的 `demo1` 改成 `demo1`、`demo2`、`demo3`。先启动 landlord 节点，再启动三个客户端：
+
+```shell
+read -rs 'demo_password?账号密码: '
+printf '%s\n' "$demo_password" | node typeclient/dist/index.js --game landlord --username demo1
+unset demo_password
+```
+
+默认仍连接 access-01；需要跨接入时，在终端 B 的 node 命令后添加 `--url ws://127.0.0.1:7889/ws`。客户端自动随机入桌、准备、叫抢地主、出牌/不出，等待整局结算后离开。叫抢各等待 10 秒，出牌 15 秒；三人都不叫最多重发两次。演示机器人使用简单单张策略，服务端仍校验全部普通牌型。
+
+斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `landlord_enter → landlord_bid → landlord_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID。重启可恢复已保存的局末结果，不恢复进行中的手牌。
+
 ### 7. 停止演示
 
-先让客户端完成并看到 `settlement`，再在各服务终端按 Ctrl-C，顺序为 **两个 access → mole → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中不保证崩溃恢复。
+先让客户端完成并看到 `settlement`，再在各服务终端按 Ctrl-C，顺序为 **两个 access → mole / landlord → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中或局末结果不保证崩溃恢复。
 
 ## 开发与验证
 
@@ -174,10 +189,10 @@ unset demo_password
 
 ```shell
 GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
-  -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
+  -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
 ```
 
-用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还验证跨接入故障恢复、原 HitID 唯一入账及 Redis 批次恢复、最终拒绝后的客户端余额校正，以及 Online 不可用时拒绝新绑定但已有游戏继续。
+用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正与查询身份隔离，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、三人唯一结算及已保存结果的重启恢复。完整验收清单及边界见 [设计文档第 3.4 节](docs/DESIGN.md)。
 
 ## 源码与文档
 

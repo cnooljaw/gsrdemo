@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { DemoClient } from "./client.js";
+import { runLandlord } from "./landlord.js";
 import {
   EnterRequestSchema, EnterResponseSchema, HitRequestSchema, HitResponseSchema,
   LeaveRequestSchema, LeaveResponseSchema, LoginRequestSchema, LoginResponseSchema,
@@ -13,13 +14,14 @@ function print(event: string, value: unknown): void {
   console.log(JSON.stringify({ event, value }, (_, item) => typeof item === "bigint" ? item.toString() : item));
 }
 
-function options(): { url: string; username: string; hits: number; timeout: number } {
-  const parsed = { url: "ws://127.0.0.1:7888/ws", username: "demo", hits: 1, timeout: 5_000 };
+function options(): { url: string; username: string; hits: number; timeout: number; game: string } {
+  const parsed = { url: "ws://127.0.0.1:7888/ws", username: "demo", hits: 1, timeout: 5_000, game: "mole" };
   const args = process.argv.slice(2);
   for (let index = 0; index < args.length; index += 2) {
     const value = args[index + 1];
     if (!value) throw new Error(`missing value for ${args[index]}`);
     switch (args[index]) {
+      case "--game": parsed.game = value; break;
       case "--url": parsed.url = value; break;
       case "--username": parsed.username = value; break;
       case "--hits": parsed.hits = Number(value); break;
@@ -27,6 +29,7 @@ function options(): { url: string; username: string; hits: number; timeout: numb
       default: throw new Error(`unknown argument ${args[index]}`);
     }
   }
+  if (parsed.game !== "mole" && parsed.game !== "landlord") throw new Error("--game must be mole or landlord");
   if (!Number.isSafeInteger(parsed.hits) || parsed.hits < 1 || parsed.hits > 100) throw new Error("--hits must be 1..100");
   if (!Number.isSafeInteger(parsed.timeout) || parsed.timeout < 1) throw new Error("--timeout-ms must be positive");
   return parsed;
@@ -44,6 +47,10 @@ async function run(): Promise<void> {
       toBinary(LoginRequestSchema, create(LoginRequestSchema, { username: config.username, password })),
       MsgId.S2C_LOGIN, LoginResponseSchema);
     print("login", login);
+    if (config.game === "landlord") {
+      await runLandlord(client, print, config.timeout);
+      return;
+    }
     const entry = await client.request(MsgId.C2S_ENTER, toBinary(EnterRequestSchema, create(EnterRequestSchema)), MsgId.S2C_ENTER, EnterResponseSchema);
     if (!entry.snapshot || !entry.silver) throw new Error("missing entry snapshot/balance");
     client.enter(entry.snapshot, entry.silver);

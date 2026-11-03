@@ -1,0 +1,6 @@
+instance: landlord-01
+listen: landlord
+nodes_file: nodes.yaml
+log_directory: ../logs/landlord-01
+redis_url: redis://127.0.0.1:6379/0
+redis_key: gsrdemo:landlord:pending

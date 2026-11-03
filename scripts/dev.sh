@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 用途：构建、检查项目、前台启动节点或执行独立结算历史压测。
-# 用法：dev.sh build|check [access|login|online|mole|settlement]；dev.sh run <节点>；dev.sh history settlement；dev.sh generate access。
+# 用法：dev.sh build|check [access|login|online|mole|settlement|landlord]；dev.sh run <节点>；dev.sh history settlement；dev.sh generate access。
 # run 优先读取 configs/<节点>-01.local.yaml，未配置时读取公开模板。
 # 不指定节点时，build/check 包含所有 Go module 和 TypeScript；指定时只处理 common 和该节点。
 # 执行范围：仅 gsrdemo；GOWORK=off，复用 .cache/go-build，构建输出到 bin/ 和 typeclient/dist/。
@@ -11,7 +11,7 @@ export GOCACHE="${GOCACHE:-$project_root/.cache/go-build}"
 export GOWORK=off
 
 usage() {
-    echo "用法：$0 build|check [access|login|online|mole|settlement] | run <节点> | history settlement | generate access"
+    echo "用法：$0 build|check [access|login|online|mole|settlement|landlord] | run <节点> | history settlement | generate access"
 }
 
 action="${1:-}"
@@ -29,7 +29,7 @@ case "$action" in
     *) usage >&2; exit 2 ;;
 esac
 case "$node" in
-    ""|access|login|online|mole|settlement) ;;
+    ""|access|login|online|mole|settlement|landlord) ;;
     *) usage >&2; exit 2 ;;
 esac
 

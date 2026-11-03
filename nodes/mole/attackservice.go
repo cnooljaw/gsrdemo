@@ -42,9 +42,12 @@ var _ gsr.Service = (*attackService)(nil)
 func newAttackService(name string) *attackService {
 	service := &attackService{game: newAttackGame(name), members: make(map[uint64]attackMember)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		attackJoinCommand: service.join, attackHitCommand: service.hit,
-		attackSnapshotCommand: service.snapshot, attackLeaveCommand: service.leave,
-		attackTickCommand: service.tick, attackBalanceCommand: service.balanceCorrection,
+		attackJoinCommand:     service.handleJoin,
+		attackHitCommand:      service.handleHit,
+		attackSnapshotCommand: service.handleSnapshot,
+		attackLeaveCommand:    service.handleLeave,
+		attackTickCommand:     service.handleTick,
+		attackBalanceCommand:  service.handleBalanceCorrection,
 	})
 	return service
 }
@@ -65,7 +68,7 @@ func (service *attackService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *attackService) join(self gsr.CommandContext, userID uint64, loginID, accessNode, agentName, membership string) (map[string]any, error) {
+func (service *attackService) handleJoin(self gsr.CommandContext, userID uint64, loginID, accessNode, agentName, membership string) (map[string]any, error) {
 	if !validMember(userID, loginID, accessNode, agentName) || !validMoleIdentifier(membership) {
 		return nil, errInvalidMoleInput
 	}
@@ -96,7 +99,7 @@ func (service *attackService) join(self gsr.CommandContext, userID uint64, login
 	return service.view(userID), nil
 }
 
-func (service *attackService) hit(self gsr.CommandContext, userID uint64, loginID, actionID string, sequence uint64, hole int64) (map[string]any, error) {
+func (service *attackService) handleHit(self gsr.CommandContext, userID uint64, loginID, actionID string, sequence uint64, hole int64) (map[string]any, error) {
 	_, err := service.member(userID, loginID)
 	if err != nil {
 		return nil, err
@@ -143,14 +146,14 @@ func knownMemoryRejection(err error) bool {
 		errors.Is(err, runtime.ErrMailboxFull) || errors.Is(err, runtime.ErrServiceNotFound) || errors.Is(err, runtime.ErrServiceClosed)
 }
 
-func (service *attackService) snapshot(_ gsr.CommandContext, userID uint64, loginID string) (map[string]any, error) {
+func (service *attackService) handleSnapshot(_ gsr.CommandContext, userID uint64, loginID string) (map[string]any, error) {
 	if _, err := service.member(userID, loginID); err != nil {
 		return nil, err
 	}
 	return service.view(userID), nil
 }
 
-func (service *attackService) leave(self gsr.CommandContext, userID uint64, loginID string) (bool, error) {
+func (service *attackService) handleLeave(self gsr.CommandContext, userID uint64, loginID string) (bool, error) {
 	if _, err := service.member(userID, loginID); err != nil {
 		return false, err
 	}
@@ -167,13 +170,13 @@ func (service *attackService) leave(self gsr.CommandContext, userID uint64, logi
 	return true, nil
 }
 
-func (service *attackService) tick(self gsr.CommandContext) error {
+func (service *attackService) handleTick(self gsr.CommandContext) error {
 	service.game.spawn(time.Now())
 	service.broadcast(self, "snapshot")
 	return nil
 }
 
-func (service *attackService) balanceCorrection(self gsr.CommandContext, userID uint64, loginID string, view map[string]any) error {
+func (service *attackService) handleBalanceCorrection(self gsr.CommandContext, userID uint64, loginID string, view map[string]any) error {
 	member, err := service.member(userID, loginID)
 	if err == nil {
 		service.push(self, member, "balance_correction", view)

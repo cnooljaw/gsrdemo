@@ -22,7 +22,9 @@ var _ gsr.Service = (*settlementQueryService)(nil)
 func newSettlementQueryService(db *sql.DB, name cluster.ServiceName) *settlementQueryService {
 	service := &settlementQueryService{name: name, store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		getBatchCommand: service.getBatch, getOperationCommand: service.getOperation, getBalanceCommand: service.getBalance,
+		getBatchCommand:     service.handleGetBatch,
+		getOperationCommand: service.handleGetOperation,
+		getBalanceCommand:   service.handleGetBalance,
 	})
 	return service
 }
@@ -40,7 +42,7 @@ func (service *settlementQueryService) Handle(self gsr.CommandContext, command r
 }
 func (service *settlementQueryService) OnStop(context.Context) error { return nil }
 
-func (service *settlementQueryService) getBatch(self gsr.CommandContext, id string) (any, error) {
+func (service *settlementQueryService) handleGetBatch(self gsr.CommandContext, id string) (any, error) {
 	if !validSettlementID(id) {
 		return nil, errInvalidSettlement
 	}
@@ -50,7 +52,7 @@ func (service *settlementQueryService) getBatch(self gsr.CommandContext, id stri
 	return value, settlementError(self, err)
 }
 
-func (service *settlementQueryService) getOperation(self gsr.CommandContext, userID uint64, id string) (any, error) {
+func (service *settlementQueryService) handleGetOperation(self gsr.CommandContext, userID uint64, id string) (any, error) {
 	if userID == 0 || !validSettlementID(id) {
 		return nil, errInvalidSettlement
 	}
@@ -60,7 +62,7 @@ func (service *settlementQueryService) getOperation(self gsr.CommandContext, use
 	return value, settlementError(self, err)
 }
 
-func (service *settlementQueryService) getBalance(self gsr.CommandContext, userID uint64) (map[string]any, error) {
+func (service *settlementQueryService) handleGetBalance(self gsr.CommandContext, userID uint64) (map[string]any, error) {
 	if userID == 0 {
 		return nil, errInvalidSettlement
 	}

@@ -24,6 +24,7 @@ type agent struct {
 	loginID            string
 	entryName          cluster.ServiceName
 	attackName         cluster.ServiceName
+	landlordRoom       cluster.ServiceName
 }
 
 var (
@@ -34,15 +35,25 @@ var (
 func newAgent(client gate.ClientSession, registry *protocol.Registry) *agent {
 	agent := &agent{client: client}
 	agent.commandDispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		molePushCommand: agent.push, agentReplacedCommand: agent.replaced,
+		molePushCommand:      agent.handleMolePush,
+		agentReplacedCommand: agent.handleReplaced,
+		landlordPushCommand:  agent.handleLandlordPush,
 	})
 	agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, map[uint32]any{
-		uint32(demopb.MsgId_C2S_LOGIN):     agent.onLogin,
-		uint32(demopb.MsgId_C2S_ENTER):     agent.onEnter,
-		uint32(demopb.MsgId_C2S_HIT):       agent.onHit,
-		uint32(demopb.MsgId_C2S_SNAPSHOT):  agent.onSnapshot,
-		uint32(demopb.MsgId_C2S_LEAVE):     agent.onLeave,
-		uint32(demopb.MsgId_C2S_OPERATION): agent.onOperation,
+		uint32(demopb.MsgId_C2S_LANDLORD_CALL):      agent.onLandlordCall,
+		uint32(demopb.MsgId_C2S_LANDLORD_ROB):       agent.onLandlordRob,
+		uint32(demopb.MsgId_C2S_LANDLORD_ENTER):     agent.onLandlordEnter,
+		uint32(demopb.MsgId_C2S_LANDLORD_READY):     agent.onLandlordReady,
+		uint32(demopb.MsgId_C2S_LANDLORD_PLAY):      agent.onLandlordPlay,
+		uint32(demopb.MsgId_C2S_LANDLORD_SNAPSHOT):  agent.onLandlordSnapshot,
+		uint32(demopb.MsgId_C2S_LANDLORD_LEAVE):     agent.onLandlordLeave,
+		uint32(demopb.MsgId_C2S_LANDLORD_OPERATION): agent.onLandlordOperation,
+		uint32(demopb.MsgId_C2S_LOGIN):              agent.onLogin,
+		uint32(demopb.MsgId_C2S_ENTER):              agent.onEnter,
+		uint32(demopb.MsgId_C2S_HIT):                agent.onHit,
+		uint32(demopb.MsgId_C2S_SNAPSHOT):           agent.onSnapshot,
+		uint32(demopb.MsgId_C2S_LEAVE):              agent.onLeave,
+		uint32(demopb.MsgId_C2S_OPERATION):          agent.onOperation,
 	})
 	return agent
 }

@@ -78,6 +78,95 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_PUSH
   }];
+  C2S_LANDLORD_ENTER = 1101 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordEnterRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LANDLORD_ENTER = 1102 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordEnterResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_LANDLORD_READY = 1111 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordReadyRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LANDLORD_READY = 1112 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordReadyResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_LANDLORD_PLAY = 1121 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordPlayRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LANDLORD_PLAY = 1122 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordPlayResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_LANDLORD_SNAPSHOT = 1131 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordSnapshotRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LANDLORD_SNAPSHOT = 1132 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordSnapshotResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_LANDLORD_LEAVE = 1141 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordLeaveRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LANDLORD_LEAVE = 1142 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordLeaveResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_LANDLORD_OPERATION = 1151 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordOperationRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LANDLORD_OPERATION = 1152 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordOperationResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  S2C_LANDLORD_PUSH = 1161 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  C2S_LANDLORD_CALL = 1171 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordCallRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+
+  S2C_LANDLORD_CALL = 1172 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordCallResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+
+  C2S_LANDLORD_ROB = 1181 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordRobRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+
+  S2C_LANDLORD_ROB = 1182 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordRobResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+
 }
 
 message LoginRequest {
@@ -166,4 +255,65 @@ message Snapshot {
   repeated Member members = 4;
   repeated Target targets = 5;
   repeated Hit hits = 6;
+}
+
+
+// 斗地主使用独立消息，不改变地鼠客户端协议；空出牌列表表示不出。
+message LandlordEnterRequest {}
+message LandlordReadyRequest {}
+message LandlordPlayRequest { uint64 turn = 1; repeated int64 cards = 2; }
+message LandlordSnapshotRequest {}
+message LandlordLeaveRequest {}
+message LandlordOperationRequest { string operation_id = 1; }
+message LandlordOperationResponse {
+ bool found = 1;
+ string operation_id = 2;
+ string status = 3;
+ string reason = 4;
+}
+message LandlordEnterResponse { LandlordSnapshot snapshot = 1; }
+message LandlordReadyResponse { LandlordSnapshot snapshot = 1; }
+message LandlordPlayResponse { LandlordSnapshot snapshot = 1; }
+message LandlordSnapshotResponse { LandlordSnapshot snapshot = 1; }
+message LandlordLeaveResponse { LandlordSnapshot snapshot = 1; }
+message LandlordCallResponse { LandlordSnapshot snapshot = 1; }
+message LandlordRobResponse { LandlordSnapshot snapshot = 1; }
+message LandlordPush { LandlordSnapshot snapshot = 1; }
+message LandlordCallRequest {uint64 turn=1; bool yes=2;}
+message LandlordRobRequest {uint64 turn=1; bool yes=2;}
+message LandlordPlayer {
+ uint64 user_id = 1;
+ int64 seat = 2;
+ bool ready = 3;
+ int64 remaining = 4;
+ int64 call_choice=5;
+ int64 rob_choice=6;
+}
+message LandlordSettlement {
+ string operation_id = 1;
+ string status = 2;
+ string reason = 3;
+ int64 debit = 4;
+ int64 credit = 5;
+ int64 balance = 6;
+ uint64 version = 7;
+}
+message LandlordSnapshot {
+ string room_name = 1;
+ string phase = 2;
+ int64 seat = 3;
+ repeated LandlordPlayer players = 4;
+ repeated int64 hand = 5;
+ repeated int64 bottom = 6;
+ repeated int64 last_cards = 7;
+ int64 last_seat = 8;
+ int64 turn_seat = 9;
+ uint64 turn = 10;
+ int64 deadline_ms = 11;
+ int64 landlord_seat = 12;
+ int64 winner_seat = 13;
+ LandlordSettlement settlement = 14;
+ int64 multiplier=15;
+ int64 candidate_seat=16;
+ int64 redeals=17;
 }

@@ -43,7 +43,9 @@ var _ gsr.Service = (*moleSubmissionService)(nil)
 func newMoleSubmissionService(store moleCheckpoint, lane uint64) *moleSubmissionService {
 	service := &moleSubmissionService{store: store, lane: lane}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		submissionBatchCommand: service.submit, submissionTickCommand: service.tick, submissionStateCommand: service.state,
+		submissionBatchCommand: service.handleSubmit,
+		submissionTickCommand:  service.handleTick,
+		submissionStateCommand: service.handleState,
 	})
 	return service
 }
@@ -61,7 +63,7 @@ func (service *moleSubmissionService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *moleSubmissionService) submit(self gsr.CommandContext, batch moleBatch) error {
+func (service *moleSubmissionService) handleSubmit(self gsr.CommandContext, batch moleBatch) error {
 	if service.batch != nil {
 		if !reflect.DeepEqual(*service.batch, batch) {
 			return errMoleBusy
@@ -84,7 +86,7 @@ func (service *moleSubmissionService) submit(self gsr.CommandContext, batch mole
 	return nil
 }
 
-func (service *moleSubmissionService) tick(self gsr.CommandContext) error {
+func (service *moleSubmissionService) handleTick(self gsr.CommandContext) error {
 	if service.fault != nil {
 		// 通知满队列时下次继续，原始批次和 Redis 记录始终保留。
 		return self.SendName(moleAccountingName, accountingStopLaneCommand, service.lane)
@@ -114,7 +116,7 @@ func (service *moleSubmissionService) failed(self gsr.ServiceContext, err error)
 	logMoleError(self, "当前结算通道等待原批次重试", err)
 }
 
-func (service *moleSubmissionService) state(_ gsr.CommandContext) (map[string]any, error) {
+func (service *moleSubmissionService) handleState(_ gsr.CommandContext) (map[string]any, error) {
 	view := map[string]any{"lane": service.lane, "ready": service.ready && service.fault == nil, "blocked": service.fault != nil}
 	if service.batch != nil {
 		view["batch_id"], view["sequence"] = service.batch.ID, service.batch.Sequence

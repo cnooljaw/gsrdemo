@@ -19,11 +19,12 @@
 
 - 所有 Go 代码必须经过 `gofmt`。
 - 源文件按具体类型或职责命名，例如 `loginservice.go`、`agent.go`、`account_mysql.go`，避免含义过宽的 `service.go`。
-- 同一类型拆到多个文件时保留类型前缀，再加职责后缀，例如 `agent_protocol.go`、`agent_login.go`；借鉴 Objective-C 的“类名 + 分类名”组织方式，在 Go 中使用下划线。
+- 同一类型确需拆到多个文件时保留类型前缀，再加职责后缀，例如 `agent_protocol.go`、`agent_login.go`；这只是文件命名规则。具有独立职责的代码优先通过具名字段组合，不因文件带同一前缀就把全部方法挂在一个类型上。
 - 具名函数和方法使用正常多行函数体，不把赋值、清理和返回压缩在一行。
 - 两个函数或方法之间保留一个空行。
 - 长签名、调用和复合字面量按语义换行；约 120 字符可作为软提示，不是硬门禁。
 - 每行表达一个主要动作，不使用分号压缩控制流程。
+- Dispatcher 注册表一行一个“命令/消息 ID → 处理方法”，不将多项挤在一行；键值使用 `gofmt` 对齐。生产代码与测试中的注册表遵循同一写法。
 
 ```go
 func (service *PlayerService) Close() error {
@@ -41,6 +42,18 @@ func (service *PlayerService) Close() error {
 - 使用中的参数必须表达用途；为满足接口而未使用的参数显式命名为 `_`。
 - `gsr.ServiceContext` 参数统一命名为 `self`，表示当前 Service 的身份与能力，不使用 `scoped` 或 `ctx`；普通 `context.Context` 仍命名为 `ctx`。未使用的 ServiceContext 参数保持 `_`。此规则针对上下文参数，不把业务 Service 的方法接收者改名为 self。
 - 沿用项目稳定术语，不为相同概念创造近义词。
+- 消息处理方法按入口命名：GSR 内部命令入口使用 `handle...`（如 `handleMolePush`、`handleSettleGroup`），客户端协议入口使用 `on...`（如 `onLogin`、`onLandlordCall`）。普通业务方法、值对象方法和生命周期回调不套用这些前缀；GSR 要求的 `Handle`、`HandleClientMessage`、`OnStart`、`OnStop` 保留原名。
+
+```go
+agent.commandDispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
+	molePushCommand:      agent.handleMolePush,
+	agentReplacedCommand: agent.handleReplaced,
+})
+agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, map[uint32]any{
+	uint32(demopb.MsgId_C2S_LOGIN): agent.onLogin,
+	uint32(demopb.MsgId_C2S_HIT):   agent.onHit,
+})
+```
 
 ### 2.3 控制流
 
@@ -104,6 +117,8 @@ if err != nil {
 - 接口由使用者定义，并保持为完成该用途所需的最小能力集合。
 - 只有多实现、测试隔离、模块边界、插件化或明确依赖倒置需求时才引入接口。
 - Struct 显式声明依赖，默认优先组合而非继承式 embedding；只有 embedding 不泄漏内部生命周期、方法集合和所有权时才作为局部实现细节使用。
+- Service 内的组合组件按实际职责持有自身数据和依赖，不持有完整父 Service 指针来任意访问其他组件。组件仍由所属 Service 串行调用，不增加独立生命周期、Mailbox 或 goroutine；身份等共享事实只保留一个来源，不在各组件重复维护。
+- 协议按实际业务归属注册：通用协议与各游戏分别组织，由连接入口显式组装；不同组件的注册项合并时必须检查重复 ID，禁止静默覆盖。不按每条命令创建组件，也不为固定接线引入动态插件或自动发现框架。
 - Service 具体类型显式声明 `Handle` 消息入口；若使用 Dispatcher，应以具名字段持有并由 `Handle` 转发，不依靠匿名嵌入的方法提升满足接口。这是编码与评审规则，Go 接口本身不能强制检查。
 - 承担明确框架角色的类型，在类型定义后紧跟编译期接口断言，例如 `var _ Service = (*echoService)(nil)`。同一类型实现多个重要接口时统一放在一个 `var` 块中；Agent 同时实现 `Service` 与 `ClientMessageHandler` 时，两者都显式声明。按实际方法集选择指针或值形式，不为断言修改 receiver，不集中到文件末尾或独立的 `interfaces.go`。断言用于 Service、上下文、Gate 连接、Cluster 扩展和 Core 生命周期组件等架构角色，不机械覆盖普通工具接口或仅为局部实现、测试替换而定义的小接口。
 - 配置项较多时默认使用 Config Struct；Functional Option 只在可选项多、组合频繁且确实更清楚时使用。

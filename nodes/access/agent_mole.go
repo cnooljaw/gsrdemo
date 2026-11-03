@@ -26,6 +26,9 @@ func (agent *agent) onEnter(self gsr.CommandContext, reply protocol.Context, _ *
 	if agent.userID == 0 {
 		return errLoginRequired
 	}
+	if agent.landlordRoom != "" {
+		return errEnterRequired
+	}
 	identity := []any{agent.userID, agent.loginID, string(agent.node), string(agent.name)}
 	value, err := agent.call(self, "mole", "mole", moleResolveEntryCommand, identity...)
 	if err != nil {
@@ -153,7 +156,7 @@ func (agent *agent) onOperation(self gsr.CommandContext, reply protocol.Context,
 	return reply.Response(uint32(demopb.MsgId_S2C_OPERATION), response)
 }
 
-func (agent *agent) push(_ gsr.CommandContext, loginID, kind string, payload map[string]any) error {
+func (agent *agent) handleMolePush(_ gsr.CommandContext, loginID, kind string, payload map[string]any) error {
 	if agent.userID == 0 || loginID != agent.loginID || agent.attackName == "" {
 		return nil
 	}

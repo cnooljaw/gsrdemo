@@ -44,7 +44,9 @@ var _ gsr.Service = (*settlementService)(nil)
 func newSettlementService(db *sql.DB, name cluster.ServiceName) *settlementService {
 	service := &settlementService{name: name, store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		settleBatchCommand: service.settleBatch, settleSingleCommand: service.settleSingle, settleGroupCommand: service.settleGroup,
+		settleBatchCommand:  service.handleSettleBatch,
+		settleSingleCommand: service.handleSettleSingle,
+		settleGroupCommand:  service.handleSettleGroup,
 	})
 	return service
 }
@@ -67,7 +69,7 @@ func (service *settlementService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *settlementService) settleBatch(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+func (service *settlementService) handleSettleBatch(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeSettlementBatch(request)
 	if err != nil {
 		return nil, err
@@ -75,7 +77,7 @@ func (service *settlementService) settleBatch(self gsr.CommandContext, request m
 	return service.commit(self, batch)
 }
 
-func (service *settlementService) settleSingle(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+func (service *settlementService) handleSettleSingle(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeSettlementSingle(request)
 	if err != nil {
 		return nil, err
@@ -83,7 +85,7 @@ func (service *settlementService) settleSingle(self gsr.CommandContext, request 
 	return service.commit(self, batch)
 }
 
-func (service *settlementService) settleGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+func (service *settlementService) handleSettleGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeSettlementGroup(request)
 	if err != nil {
 		return nil, err

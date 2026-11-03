@@ -128,12 +128,17 @@ func newMoleAccountingService(laneCount int) *moleAccountingService {
 		completed: make(map[string]accountingEntry),
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		accountingLoadCommand: service.loadBalance, accountingStatusCommand: service.operationStatus,
-		accountingSetBalanceCommand: service.setBalance, accountingPoolCommand: service.poolSnapshot,
-		accountingInitPoolCommand: service.initPool, accountingStopLaneCommand: service.stopLane, accountingResumeCommand: service.resumeBalance,
-		accountingHitCommand:  service.hit,
-		accountingTickCommand: service.tick, accountingForgetCommand: service.forgetBalance,
-		accountingSettledCommand: service.settled,
+		accountingLoadCommand:       service.handleLoadBalance,
+		accountingStatusCommand:     service.handleOperationStatus,
+		accountingSetBalanceCommand: service.handleSetBalance,
+		accountingPoolCommand:       service.handlePoolSnapshot,
+		accountingInitPoolCommand:   service.handleInitPool,
+		accountingStopLaneCommand:   service.handleStopLane,
+		accountingResumeCommand:     service.handleResumeBalance,
+		accountingHitCommand:        service.handleHit,
+		accountingTickCommand:       service.handleTick,
+		accountingForgetCommand:     service.handleForgetBalance,
+		accountingSettledCommand:    service.handleSettled,
 	})
 	return service
 }
@@ -151,7 +156,7 @@ func (service *moleAccountingService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *moleAccountingService) initPool(_ gsr.CommandContext, pool molePool, sequence, index uint64) error {
+func (service *moleAccountingService) handleInitPool(_ gsr.CommandContext, pool molePool, sequence, index uint64) error {
 	if index >= uint64(len(service.lanes)) {
 		return errInvalidMoleInput
 	}
@@ -162,7 +167,7 @@ func (service *moleAccountingService) initPool(_ gsr.CommandContext, pool molePo
 	return nil
 }
 
-func (service *moleAccountingService) stopLane(_ gsr.CommandContext, index uint64) error {
+func (service *moleAccountingService) handleStopLane(_ gsr.CommandContext, index uint64) error {
 	if index >= uint64(len(service.lanes)) {
 		return errInvalidMoleInput
 	}
@@ -174,7 +179,7 @@ func (service *moleAccountingService) lane(userID uint64) *accountingLane {
 	return &service.lanes[userID%uint64(len(service.lanes))]
 }
 
-func (service *moleAccountingService) poolSnapshot(_ gsr.CommandContext) (map[string]any, error) {
+func (service *moleAccountingService) handlePoolSnapshot(_ gsr.CommandContext) (map[string]any, error) {
 	var pool molePool
 	for _, lane := range service.lanes {
 		if !lane.ready {
@@ -190,12 +195,12 @@ func (service *moleAccountingService) poolSnapshot(_ gsr.CommandContext) (map[st
 	return pool.snapshot(), nil
 }
 
-func (service *moleAccountingService) loadBalance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
+func (service *moleAccountingService) handleLoadBalance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
 	return service.balanceView(userID)
 }
 
 // resumeBalance 进入时复用本地账并取消延迟回收；真正的缓存缺失返回 nil，错误不当作未命中。
-func (service *moleAccountingService) resumeBalance(_ gsr.CommandContext, userID uint64) (any, error) {
+func (service *moleAccountingService) handleResumeBalance(_ gsr.CommandContext, userID uint64) (any, error) {
 	if userID == 0 {
 		return nil, errInvalidMoleInput
 	}
@@ -210,7 +215,7 @@ func (service *moleAccountingService) resumeBalance(_ gsr.CommandContext, userID
 	return service.balanceView(userID)
 }
 
-func (service *moleAccountingService) setBalance(_ gsr.CommandContext, userID uint64, value map[string]any) (map[string]any, error) {
+func (service *moleAccountingService) handleSetBalance(_ gsr.CommandContext, userID uint64, value map[string]any) (map[string]any, error) {
 	if userID == 0 {
 		return nil, errInvalidMoleInput
 	}
@@ -323,7 +328,7 @@ func (service *moleAccountingService) accept(event hitEvent, retry bool) (memory
 	return result, nil
 }
 
-func (service *moleAccountingService) hit(self gsr.CommandContext, event hitEvent, retry bool) (memoryHitResult, error) {
+func (service *moleAccountingService) handleHit(self gsr.CommandContext, event hitEvent, retry bool) (memoryHitResult, error) {
 	result, err := service.accept(event, retry)
 	if err != nil {
 		return memoryHitResult{}, err
@@ -380,7 +385,7 @@ func (service *moleAccountingService) flushLane(self gsr.ServiceContext, index i
 	return nil
 }
 
-func (service *moleAccountingService) tick(self gsr.CommandContext) error {
+func (service *moleAccountingService) handleTick(self gsr.CommandContext) error {
 	err := service.flush(self)
 	if err != nil {
 		logMoleError(self, "地鼠归批未完成，保留内存操作", err)
@@ -388,7 +393,7 @@ func (service *moleAccountingService) tick(self gsr.CommandContext) error {
 	return err
 }
 
-func (service *moleAccountingService) settled(self gsr.CommandContext, receipt batchReceipt, index uint64) error {
+func (service *moleAccountingService) handleSettled(self gsr.CommandContext, receipt batchReceipt, index uint64) error {
 	if index >= uint64(len(service.lanes)) {
 		return errInvalidMoleInput
 	}
@@ -445,7 +450,7 @@ func (service *moleAccountingService) applyReceipt(receipt batchReceipt) {
 	}
 }
 
-func (service *moleAccountingService) operationStatus(_ gsr.CommandContext, userID uint64, hitID string) (any, error) {
+func (service *moleAccountingService) handleOperationStatus(_ gsr.CommandContext, userID uint64, hitID string) (any, error) {
 	if userID == 0 || !validMoleIdentifier(hitID) {
 		return nil, errInvalidMoleInput
 	}
@@ -460,7 +465,7 @@ func (service *moleAccountingService) operationStatus(_ gsr.CommandContext, user
 	return nil, nil
 }
 
-func (service *moleAccountingService) forgetBalance(_ gsr.CommandContext, userID uint64) error {
+func (service *moleAccountingService) handleForgetBalance(_ gsr.CommandContext, userID uint64) error {
 	if account := service.accounts[userID]; account != nil {
 		account.Departed = true
 		service.evictIfIdle(userID)

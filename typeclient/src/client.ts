@@ -1,6 +1,6 @@
 import { create, fromBinary, toBinary, type DescMessage, type MessageShape } from "@bufbuild/protobuf";
 import { EnvelopeSchema, ErrorResponseSchema, MsgId as CommonMsgId, type Envelope } from "./gen/gsr/common/v1/common_pb.js";
-import { BalancePushSchema, BalanceSchema, MsgId, SnapshotPushSchema, type Balance, type Snapshot } from "./gen/demo/v1/game_pb.js";
+import { LandlordPushSchema, type LandlordSnapshot, BalancePushSchema, BalanceSchema, MsgId, SnapshotPushSchema, type Balance, type Snapshot } from "./gen/demo/v1/game_pb.js";
 import { authenticatedFrame, completeClientHandshake, createClientHandshake, type ClientAuthenticator } from "./secure_auth.js";
 
 interface Pending {
@@ -17,6 +17,7 @@ export class DemoClient {
   private authenticator?: ClientAuthenticator;
   private handshake?: { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void };
   snapshot?: Snapshot;
+  landlord?: LandlordSnapshot;
   silver?: Balance;
   onPush: (kind: string, value: unknown) => void = () => {};
 
@@ -138,7 +139,13 @@ export class DemoClient {
       waiting.resolve(envelope);
       return;
     }
-    if (envelope.msgId === MsgId.S2C_SNAPSHOT_PUSH) {
+    if (envelope.msgId === MsgId.S2C_LANDLORD_PUSH) {
+      const message = fromBinary(LandlordPushSchema, envelope.payload);
+      if (message.snapshot && message.snapshot.roomName === this.landlord?.roomName && message.snapshot.turn >= this.landlord.turn) {
+        this.landlord = message.snapshot;
+        this.onPush("landlord_snapshot", message.snapshot);
+      }
+    } else if (envelope.msgId === MsgId.S2C_SNAPSHOT_PUSH) {
       const message = fromBinary(SnapshotPushSchema, envelope.payload);
       if (message.snapshot && this.snapshot?.attackName === message.snapshot.attackName) {
         this.snapshot = message.snapshot;

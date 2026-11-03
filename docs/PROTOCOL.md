@@ -150,3 +150,30 @@ CommandID=5（原 Summary）已移除且不复用，返回 ErrUnknownCommand。
 settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量阈值归批；棋牌可立即调用多人接口。mole 的各通道累计统计与最多一个待处理批次保存在业务 Redis，不调用结算汇总。固定 4 条提交通道按 UserID % 4 分配，通道 0 为 mole-submission，其余追加 -01～-03；每条序号只用于自己的业务检查点，不传给 Settlement；同一批次的 ID、内容和序号在重试时保持不变。只有 committed 且 origin_batch 等于当前 batch_id 的操作新增统计。Redis 统计和检查点更新成功后才向 Accounting 交付回执。mole 不访问 SQL；尚未保存到 Redis 的内存操作仍可丢失，已保存批次在重启时原样补交。余额、操作幂等索引和完整批次明细归 settlement，冷热归档和短 ID 尚待下一阶段实施。
 
 结算写/读入口只接受各自命令；内部命令 9 仅供本地监督 Service 的非阻塞存活检查。每入口 Mailbox=4，满时返回 runtime.mailbox_full，仍按原身份退避重试，不能换 ID 重做。6 个入口最多保留 30 个执行/排队 Call，低于 GSR v1.0.2 每入站连接 32 个并发名额，避免慢入口占满同连接。进程内监督 Service 不持有钱包，只在执行 Service 已退出后重新发布同名实例，不自动重放请求。Call 超时仍不证明事务未执行。
+
+
+## landlord 三人斗地主
+
+客户端仍只连接 MAC access；使用独立消息，所有响应/推送各有独立 Protobuf 类型。`--game landlord` 的 TS CLI 随机入桌，自动准备、叫抢和简单出牌，最终查询同一 OperationID；不改变默认地鼠演示。
+
+| 请求 / 响应编号 | 请求内容 | 结果 |
+| --- | --- | --- |
+| 1101 / 1102 Enter | 空 | 随机入桌或重登回原桌的本人快照 |
+| 1111 / 1112 Ready | 空 | 准备；三人就绪后发牌进入 calling |
+| 1121 / 1122 Play | turn uint64、cards int64 列表；空表示不出 | 当前本人快照 |
+| 1131 / 1132 Snapshot | 空 | 当前本人快照 |
+| 1141 / 1142 Leave | 空 | 成功离开；进行中保留牌位、断开推送并由超时动作继续 |
+| 1151 / 1152 Operation | operation_id string | found/status/reason；仅当前登录用户参与的原操作可见 |
+| 1171 / 1172 Call | turn uint64、yes bool | 仅 calling 阶段当前操作者可叫/不叫 |
+| 1181 / 1182 Rob | turn uint64、yes bool | 仅 robbing 阶段当前操作者可抢/不抢 |
+| 1161 Push | 服务端主动推送 | 当前桌的本人快照，Agent 核对 LoginID 和桌地址 |
+
+快照阶段为 waiting/calling/robbing/playing/finished。seat 为本人座位、turn_seat 为当前操作者，均从 0 开始；landlord_seat/candidate_seat/winner_seat 未确定为 -1。turn 在本桌单调递增，重新发牌不重置；请求必须回传当前 turn。call_choice/rob_choice 每座位为 0 未决定、-1 不叫/不抢、1 叫/抢；multiplier 为全桌当前统一倍率。无阶段计时时 deadline_ms=0。只有 hand 含本人手牌，players 只含身份、座位、准备、剩余张数和公开叫抢决定；底牌在确定地主前为空，之后公开。
+
+牌编码为四种花色的 0x01..0x0d、0x11..0x1d、0x21..0x2d、0x31..0x3d，加 0x4e/0x4f 小王/大王；比较顺序为 3..K、A、2、小王、大王。顺子/连对/三连不含 2 和王。飞机按参考普通算法先按张数/点数降序确定连续三张主体，不能拆四张；单翅可成对，对翅要求剩余张数组成对子（四张可作两对）。四带二单允许带一对，四带两对允许另一组四张；用实际不重复的牌编码校验，不采用癞子替代牌。
+
+内部 Node=landlord，具名目录 landlord 的 Command 1 接收 UserID uint64、LoginID string，返回 room_name/membership string。Agent 随后直接 Call 该桌的 Command 1 Join(UserID、LoginID、AccessNode、AgentName、Membership)；2 Ready、4 Snapshot、5 Leave 接收 UserID/LoginID；3 Play 另接收 Turn uint64、Cards []any（每项 int64）；6 Call、7 Rob 另接收 Turn uint64、Yes bool。身份和节点地址由 Agent 填写，客户端不能指定。目录的 10 Release、11 CheckRoute、12 Seal、13 Discard 为本节点/受信任接入协调命令，不是客户端协议。桌内 10 Tick 仅接纳本地 Pulse，不开放远程计时推进；推送到 Agent 使用 Command 110(LoginID string、snapshot map[string]any)。
+
+底分固定 10，初次叫地主不翻倍，每次抢地主及合法炸弹/王炸翻倍；不做明牌、个人加倍、春天、底牌特殊倍率或手续费。准备检查钱包存在且至少 20 银子只是准入预判，不冻结资金；最终结算可能因倍率或其他业务扣款被整体拒绝。局末一次 SettleGroup，分类 game_win_loss，结果原子覆盖三名玩家；settlement 快照给本人 debit/credit、operation_id 和 status=pending/committed/rejected。只有终局回执才携带有效的 balance/version，pending 中的默认零值不代表确认余额。
+
+每桌先将完整请求写入自己游戏的 Redis Hash（默认 gsrdemo:landlord:pending），同 ID 不同内容拒绝覆盖；取得回执并删除待记录后才发布本桌财务终局。重启只重提已保存的原请求，不恢复进行中的手牌；超时不换 ID、不重算金额。该节点没有 SQL，也没有全局串行结算队列；GSR Call/Send 的超时和接纳语义沿用现有边界。

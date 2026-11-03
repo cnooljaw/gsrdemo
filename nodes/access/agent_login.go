@@ -82,7 +82,7 @@ func (agent *agent) call(self gsr.ServiceContext, node cluster.NodeID, name clus
 	return self.Cluster().Call(ctx, node, name, command, args...)
 }
 
-func (agent *agent) replaced(self gsr.CommandContext, loginID string) error {
+func (agent *agent) handleReplaced(self gsr.CommandContext, loginID string) error {
 	if agent.loginID == "" || agent.loginID != loginID {
 		return nil
 	}
@@ -96,6 +96,11 @@ func (agent *agent) disconnect(self gsr.ServiceContext) {
 	if agent.userID == 0 {
 		return
 	}
+	if agent.landlordRoom != "" {
+		if _, err := agent.call(self, "landlord", agent.landlordRoom, 5, agent.userID, agent.loginID); err != nil {
+			_ = self.Logger().Error("断线离开斗地主未确认", "error", err.Error())
+		}
+	}
 	if agent.attackName != "" {
 		if _, err := agent.call(self, "mole", agent.attackName, moleLeaveCommand, agent.userID, agent.loginID); err != nil {
 			_ = self.Logger().Error("断线离开地鼠未确认", "error", err.Error())
@@ -105,5 +110,5 @@ func (agent *agent) disconnect(self gsr.ServiceContext) {
 		_ = self.Logger().Error("断线解绑未确认", "error", err.Error())
 	}
 	agent.userID, agent.loginID = 0, ""
-	agent.entryName, agent.attackName = "", ""
+	agent.entryName, agent.attackName, agent.landlordRoom = "", "", ""
 }

@@ -49,9 +49,9 @@ var _ gsr.Service = (*onlineService)(nil)
 func newOnlineService() *onlineService {
 	service := &onlineService{locations: make(map[uint64]onlineLocation)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		bindCommand:   service.bind,
-		lookupCommand: service.lookup,
-		unbindCommand: service.unbind,
+		bindCommand:   service.handleBind,
+		lookupCommand: service.handleLookup,
+		unbindCommand: service.handleUnbind,
 	})
 	return service
 }
@@ -64,7 +64,7 @@ func (service *onlineService) Handle(self gsr.CommandContext, command runtime.Co
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *onlineService) bind(_ gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (any, error) {
+func (service *onlineService) handleBind(_ gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (any, error) {
 	if userID == 0 || !validOnlineIdentifier(loginID) || !validOnlineIdentifier(accessNode) || !validOnlineIdentifier(agentName) {
 		return nil, errInvalidOnlineInput
 	}
@@ -84,7 +84,7 @@ func (service *onlineService) bind(_ gsr.CommandContext, userID uint64, loginID,
 	return previous.snapshot(), nil
 }
 
-func (service *onlineService) lookup(_ gsr.CommandContext, userID uint64) (any, error) {
+func (service *onlineService) handleLookup(_ gsr.CommandContext, userID uint64) (any, error) {
 	if userID == 0 {
 		return nil, errInvalidOnlineInput
 	}
@@ -95,7 +95,7 @@ func (service *onlineService) lookup(_ gsr.CommandContext, userID uint64) (any, 
 	return location.snapshot(), nil
 }
 
-func (service *onlineService) unbind(_ gsr.CommandContext, userID uint64, loginID string) (bool, error) {
+func (service *onlineService) handleUnbind(_ gsr.CommandContext, userID uint64, loginID string) (bool, error) {
 	if userID == 0 || !validOnlineIdentifier(loginID) {
 		return false, errInvalidOnlineInput
 	}

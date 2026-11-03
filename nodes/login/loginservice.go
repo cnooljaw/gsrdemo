@@ -38,7 +38,7 @@ var _ gsr.Service = (*loginService)(nil)
 func newLoginService(db *sql.DB) *loginService {
 	service := &loginService{db: db}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		authenticateCommand: service.authenticate,
+		authenticateCommand: service.handleAuthenticate,
 	})
 	return service
 }
@@ -54,7 +54,7 @@ func (service *loginService) Handle(self gsr.CommandContext, command runtime.Com
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *loginService) authenticate(self gsr.CommandContext, username, password string) (uint64, error) {
+func (service *loginService) handleAuthenticate(self gsr.CommandContext, username, password string) (uint64, error) {
 	if !validLoginInput(username, password) {
 		return 0, errInvalidLoginInput
 	}

@@ -52,7 +52,12 @@ var _ gsr.Service = (*moleService)(nil)
 func newMoleService() *moleService {
 	service := &moleService{routes: make(map[uint64]moleRoute), groups: make(map[string]int)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		moleHealthCommand: service.health, moleResolveEntryCommand: service.entryAddress, moleReserveCommand: service.reserve, moleDiscardGroupCommand: service.discardGroup, moleDepartedCommand: service.departed, moleBalanceCommand: service.balanceCorrection,
+		moleHealthCommand:       service.handleHealth,
+		moleResolveEntryCommand: service.handleEntryAddress,
+		moleReserveCommand:      service.handleReserve,
+		moleDiscardGroupCommand: service.handleDiscardGroup,
+		moleDepartedCommand:     service.handleDeparted,
+		moleBalanceCommand:      service.handleBalanceCorrection,
 	})
 	return service
 }
@@ -61,7 +66,7 @@ func (service *moleService) OnStart(ctx context.Context, self gsr.ServiceContext
 	return startMolePulse(ctx, self, accountingPeriod, moleHealthCommand, service.onStopped)
 }
 
-func (service *moleService) health(gsr.CommandContext) error { return nil }
+func (service *moleService) handleHealth(gsr.CommandContext) error { return nil }
 
 func (service *moleService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	return service.dispatcher.Handle(self, command, args...)
@@ -72,7 +77,7 @@ func (service *moleService) OnStop(_ context.Context) error {
 }
 
 // entryAddress 仅返回稳定的进入通道，不等待 Online、余额或 Join。
-func (service *moleService) entryAddress(_ gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (map[string]any, error) {
+func (service *moleService) handleEntryAddress(_ gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (map[string]any, error) {
 	if !validMember(userID, loginID, accessNode, agentName) {
 		return nil, errInvalidMoleInput
 	}
@@ -80,7 +85,7 @@ func (service *moleService) entryAddress(_ gsr.CommandContext, userID uint64, lo
 }
 
 // reserve 在 Join 前保留座位；未知结果的重试始终回到原组。
-func (service *moleService) reserve(self gsr.CommandContext, userID uint64, loginID string) (moleRoute, error) {
+func (service *moleService) handleReserve(self gsr.CommandContext, userID uint64, loginID string) (moleRoute, error) {
 	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(loginID) {
 		return moleRoute{}, errInvalidMoleInput
 	}
@@ -106,7 +111,7 @@ func (service *moleService) reserve(self gsr.CommandContext, userID uint64, logi
 	return route, nil
 }
 
-func (service *moleService) discardGroup(self gsr.CommandContext, name string) error {
+func (service *moleService) handleDiscardGroup(self gsr.CommandContext, name string) error {
 	if self.Source() == 0 || !validMoleIdentifier(name) {
 		return errInvalidMoleInput
 	}
@@ -114,7 +119,7 @@ func (service *moleService) discardGroup(self gsr.CommandContext, name string) e
 	return nil
 }
 
-func (service *moleService) balanceCorrection(self gsr.CommandContext, userID uint64, view map[string]any) error {
+func (service *moleService) handleBalanceCorrection(self gsr.CommandContext, userID uint64, view map[string]any) error {
 	route, exists := service.routes[userID]
 	if !exists {
 		return nil
@@ -146,7 +151,7 @@ func (service *moleService) chooseGroup(self gsr.ServiceContext) (string, error)
 	return name, nil
 }
 
-func (service *moleService) departed(self gsr.CommandContext, userID uint64, loginID, attack, membership string) error {
+func (service *moleService) handleDeparted(self gsr.CommandContext, userID uint64, loginID, attack, membership string) error {
 	if !service.removeMember(userID, loginID, attack, membership) {
 		return nil
 	}

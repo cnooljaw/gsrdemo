@@ -44,10 +44,12 @@ func newSettlementFixture() *settlementFixture {
 		service.balances[userID] = silverBalance{Amount: 10000, Version: 1}
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		settlementSubmitCommand: service.submit, settlementBatchCommand: service.batch,
-		settlementBalanceCommand:   service.balance,
-		settlementOperationCommand: service.operation, 998: service.changeBalance,
-		997: service.hide,
+		settlementSubmitCommand:    service.handleSubmit,
+		settlementBatchCommand:     service.handleBatch,
+		settlementBalanceCommand:   service.handleBalance,
+		settlementOperationCommand: service.handleOperation,
+		998:                        service.handleChangeBalance,
+		997:                        service.handleHide,
 	})
 	return service
 }
@@ -64,7 +66,7 @@ func (service *settlementFixture) Handle(self gsr.CommandContext, command runtim
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *settlementFixture) submit(_ gsr.CommandContext, request map[string]any) (map[string]any, error) {
+func (service *settlementFixture) handleSubmit(_ gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	service.submitCount.Add(1)
 	// 只取前两个提交样本，持续重试时不能让测试观测阻塞结算。
 	select {
@@ -221,7 +223,7 @@ func TestMoleDamagedCheckpointOnlyBlocksItsLane(t *testing.T) {
 	}
 }
 
-func (service *settlementFixture) batch(_ gsr.CommandContext, id string) (any, error) {
+func (service *settlementFixture) handleBatch(_ gsr.CommandContext, id string) (any, error) {
 	select {
 	case service.batchQueries <- struct{}{}:
 	default:
@@ -235,12 +237,12 @@ func (service *settlementFixture) batch(_ gsr.CommandContext, id string) (any, e
 	return nil, nil
 }
 
-func (service *settlementFixture) hide(_ gsr.CommandContext, hidden bool) error {
+func (service *settlementFixture) handleHide(_ gsr.CommandContext, hidden bool) error {
 	service.hideReceipts = hidden
 	return nil
 }
 
-func (service *settlementFixture) balance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
+func (service *settlementFixture) handleBalance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
 	select {
 	case service.balanceRequests <- userID:
 	default:
@@ -248,14 +250,14 @@ func (service *settlementFixture) balance(_ gsr.CommandContext, userID uint64) (
 	return service.balances[userID].snapshot(), nil
 }
 
-func (service *settlementFixture) operation(_ gsr.CommandContext, _ uint64, id string) (any, error) {
+func (service *settlementFixture) handleOperation(_ gsr.CommandContext, _ uint64, id string) (any, error) {
 	if result, exists := service.operations[id]; exists {
 		return result, nil
 	}
 	return nil, nil
 }
 
-func (service *settlementFixture) changeBalance(_ gsr.CommandContext, userID uint64, amount int64) error {
+func (service *settlementFixture) handleChangeBalance(_ gsr.CommandContext, userID uint64, amount int64) error {
 	balance := service.balances[userID]
 	balance.Amount = amount
 	balance.Version++
@@ -272,7 +274,11 @@ var _ gsr.Service = (*onlineFixture)(nil)
 
 func newOnlineFixture() *onlineFixture {
 	service := &onlineFixture{locations: make(map[uint64]map[string]any)}
-	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{1: service.bind, 2: service.lookup, 99: service.halt})
+	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
+		1:  service.handleBind,
+		2:  service.handleLookup,
+		99: service.handleHalt,
+	})
 	return service
 }
 
@@ -288,19 +294,19 @@ func (service *onlineFixture) Handle(self gsr.CommandContext, command runtime.Co
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *onlineFixture) bind(_ gsr.CommandContext, userID uint64, loginID, access, agent string) error {
+func (service *onlineFixture) handleBind(_ gsr.CommandContext, userID uint64, loginID, access, agent string) error {
 	service.locations[userID] = map[string]any{"login_id": loginID, "access_node": access, "agent_name": agent}
 	return nil
 }
 
-func (service *onlineFixture) lookup(_ gsr.CommandContext, userID uint64) (any, error) {
+func (service *onlineFixture) handleLookup(_ gsr.CommandContext, userID uint64) (any, error) {
 	if location, exists := service.locations[userID]; exists {
 		return location, nil
 	}
 	return nil, nil
 }
 
-func (service *onlineFixture) halt(self gsr.CommandContext) error {
+func (service *onlineFixture) handleHalt(self gsr.CommandContext) error {
 	self.Exit()
 	return nil
 }
@@ -692,7 +698,9 @@ var _ gsr.Service = (*moleAgentFixture)(nil)
 
 func newMoleAgentFixture() *moleAgentFixture {
 	service := &moleAgentFixture{messages: make(chan moleAgentMessage, 32)}
-	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{molePushCommand: service.push})
+	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
+		molePushCommand: service.handlePush,
+	})
 	return service
 }
 
@@ -708,7 +716,7 @@ func (service *moleAgentFixture) Handle(self gsr.CommandContext, command runtime
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *moleAgentFixture) push(_ gsr.CommandContext, loginID, kind string, payload map[string]any) error {
+func (service *moleAgentFixture) handlePush(_ gsr.CommandContext, loginID, kind string, payload map[string]any) error {
 	select {
 	case service.messages <- moleAgentMessage{LoginID: loginID, Kind: kind, Payload: payload}:
 	default:

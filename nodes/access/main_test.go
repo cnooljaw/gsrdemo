@@ -65,7 +65,7 @@ func TestAccessConfigKeepsGatePrivateAndResolvesSharedHost(t *testing.T) {
 		})
 	}
 	example, err := loadAccessConfig(filepath.Join("..", "..", "configs", "access-01.yaml"))
-	if err != nil || len(example.Node.Nodes) != 6 || example.Gate.MaxConnections <= 0 {
+	if err != nil || len(example.Node.Nodes) != 7 || example.Gate.MaxConnections <= 0 {
 		t.Fatalf("example access config: %+v, err=%v", example, err)
 	}
 	second, err := loadAccessConfig(filepath.Join("..", "..", "configs", "access-02.yaml"))

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { DemoClient } from "./client.js";
 import { EnvelopeSchema } from "./gen/gsr/common/v1/common_pb.js";
-import { BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
+import { LandlordPushSchema, LandlordSnapshotSchema, BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
 
 // 仅替代传输，业务请求/推送仍经过实际 Envelope 编解码和 DemoClient 分发。
 class FakeSocket extends EventTarget {
@@ -87,4 +87,28 @@ test("连接关闭结束在途等待", async () => {
   const pending = client.request(MsgId.C2S_LOGIN, new Uint8Array(), MsgId.S2C_LOGIN, LoginResponseSchema);
   client.close();
   await assert.rejects(pending, /client closed/);
+});
+
+
+// 保护斗地主推送只更新当前桌，迟到轮次及离开后的推送不会覆盖当前显示。
+test("斗地主推送限定桌地址及单调轮次", async () => {
+  const client = await DemoClient.connect("ws://fixture", 1000);
+  try {
+    client.landlord = create(LandlordSnapshotSchema, { roomName: "table-a", phase: "calling", turn: 1n, hand: [3n] });
+    let pushed = 0;
+    client.onPush = kind => { assert.equal(kind, "landlord_snapshot"); pushed++; };
+    const send = (roomName: string, turn: bigint) => FakeSocket.last.envelope(MsgId.S2C_LANDLORD_PUSH, 0,
+      toBinary(LandlordPushSchema, create(LandlordPushSchema, { snapshot: { roomName, turn, phase: "robbing", hand: [4n] } })));
+    send("table-b", 100n);
+    assert.equal(client.landlord.turn, 1n);
+    send("table-a", 2n);
+    send("table-a", 1n);
+    assert.equal(client.landlord.turn, 2n);
+    assert.deepEqual(client.landlord.hand, [4n]);
+    assert.equal(pushed, 1);
+    client.landlord = undefined;
+    send("table-a", 3n);
+    assert.equal(client.landlord, undefined);
+    assert.equal(pushed, 1);
+  } finally { client.close(); }
 });

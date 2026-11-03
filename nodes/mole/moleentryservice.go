@@ -30,7 +30,10 @@ func moleEntryName(userID uint64) string {
 
 func newMoleEntryService(lane uint64) *moleEntryService {
 	service := &moleEntryService{lane: lane}
-	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{moleEnterCommand: service.enter, moleOperationCommand: service.operation})
+	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
+		moleEnterCommand:     service.handleEnter,
+		moleOperationCommand: service.handleOperation,
+	})
 	return service
 }
 
@@ -40,7 +43,7 @@ func (service *moleEntryService) Handle(self gsr.CommandContext, command runtime
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *moleEntryService) enter(self gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (map[string]any, error) {
+func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (map[string]any, error) {
 	if !validMember(userID, loginID, accessNode, agentName) || userID%moleEntryCount != service.lane {
 		return nil, errInvalidMoleInput
 	}
@@ -119,7 +122,7 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 }
 
 // operation 的只读远端等待只占用进入通道，不与归批提交共享 Mailbox。
-func (service *moleEntryService) operation(self gsr.CommandContext, userID uint64, hitID string) (any, error) {
+func (service *moleEntryService) handleOperation(self gsr.CommandContext, userID uint64, hitID string) (any, error) {
 	if userID == 0 || userID%moleEntryCount != service.lane || !validMoleIdentifier(hitID) {
 		return nil, errInvalidMoleInput
 	}

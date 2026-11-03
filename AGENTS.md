@@ -7,7 +7,7 @@
 - gsrdemo 是唯一开发主目录，一个 Git 仓库管理多个项目。每个节点角色一个独立 Go module，同角色多实例共用项目、分别配置；common 为共享 Go module，typeclient 为独立 TypeScript 项目。
 - 节点源码、入口和测试默认放项目根目录，不预设 cmd/ 或 internal/；实际需要独立包时才建目录。
 - 所有使用 GSR 的 go.mod 固定 github.com/cnooljaw/gsr v1.0.2，不提交指向本地 GSR 的 replace；节点仅对本仓库 common 使用本地 replace。
-- ../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 严格只读，只提供框架文档和业务参考。不修改源码、文档、配置、依赖或生成结果，不在其中执行会写文件的生成、格式化、安装或验证；依赖缓存和 vendor 同样不手工修改。
+- ../gsr、../../skynet_bt/nbgameserver、../../ServerLogic/hlddz 和 ../GoServerActorFsm 严格只读，只提供框架文档和业务参考。不修改源码、文档、配置、依赖或生成结果，不在其中执行会写文件的生成、格式化、安装或验证；依赖缓存和 vendor 同样不手工修改。
 - 游戏业务、配置、协议和运行产物都写在 gsrdemo；参考实现不是兼容目标。依赖与阅读基线见 docs/DESIGN.md。
 
 ## 文档入口
