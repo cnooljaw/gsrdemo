@@ -7,6 +7,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 )
 
 const agentCallTimeout = 3 * time.Second
@@ -19,15 +20,11 @@ type agentSession struct {
 	loginID string
 }
 
-func (session *agentSession) snapshot() agentSession {
-	return *session
-}
-
-func (session agentSession) requireLogin() error {
-	if session.userID == 0 {
-		return errLoginRequired
+func (session *agentSession) snapshot() gameagent.Identity {
+	return gameagent.Identity{
+		UserID: session.userID, LoginID: session.loginID,
+		AccessNode: session.node, AgentName: session.name,
 	}
-	return nil
 }
 
 func callBackend(self gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {

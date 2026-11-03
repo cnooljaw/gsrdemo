@@ -17,8 +17,9 @@ const (
 	attackLeaveCommand    runtime.CommandID = 4
 	attackTickCommand     runtime.CommandID = 10
 	attackBalanceCommand  runtime.CommandID = 11
-	// molePushCommand 是未来接入 Agent 的业务推送入口，本轮只由测试 Agent 消费。
-	molePushCommand runtime.CommandID = 100
+	// 接入 Agent 按独立 CommandID 接收快照与余额校正。
+	moleSnapshotPushCommand          runtime.CommandID = 100
+	moleBalanceCorrectionPushCommand runtime.CommandID = 102
 )
 
 type attackMember struct {
@@ -95,7 +96,7 @@ func (service *attackService) handleJoin(self gsr.CommandContext, userID uint64,
 	member.AccessNode, member.AgentName = accessNode, agentName
 	member.Membership = membership
 	service.members[userID] = member
-	service.broadcast(self, "snapshot")
+	service.broadcastSnapshot(self)
 	return service.view(userID), nil
 }
 
@@ -136,7 +137,7 @@ func (service *attackService) handleHit(self gsr.CommandContext, userID uint64, 
 	}
 	record.Result = reply
 	service.game.finish(record, "accepted", time.Now())
-	service.broadcast(self, "snapshot")
+	service.broadcastSnapshot(self)
 	return reply.snapshot(), nil
 }
 
@@ -166,20 +167,20 @@ func (service *attackService) handleLeave(self gsr.CommandContext, userID uint64
 		self.Exit()
 		return true, nil
 	}
-	service.broadcast(self, "snapshot")
+	service.broadcastSnapshot(self)
 	return true, nil
 }
 
 func (service *attackService) handleTick(self gsr.CommandContext) error {
 	service.game.spawn(time.Now())
-	service.broadcast(self, "snapshot")
+	service.broadcastSnapshot(self)
 	return nil
 }
 
 func (service *attackService) handleBalanceCorrection(self gsr.CommandContext, userID uint64, loginID string, view map[string]any) error {
 	member, err := service.member(userID, loginID)
 	if err == nil {
-		service.push(self, member, "balance_correction", view)
+		service.push(self, member, moleBalanceCorrectionPushCommand, view)
 	}
 	return nil
 }
@@ -217,15 +218,15 @@ func (service *attackService) view(userID uint64) map[string]any {
 	}
 }
 
-func (service *attackService) broadcast(self gsr.ServiceContext, kind string) {
+func (service *attackService) broadcastSnapshot(self gsr.ServiceContext) {
 	for _, member := range service.members {
-		service.push(self, member, kind, service.view(member.UserID))
+		service.push(self, member, moleSnapshotPushCommand, service.view(member.UserID))
 	}
 }
 
-func (service *attackService) push(self gsr.ServiceContext, member attackMember, kind string, payload map[string]any) {
+func (service *attackService) push(self gsr.ServiceContext, member attackMember, command runtime.CommandID, payload map[string]any) {
 	if err := self.Cluster().Send(cluster.NodeID(member.AccessNode), cluster.ServiceName(member.AgentName),
-		molePushCommand, member.LoginID, kind, payload); err != nil {
+		command, member.LoginID, payload); err != nil {
 		logMoleError(self, "地鼠推送未接纳，客户端需取快照", err)
 	}
 }

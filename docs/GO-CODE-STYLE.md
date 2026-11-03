@@ -25,6 +25,7 @@
 - 长签名、调用和复合字面量按语义换行；约 120 字符可作为软提示，不是硬门禁。
 - 每行表达一个主要动作，不使用分号压缩控制流程。
 - Dispatcher 注册表一行一个“命令/消息 ID → 处理方法”，不将多项挤在一行；键值使用 `gofmt` 对齐。生产代码与测试中的注册表遵循同一写法。
+- 能由独立 CommandID 表达的业务命令，直接在注册表绑定具体 `handle...` 方法，避免先进入通用 Handler 再按 `kind/type` 字符串二次分发；普通业务规则内部的分支不受此限制。
 
 ```go
 func (service *PlayerService) Close() error {
@@ -42,17 +43,23 @@ func (service *PlayerService) Close() error {
 - 使用中的参数必须表达用途；为满足接口而未使用的参数显式命名为 `_`。
 - `gsr.ServiceContext` 参数统一命名为 `self`，表示当前 Service 的身份与能力，不使用 `scoped` 或 `ctx`；普通 `context.Context` 仍命名为 `ctx`。未使用的 ServiceContext 参数保持 `_`。此规则针对上下文参数，不把业务 Service 的方法接收者改名为 self。
 - 沿用项目稳定术语，不为相同概念创造近义词。
-- 消息处理方法按入口命名：GSR 内部命令入口使用 `handle...`（如 `mole.handlePush`、`handleSettleGroup`），客户端协议入口使用 `on...`（如 `onLogin`、`landlord.onCall`）。组件归属由具名字段表达，不重复把游戏名塞入组件的每个方法名。普通业务方法、值对象方法和生命周期回调不套用这些前缀；GSR 要求的 `Handle`、`HandleClientMessage`、`OnStart`、`OnStop` 保留原名。
+- 消息处理方法按入口命名：GSR 内部命令入口使用 `handle...`（如 `mole.handleSnapshotPush`、`handleSettleGroup`），客户端协议入口使用 `on...`（如 `onLogin`、`landlord.onCall`）。组件归属由类型或具名字段表达，不重复把游戏名塞入组件的每个方法名。普通业务方法、值对象方法和生命周期回调不套用这些前缀；GSR 要求的 `Handle`、`HandleClientMessage`、`OnStart`、`OnStop` 保留原名。
 
 ```go
-agent.commandDispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-	molePushCommand:      agent.mole.handlePush,
-	agentReplacedCommand: agent.handleReplaced,
-})
-agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, map[uint32]any{
-	uint32(demopb.MsgId_C2S_LOGIN): agent.onLogin,
-	uint32(demopb.MsgId_C2S_HIT):   agent.mole.onHit,
-})
+// 各组件在自己的类型内列出注册表，连接入口统一合并。
+func (mole *Mole) CommandHandlers() map[runtime.CommandID]any {
+    return map[runtime.CommandID]any{
+        moleSnapshotPushCommand:          mole.handleSnapshotPush,
+        moleBalanceCorrectionPushCommand: mole.handleBalanceCorrectionPush,
+    }
+}
+
+func (mole *Mole) ProtocolHandlers() map[uint32]any {
+    return map[uint32]any{
+        uint32(demopb.MsgId_C2S_ENTER): mole.onEnter,
+        uint32(demopb.MsgId_C2S_HIT):   mole.onHit,
+    }
+}
 ```
 
 ### 2.3 控制流
@@ -118,9 +125,9 @@ if err != nil {
 - 只有多实现、测试隔离、模块边界、插件化或明确依赖倒置需求时才引入接口。
 - Struct 显式声明依赖，默认优先组合而非继承式 embedding；只有 embedding 不泄漏内部生命周期、方法集合和所有权时才作为局部实现细节使用。
 - Service 内的组合组件按实际职责持有自身数据和依赖，不持有完整父 Service 指针来任意访问其他组件。组件仍由所属 Service 串行调用，不增加独立生命周期、Mailbox 或 goroutine；身份等共享事实只保留一个来源，不在各组件重复维护。
-- 协议按实际业务归属注册：通用协议与各游戏分别组织，由连接入口显式组装；不同组件的注册项合并时必须检查重复 ID，禁止静默覆盖。不按每条命令创建组件，也不为固定接线引入动态插件或自动发现框架。
+- 协议按实际业务归属注册：通用协议与各游戏分别组织，由连接入口显式组装；不同组件的注册项合并时必须检查重复 ID，禁止静默覆盖。需要统一遍历的固定组件使用显式实例清单，注册、准入和清理复用该清单，不维护多份平行名单。不按每条命令创建组件，也不为固定接线引入动态插件或自动发现框架。
 - Service 具体类型显式声明 `Handle` 消息入口；若使用 Dispatcher，应以具名字段持有并由 `Handle` 转发，不依靠匿名嵌入的方法提升满足接口。这是编码与评审规则，Go 接口本身不能强制检查。
-- 承担明确框架角色的类型，在类型定义后紧跟编译期接口断言，例如 `var _ Service = (*echoService)(nil)`。同一类型实现多个重要接口时统一放在一个 `var` 块中；Agent 同时实现 `Service` 与 `ClientMessageHandler` 时，两者都显式声明。按实际方法集选择指针或值形式，不为断言修改 receiver，不集中到文件末尾或独立的 `interfaces.go`。断言用于 Service、上下文、Gate 连接、Cluster 扩展和 Core 生命周期组件等架构角色，不机械覆盖普通工具接口或仅为局部实现、测试替换而定义的小接口。
+- 明确承担框架、业务组件或基础设施接口职责的类型，在类型定义后紧跟编译期接口断言，例如 `var _ Service = (*echoService)(nil)`。同一类型实现多个重要接口时统一放在一个 `var` 块中；Agent 同时实现 `Service` 与 `ClientMessageHandler` 时，两者都显式声明。按实际方法集选择指针或值形式，不为断言修改 receiver，不集中到文件末尾或独立的 `interfaces.go`。Service、上下文、Gate 连接、游戏接入组件、Redis Hook 等明确实现的接口都应声明，测试替身同样遵守；普通值对象不为此人为增加接口。Go 仍通过方法集隐式实现接口，断言是本项目的编码要求，用于显式表达意图并由编译器校验。
 - 配置项较多时默认使用 Config Struct；Functional Option 只在可选项多、组合频繁且确实更清楚时使用。
 - 构造函数完成默认值填充和不变量建立；可能失败的构造返回 error。
 - 框架内部组件之间必须成立的不变量由构造器保证，不暴露给业务调用方组装后再运行时校验。例如，协议 Dispatcher 内部的解码与写回必须共用同一 Registry，由 Dispatcher 构造器建立这种关联，而不是要求调用方重复传入并匹配。

@@ -235,6 +235,8 @@ type moleRedisFaultHook struct {
 	panicEnabled *atomic.Bool
 }
 
+var _ redis.Hook = moleRedisFaultHook{}
+
 func (hook moleRedisFaultHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (hook moleRedisFaultHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return next

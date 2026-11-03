@@ -62,7 +62,7 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			}
 			return false, nil
 		case 98:
-			return nil, self.Cluster().Send(cluster.NodeID(service.current["access_node"].(string)), cluster.ServiceName(service.current["agent_name"].(string)), 100, args...)
+			return nil, self.Cluster().Send(cluster.NodeID(service.current["access_node"].(string)), cluster.ServiceName(service.current["agent_name"].(string)), runtime.CommandID(args[0].(uint64)), args[1:]...)
 		case 97:
 			service.failBind = args[0].(bool)
 			return nil, nil
@@ -332,8 +332,8 @@ func TestAccessBusinessLoginHitAndPush(t *testing.T) {
 	if err := proto.Unmarshal(rejected.Payload, &rejectedHit); err != nil || rejected.MsgId != uint32(demopb.MsgId_S2C_HIT) || rejectedHit.GetHit().GetStatus() != "rejected" || rejectedHit.Silver != nil {
 		t.Fatalf("拒绝重试不能伪造余额: %v %v", &rejectedHit, err)
 	}
-	accessFixtureRPC(t, backend, 98, "old-login", "balance_correction", map[string]any{"balance": int64(1), "revision": uint64(99)})
-	accessFixtureRPC(t, backend, 98, location["login_id"], "balance_correction", map[string]any{"balance": int64(900), "revision": uint64(3)})
+	accessFixtureRPC(t, backend, 98, uint64(102), "old-login", map[string]any{"balance": int64(1), "revision": uint64(99)})
+	accessFixtureRPC(t, backend, 98, uint64(102), location["login_id"], map[string]any{"balance": int64(900), "revision": uint64(3)})
 	response := readAccessEnvelope(t, client)
 	var push demopb.BalancePush
 	if response.RequestId != 0 || response.MsgId != uint32(demopb.MsgId_S2C_BALANCE_PUSH) {

@@ -5,6 +5,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
@@ -15,12 +16,7 @@ const (
 	agentReplacedCommand     runtime.CommandID = 101
 )
 
-var (
-	errLoginRequired       = runtime.NewStatusError(runtime.ErrorClassDomain, "access.login_required", "login required")
-	errAlreadyLoggedIn     = runtime.NewStatusError(runtime.ErrorClassDomain, "access.already_logged_in", "use a new connection to login again")
-	errEnterRequired       = runtime.NewStatusError(runtime.ErrorClassDomain, "access.enter_required", "enter mole first")
-	errInvalidBackendReply = runtime.NewStatusError(runtime.ErrorClassDomain, "access.invalid_backend_reply", "invalid backend reply")
-)
+var errAlreadyLoggedIn = runtime.NewStatusError(runtime.ErrorClassDomain, "access.already_logged_in", "use a new connection to login again")
 
 // onLogin 只接受凭据，身份和连接地址始终由服务端填写。
 func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, request *demopb.LoginRequest) error {
@@ -33,7 +29,7 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 	}
 	userID, ok := value.(uint64)
 	if !ok || userID == 0 {
-		return errInvalidBackendReply
+		return gameagent.ErrInvalidBackendReply
 	}
 	loginID, err := connectionID()
 	if err != nil {
@@ -54,7 +50,7 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 		if !ok {
 			agent.disconnect(self)
 			self.Exit()
-			return errInvalidBackendReply
+			return gameagent.ErrInvalidBackendReply
 		}
 		oldNode, nodeOK := old["access_node"].(string)
 		oldName, nameOK := old["agent_name"].(string)
@@ -62,7 +58,7 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 		if !nodeOK || !nameOK || !loginOK || oldNode == "" || oldName == "" || oldLogin == "" {
 			agent.disconnect(self)
 			self.Exit()
-			return errInvalidBackendReply
+			return gameagent.ErrInvalidBackendReply
 		}
 		// 不等待旧 Agent；其断线/离开仍按旧 LoginID 有条件清理。
 		if err := self.Cluster().Send(cluster.NodeID(oldNode), cluster.ServiceName(oldName), agentReplacedCommand, oldLogin); err != nil {
@@ -86,11 +82,10 @@ func (agent *agent) disconnect(self gsr.ServiceContext) {
 	if agent.session.userID == 0 {
 		return
 	}
-	if err := agent.landlord.disconnect(self); err != nil {
-		_ = self.Logger().Error("断线离开斗地主未确认", "error", err.Error())
-	}
-	if err := agent.mole.disconnect(self); err != nil {
-		_ = self.Logger().Error("断线离开地鼠未确认", "error", err.Error())
+	for _, game := range agent.games {
+		if err := game.Disconnect(self); err != nil {
+			_ = self.Logger().Error("断线离开游戏未确认", "game", game.Name(), "error", err.Error())
+		}
 	}
 	if _, err := callBackend(self, "online", "online", onlineUnbindCommand, agent.session.userID, agent.session.loginID); err != nil {
 		_ = self.Logger().Error("断线解绑未确认", "error", err.Error())

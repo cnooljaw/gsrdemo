@@ -685,7 +685,7 @@ func TestMoleExitDoesNotCancelHandedOffHit(t *testing.T) {
 
 type moleAgentMessage struct {
 	LoginID string
-	Kind    string
+	Command runtime.CommandID
 	Payload map[string]any
 }
 
@@ -699,7 +699,8 @@ var _ gsr.Service = (*moleAgentFixture)(nil)
 func newMoleAgentFixture() *moleAgentFixture {
 	service := &moleAgentFixture{messages: make(chan moleAgentMessage, 32)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		molePushCommand: service.handlePush,
+		moleSnapshotPushCommand:          service.handleSnapshotPush,
+		moleBalanceCorrectionPushCommand: service.handleBalanceCorrectionPush,
 	})
 	return service
 }
@@ -716,9 +717,17 @@ func (service *moleAgentFixture) Handle(self gsr.CommandContext, command runtime
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *moleAgentFixture) handlePush(_ gsr.CommandContext, loginID, kind string, payload map[string]any) error {
+func (service *moleAgentFixture) handleSnapshotPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
+	return service.recordPush(moleSnapshotPushCommand, loginID, payload)
+}
+
+func (service *moleAgentFixture) handleBalanceCorrectionPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
+	return service.recordPush(moleBalanceCorrectionPushCommand, loginID, payload)
+}
+
+func (service *moleAgentFixture) recordPush(command runtime.CommandID, loginID string, payload map[string]any) error {
 	select {
-	case service.messages <- moleAgentMessage{LoginID: loginID, Kind: kind, Payload: payload}:
+	case service.messages <- moleAgentMessage{LoginID: loginID, Command: command, Payload: payload}:
 	default:
 		return errMoleBusy
 	}
@@ -740,7 +749,7 @@ func TestMoleMatchingSettlementDoesNotRepeatReward(t *testing.T) {
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
 	for len(agent.messages) > 0 {
 		message := <-agent.messages
-		if message.Kind != "snapshot" {
+		if message.Command != moleSnapshotPushCommand {
 			t.Fatalf("matching settlement emitted another result: %+v", message)
 		}
 	}
@@ -806,10 +815,10 @@ func TestMoleCorrectionUsesCurrentLogin(t *testing.T) {
 	for {
 		select {
 		case message := <-agent.messages:
-			if message.Kind == "snapshot" {
+			if message.Command == moleSnapshotPushCommand {
 				continue
 			}
-			if message.Kind != "balance_correction" || message.LoginID != "new-login" || message.Payload["balance"] != int64(0) {
+			if message.Command != moleBalanceCorrectionPushCommand || message.LoginID != "new-login" || message.Payload["balance"] != int64(0) {
 				t.Fatalf("invalid account correction: %+v", message)
 			}
 			current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), attackSnapshotCommand, uint64(1), "new-login")

@@ -1,4 +1,4 @@
-package main
+package gameagent
 
 import (
 	"errors"
@@ -9,47 +9,57 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
-	"google.golang.org/protobuf/proto"
 )
 
-// landlordAgent 只持有本游戏接入路由，由所属 Agent 串行调用，不保存父 Agent 或回调上下文。
-type landlordAgent struct {
-	identity   func() agentSession
-	allowEnter func(string) error
-	push       func(uint32, proto.Message) error
-	room       cluster.ServiceName
+// Landlord 处理本游戏接入协议，只持有路由，由所属 Agent 串行调用。
+type Landlord struct {
+	deps Dependencies
+	room cluster.ServiceName
 }
 
-const landlordPushCommand runtime.CommandID = 110
+var _ Component = (*Landlord)(nil)
 
-func (landlord *landlordAgent) entered() bool {
+// NewLandlord 创建每连接独立的游戏接入组件，构造时不调用注入能力。
+func NewLandlord(deps Dependencies) *Landlord {
+	return &Landlord{deps: deps}
+}
+
+// Name 返回用于接入互斥与日志的游戏名称。
+func (landlord *Landlord) Name() string {
+	return "landlord"
+}
+
+const landlordSnapshotPushCommand runtime.CommandID = 110
+
+// Entered 从本游戏路由判断是否已进入，不另存状态。
+func (landlord *Landlord) Entered() bool {
 	return landlord.room != ""
 }
 
-func (landlord *landlordAgent) onEnter(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordEnterRequest) error {
-	identity := landlord.identity()
-	if err := landlord.allowEnter("landlord"); err != nil {
+func (landlord *Landlord) onEnter(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordEnterRequest) error {
+	identity := landlord.deps.Identity()
+	if err := landlord.deps.AllowEnter(landlord.Name()); err != nil {
 		return err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		value, err := callBackend(self, "landlord", "landlord", 1, identity.userID, identity.loginID)
+		value, err := landlord.deps.Call(self, "landlord", "landlord", 1, identity.UserID, identity.LoginID)
 		if err != nil {
 			return err
 		}
 		fields, ok := value.(map[string]any)
 		if !ok {
-			return errInvalidBackendReply
+			return ErrInvalidBackendReply
 		}
 		room, roomOK := fields["room_name"].(string)
 		membership, memberOK := fields["membership"].(string)
 		if !roomOK || !memberOK || room == "" || membership == "" {
-			return errInvalidBackendReply
+			return ErrInvalidBackendReply
 		}
-		value, err = callBackend(self, "landlord", cluster.ServiceName(room), 1, identity.userID, identity.loginID, string(identity.node), string(identity.name), membership)
+		value, err = landlord.deps.Call(self, "landlord", cluster.ServiceName(room), 1, identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName), membership)
 		if err != nil {
 			// 只有明确房间消失才丢弃目录；超时可能已加入，不能随机换桌。
 			if errors.Is(err, runtime.ErrServiceNotFound) || errors.Is(err, runtime.ErrServiceClosed) || errors.Is(err, runtime.ErrServicePanicked) {
-				if _, discardErr := callBackend(self, "landlord", "landlord", 13, room); discardErr != nil {
+				if _, discardErr := landlord.deps.Call(self, "landlord", "landlord", 13, room); discardErr != nil {
 					return discardErr
 				}
 				continue
@@ -66,16 +76,16 @@ func (landlord *landlordAgent) onEnter(self gsr.CommandContext, reply protocol.C
 	return runtime.ErrServiceNotFound
 }
 
-func (landlord *landlordAgent) callRoom(self gsr.CommandContext, reply protocol.Context, command runtime.CommandID, responseID demopb.MsgId, args ...any) error {
-	identity := landlord.identity()
-	if err := identity.requireLogin(); err != nil {
+func (landlord *Landlord) callRoom(self gsr.CommandContext, reply protocol.Context, command runtime.CommandID, responseID demopb.MsgId, args ...any) error {
+	identity := landlord.deps.Identity()
+	if err := identity.RequireLogin(); err != nil {
 		return err
 	}
 	if landlord.room == "" {
-		return errEnterRequired
+		return ErrEnterRequired
 	}
-	values := append([]any{identity.userID, identity.loginID}, args...)
-	value, err := callBackend(self, "landlord", landlord.room, command, values...)
+	values := append([]any{identity.UserID, identity.LoginID}, args...)
+	value, err := landlord.deps.Call(self, "landlord", landlord.room, command, values...)
 	if err != nil {
 		return err
 	}
@@ -86,11 +96,11 @@ func (landlord *landlordAgent) callRoom(self gsr.CommandContext, reply protocol.
 	return landlordResponse(reply, responseID, snapshot)
 }
 
-func (landlord *landlordAgent) onReady(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordReadyRequest) error {
+func (landlord *Landlord) onReady(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordReadyRequest) error {
 	return landlord.callRoom(self, reply, 2, demopb.MsgId_S2C_LANDLORD_READY)
 }
 
-func (landlord *landlordAgent) onPlay(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordPlayRequest) error {
+func (landlord *Landlord) onPlay(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordPlayRequest) error {
 	cards := make([]any, len(request.Cards))
 	for i, c := range request.Cards {
 		cards[i] = c
@@ -98,35 +108,35 @@ func (landlord *landlordAgent) onPlay(self gsr.CommandContext, reply protocol.Co
 	return landlord.callRoom(self, reply, 3, demopb.MsgId_S2C_LANDLORD_PLAY, request.Turn, cards)
 }
 
-func (landlord *landlordAgent) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordSnapshotRequest) error {
+func (landlord *Landlord) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordSnapshotRequest) error {
 	return landlord.callRoom(self, reply, 4, demopb.MsgId_S2C_LANDLORD_SNAPSHOT)
 }
 
-func (landlord *landlordAgent) onLeave(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordLeaveRequest) error {
-	identity := landlord.identity()
-	if err := identity.requireLogin(); err != nil {
+func (landlord *Landlord) onLeave(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordLeaveRequest) error {
+	identity := landlord.deps.Identity()
+	if err := identity.RequireLogin(); err != nil {
 		return err
 	}
 	if landlord.room == "" {
-		return errEnterRequired
+		return ErrEnterRequired
 	}
-	value, err := callBackend(self, "landlord", landlord.room, 5, identity.userID, identity.loginID)
+	value, err := landlord.deps.Call(self, "landlord", landlord.room, 5, identity.UserID, identity.LoginID)
 	if err != nil {
 		return err
 	}
 	if value != true {
-		return errInvalidBackendReply
+		return ErrInvalidBackendReply
 	}
 	landlord.room = ""
 	return reply.Response(uint32(demopb.MsgId_S2C_LANDLORD_LEAVE), &demopb.LandlordLeaveResponse{})
 }
 
-func (landlord *landlordAgent) onOperation(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordOperationRequest) error {
-	identity := landlord.identity()
-	if err := identity.requireLogin(); err != nil {
+func (landlord *Landlord) onOperation(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordOperationRequest) error {
+	identity := landlord.deps.Identity()
+	if err := identity.RequireLogin(); err != nil {
 		return err
 	}
-	value, err := callBackend(self, "settlement", cluster.ServiceName(routing.ReadService(request.OperationId)), 3, identity.userID, request.OperationId)
+	value, err := landlord.deps.Call(self, "settlement", cluster.ServiceName(routing.ReadService(request.OperationId)), 3, identity.UserID, request.OperationId)
 	if err != nil {
 		return err
 	}
@@ -134,12 +144,12 @@ func (landlord *landlordAgent) onOperation(self gsr.CommandContext, reply protoc
 	if value != nil {
 		fields, ok := value.(map[string]any)
 		if !ok || fields["operation_id"] != request.OperationId {
-			return errInvalidBackendReply
+			return ErrInvalidBackendReply
 		}
 		status, statusOK := fields["status"].(string)
 		reason, reasonOK := fields["reason"].(string)
 		if !statusOK || !reasonOK || (status != "committed" && status != "rejected") {
-			return errInvalidBackendReply
+			return ErrInvalidBackendReply
 		}
 		response.Status, response.Reason = status, reason
 	}
@@ -152,14 +162,14 @@ func landlordSnapshot(value any) (*demopb.LandlordSnapshot, error) {
 		return nil, err
 	}
 	if snapshot.RoomName == "" {
-		return nil, errInvalidBackendReply
+		return nil, ErrInvalidBackendReply
 	}
 	return snapshot, nil
 }
 
-func (landlord *landlordAgent) handlePush(_ gsr.CommandContext, login string, payload map[string]any) error {
-	identity := landlord.identity()
-	if identity.userID == 0 || login != identity.loginID || landlord.room == "" {
+func (landlord *Landlord) handleSnapshotPush(_ gsr.CommandContext, login string, payload map[string]any) error {
+	identity := landlord.deps.Identity()
+	if identity.UserID == 0 || login != identity.LoginID || landlord.room == "" {
 		return nil
 	}
 	snapshot, err := landlordSnapshot(payload)
@@ -169,7 +179,7 @@ func (landlord *landlordAgent) handlePush(_ gsr.CommandContext, login string, pa
 	if cluster.ServiceName(snapshot.RoomName) != landlord.room {
 		return nil
 	}
-	return landlord.push(uint32(demopb.MsgId_S2C_LANDLORD_PUSH), &demopb.LandlordPush{Snapshot: snapshot})
+	return landlord.deps.Push(uint32(demopb.MsgId_S2C_LANDLORD_PUSH), &demopb.LandlordPush{Snapshot: snapshot})
 }
 
 func landlordResponse(reply protocol.Context, id demopb.MsgId, snapshot *demopb.LandlordSnapshot) error {
@@ -187,18 +197,19 @@ func landlordResponse(reply protocol.Context, id demopb.MsgId, snapshot *demopb.
 	case demopb.MsgId_S2C_LANDLORD_ROB:
 		return reply.Response(uint32(id), &demopb.LandlordRobResponse{Snapshot: snapshot})
 	}
-	return errInvalidBackendReply
+	return ErrInvalidBackendReply
 }
 
-func (landlord *landlordAgent) onCall(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordCallRequest) error {
+func (landlord *Landlord) onCall(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordCallRequest) error {
 	return landlord.callRoom(self, reply, 6, demopb.MsgId_S2C_LANDLORD_CALL, request.Turn, request.Yes)
 }
 
-func (landlord *landlordAgent) onRob(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordRobRequest) error {
+func (landlord *Landlord) onRob(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordRobRequest) error {
 	return landlord.callRoom(self, reply, 7, demopb.MsgId_S2C_LANDLORD_ROB, request.Turn, request.Yes)
 }
 
-func (landlord *landlordAgent) protocolHandlers() map[uint32]any {
+// ProtocolHandlers 返回本游戏的客户端协议入口。
+func (landlord *Landlord) ProtocolHandlers() map[uint32]any {
 	return map[uint32]any{
 		uint32(demopb.MsgId_C2S_LANDLORD_ENTER):     landlord.onEnter,
 		uint32(demopb.MsgId_C2S_LANDLORD_READY):     landlord.onReady,
@@ -211,18 +222,20 @@ func (landlord *landlordAgent) protocolHandlers() map[uint32]any {
 	}
 }
 
-func (landlord *landlordAgent) commandHandlers() map[runtime.CommandID]any {
+// CommandHandlers 返回本游戏的节点推送入口。
+func (landlord *Landlord) CommandHandlers() map[runtime.CommandID]any {
 	return map[runtime.CommandID]any{
-		landlordPushCommand: landlord.handlePush,
+		landlordSnapshotPushCommand: landlord.handleSnapshotPush,
 	}
 }
 
-func (landlord *landlordAgent) disconnect(self gsr.ServiceContext) error {
+// Disconnect 尽力离开并清空路由；失败由所属 Agent 记录，组件不关闭连接。
+func (landlord *Landlord) Disconnect(self gsr.ServiceContext) error {
 	defer func() { landlord.room = "" }()
 	if landlord.room == "" {
 		return nil
 	}
-	identity := landlord.identity()
-	_, err := callBackend(self, "landlord", landlord.room, 5, identity.userID, identity.loginID)
+	identity := landlord.deps.Identity()
+	_, err := landlord.deps.Call(self, "landlord", landlord.room, 5, identity.UserID, identity.LoginID)
 	return err
 }

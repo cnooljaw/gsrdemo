@@ -1,4 +1,4 @@
-package main
+package gameagent
 
 import (
 	"encoding/json"
@@ -12,14 +12,14 @@ import (
 // encoding/json 直接写整数十进制，protojson 直接解析到 int64/uint64，不经过 float64。
 func clientMessage(value any, message proto.Message) error {
 	if _, ok := value.(map[string]any); !ok {
-		return errInvalidBackendReply
+		return ErrInvalidBackendReply
 	}
 	contents, err := json.Marshal(value)
 	if err != nil {
-		return errInvalidBackendReply
+		return ErrInvalidBackendReply
 	}
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(contents, message); err != nil {
-		return errInvalidBackendReply
+		return ErrInvalidBackendReply
 	}
 	return nil
 }
@@ -30,7 +30,7 @@ func clientSnapshot(value any) (*demopb.Snapshot, error) {
 		return nil, err
 	}
 	if snapshot.AttackName == "" {
-		return nil, errInvalidBackendReply
+		return nil, ErrInvalidBackendReply
 	}
 	return snapshot, nil
 }
@@ -41,7 +41,7 @@ func clientHit(value any) (*demopb.Hit, error) {
 		return nil, err
 	}
 	if hit.HitId == "" || hit.ActionId == "" || (hit.Status != "accepted" && hit.Status != "rejected") {
-		return nil, errInvalidBackendReply
+		return nil, ErrInvalidBackendReply
 	}
 	return hit, nil
 }
@@ -49,10 +49,10 @@ func clientHit(value any) (*demopb.Hit, error) {
 func clientBalance(value any) (*demopb.Balance, error) {
 	fields, ok := value.(map[string]any)
 	if !ok {
-		return nil, errInvalidBackendReply
+		return nil, ErrInvalidBackendReply
 	}
 	if _, ok := fields["balance"].(int64); !ok {
-		return nil, errInvalidBackendReply
+		return nil, ErrInvalidBackendReply
 	}
 	balance := &demopb.Balance{}
 	if err := clientMessage(value, balance); err != nil {
@@ -62,7 +62,7 @@ func clientBalance(value any) (*demopb.Balance, error) {
 		confirmed, amountOK := amount.(int64)
 		version, versionOK := fields["version"].(uint64)
 		if !amountOK || !versionOK {
-			return nil, errInvalidBackendReply
+			return nil, ErrInvalidBackendReply
 		}
 		balance.Confirmed = &demopb.ConfirmedSilver{Amount: confirmed, Version: version}
 	}

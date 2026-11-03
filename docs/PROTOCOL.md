@@ -19,7 +19,7 @@
 
 Agent 仅保存当前身份和 entry/attack 路由；每条连接随机生成私有具名地址，每次登录随机生成不可复用 LoginID。Login 验证成功后 Call Online.Bind；绑定成功才开放游戏。Bind 失败/超时不重发绑定，只尝试清理该候选 LoginID 并关闭连接。正常替换后向旧地址 Send Command 101（旧 LoginID），旧 Agent 核对身份后尽力 Leave/Unbind 再退出；普通断线执行相同清理。进程骤停、清理超时或推送失败可能留下旧目录/成员，后续登录和进入覆盖；不承诺 Online 绑定已替换时旧在途操作被撤销，也不承诺网络分区下立即踢下线。
 
-未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。远端推送仍为 Command 100，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
+未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。地鼠快照使用 Command 100，余额校正使用 Command 102，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
 
 Online 不可用时，新登录不能完成绑定，接入关闭该连接。已进入游戏的连接仍按当前路由执行 Hit/Snapshot/Leave/Operation 并接收推送，不逐次查询 Online；重新登录或 Enter 仍需目录可用。Online 重启后不自动重建绑定。
 
@@ -106,7 +106,7 @@ AttackName / 1 Join、10 Timer、11 BalanceCorrection，以及 mole / 10 Departe
 
 正常链路：AttackService 校验并固定扣返 → 本地 Call Accounting 完成内存预检查/接纳 → 立即返回 accepted 和余额，同时完成目标。Accounting 跨组归批并 Send Submission，后者独立等待远端持久结算。accepted 不是 committed，正常客户端不需要等待第二个奖励结果。
 
-推送到 AccessNode + AgentName 的命令为 100，参数为 LoginID string、kind string、payload map[string]any。kind 为 snapshot 或 balance_correction；后者是绝对余额视图。仅在回执导致显示余额不一致时校正，不重复发奖励，不复活目标；按当前 UserID 路由/成员发送，Agent 须核对当前 LoginID。重复响应/推送按 revision 收敛，不能每收到一次再加减；修订号只在当前节点缓存生命周期内有效，重新进入以新快照建立基线。
+推送到 AccessNode + AgentName 使用独立命令：100 为快照，102 为余额校正，参数均为 LoginID string、payload map[string]any。Access 的 CommandHandlers 直接绑定 handleSnapshotPush / handleBalanceCorrectionPush，不再传 kind 子指令；余额校正是绝对余额视图。仅在回执导致显示余额不一致时校正，不重复发奖励，不复活目标；按当前 UserID 路由/成员发送，Agent 须核对当前 LoginID。重复响应/推送按 revision 收敛，不能每收到一次再加减；修订号只在当前节点缓存生命周期内有效，重新进入以新快照建立基线。
 
 稳定 Domain 错误：mole.invalid_request、mole.stale_login、mole.conflict、mole.busy、mole.target_unavailable、mole.online_unavailable、mole.accounting_unavailable、mole.insufficient_silver、mole.operation_unknown。已知内存拒绝由原 Hit Call 返回，目标仍有效时可释放占用。Call 超时不代表未执行，不能撤销扣返或生成新操作；沿用原 ActionID/HitID 重试。重试缓存缺失返回 operation_unknown，只能查询原操作，不能重新接纳扣款。
 

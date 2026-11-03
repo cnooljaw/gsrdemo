@@ -21,6 +21,8 @@ type submissionSink struct {
 	batches []moleBatch
 }
 
+var _ gsr.ServiceContext = (*submissionSink)(nil)
+
 func (sink *submissionSink) SendName(name cluster.ServiceName, command runtime.CommandID, args ...any) error {
 	if name != moleSubmissionName || command != submissionBatchCommand {
 		return errInvalidMoleInput

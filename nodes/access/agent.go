@@ -10,6 +10,8 @@ import (
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
+	"google.golang.org/protobuf/proto"
 )
 
 // agent 独占当前连接身份和路由，不持有权威游戏状态或钱包。
@@ -18,8 +20,7 @@ type agent struct {
 	protocolDispatcher *protocol.Dispatcher[gsr.CommandContext]
 	commandDispatcher  *gsr.Dispatcher
 	session            agentSession
-	mole               moleAgent
-	landlord           landlordAgent
+	games              []gameagent.Component
 }
 
 var (
@@ -29,20 +30,18 @@ var (
 
 func newAgent(client gate.ClientSession, registry *protocol.Registry) *agent {
 	agent := &agent{client: client}
-	agent.mole = moleAgent{identity: agent.session.snapshot, allowEnter: agent.allowEnter}
-	agent.landlord = landlordAgent{identity: agent.session.snapshot, allowEnter: agent.allowEnter}
-	agent.commandDispatcher = gsr.MustDispatcher(mustMergeHandlers(
-		agent.commonCommandHandlers(),
-		agent.mole.commandHandlers(),
-		agent.landlord.commandHandlers(),
-	))
-	agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, mustMergeHandlers(
-		agent.commonProtocolHandlers(),
-		agent.mole.protocolHandlers(),
-		agent.landlord.protocolHandlers(),
-	))
-	agent.mole.push = agent.protocolDispatcher.Push
-	agent.landlord.push = agent.protocolDispatcher.Push
+	deps := gameagent.Dependencies{
+		Identity:   agent.session.snapshot,
+		AllowEnter: agent.allowEnter,
+		Call:       callBackend,
+		Push:       agent.push,
+	}
+	// 新增游戏的接入接线只需在此追加一项；其他入口均遍历此清单。
+	agent.games = []gameagent.Component{
+		gameagent.NewMole(deps),
+		gameagent.NewLandlord(deps),
+	}
+	agent.mustBindHandlers(registry)
 	return agent
 }
 
@@ -82,14 +81,18 @@ func connectionID() (string, error) {
 
 // allowEnter 由连接 owner 统一协调进入互斥，不在组件间保存彼此的指针。
 func (agent *agent) allowEnter(game string) error {
-	if err := agent.session.requireLogin(); err != nil {
+	if err := agent.session.snapshot().RequireLogin(); err != nil {
 		return err
 	}
-	if game != "mole" && agent.mole.entered() {
-		return errEnterRequired
-	}
-	if game != "landlord" && agent.landlord.entered() {
-		return errEnterRequired
+	for _, candidate := range agent.games {
+		if candidate.Name() != game && candidate.Entered() {
+			return gameagent.ErrEnterRequired
+		}
 	}
 	return nil
+}
+
+// push 在组件被调用时使用已完成组装的同一连接 Dispatcher。
+func (agent *agent) push(id uint32, message proto.Message) error {
+	return agent.protocolDispatcher.Push(id, message)
 }

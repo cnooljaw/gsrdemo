@@ -12,15 +12,15 @@ import (
 )
 
 const (
-	roomJoinCommand     runtime.CommandID = 1
-	roomReadyCommand    runtime.CommandID = 2
-	roomPlayCommand     runtime.CommandID = 3
-	roomSnapshotCommand runtime.CommandID = 4
-	roomLeaveCommand    runtime.CommandID = 5
-	roomBidCommand      runtime.CommandID = 6
-	roomRobCommand      runtime.CommandID = 7
-	roomTickCommand     runtime.CommandID = 10
-	landlordPushCommand runtime.CommandID = 110
+	roomJoinCommand             runtime.CommandID = 1
+	roomReadyCommand            runtime.CommandID = 2
+	roomPlayCommand             runtime.CommandID = 3
+	roomSnapshotCommand         runtime.CommandID = 4
+	roomLeaveCommand            runtime.CommandID = 5
+	roomBidCommand              runtime.CommandID = 6
+	roomRobCommand              runtime.CommandID = 7
+	roomTickCommand             runtime.CommandID = 10
+	landlordSnapshotPushCommand runtime.CommandID = 110
 )
 
 // attackService 独占一桌的状态；局末 Redis/Settlement 等待只影响本桌。
@@ -252,7 +252,7 @@ func (service *attackService) broadcast(self gsr.ServiceContext) {
 		if p.UserID == 0 || p.AccessNode == "" {
 			continue
 		}
-		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), landlordPushCommand, p.LoginID, service.view(p.UserID)); err != nil {
+		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), landlordSnapshotPushCommand, p.LoginID, service.view(p.UserID)); err != nil {
 			_ = self.Logger().Error("斗地主推送未接纳，客户端可查询快照", "error", err.Error())
 		}
 	}

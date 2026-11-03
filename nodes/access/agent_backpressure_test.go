@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr"
+	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/protocol"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -54,12 +56,11 @@ func TestAgentPushFailureIsLocal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			failed := &accessPushClient{sendError: sendError, frames: make(chan []byte, 1)}
+			failed := &accessPushClient{frames: make(chan []byte, 1)}
 			healthy := &accessPushClient{frames: make(chan []byte, 2)}
-			failedAgent, healthyAgent := newAgent(failed, registry), newAgent(healthy, registry)
-			for index, agent := range []*agent{failedAgent, healthyAgent} {
-				agent.session.userID, agent.session.loginID, agent.mole.attackName = uint64(index+1), "current-login", "attack"
-			}
+			failedAgent := enteredMoleAgent(t, failed, registry, 1)
+			healthyAgent := enteredMoleAgent(t, healthy, registry, 2)
+			failed.sendError = sendError
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
@@ -72,18 +73,18 @@ func TestAgentPushFailureIsLocal(t *testing.T) {
 					return err
 				}
 				for revision := uint64(1); revision <= 2; revision++ {
-					_, err := self.Call(ctx, failedID, molePushCommand, "current-login", "balance_correction",
+					_, err := self.Call(ctx, failedID, 102, "current-login",
 						map[string]any{"balance": int64(1), "revision": revision})
 					// GSR 将未分类的 Gate 错误归一化，不将底层错误原文暴露给 Call 方。
 					if !errors.Is(err, runtime.ErrHandlerFailed) {
 						return fmt.Errorf("push failure: got %v want %v", err, runtime.ErrHandlerFailed)
 					}
-					if _, err := self.Call(ctx, healthyID, molePushCommand, "current-login", "balance_correction",
+					if _, err := self.Call(ctx, healthyID, 102, "current-login",
 						map[string]any{"balance": int64(1000) - int64(revision)*100, "revision": revision}); err != nil {
 						return fmt.Errorf("healthy push: %w", err)
 					}
 				}
-				_, err = self.Call(ctx, failedID, molePushCommand, "old-login", "balance_correction",
+				_, err = self.Call(ctx, failedID, 102, "old-login",
 					map[string]any{"balance": int64(0), "revision": uint64(99)})
 				return err
 			}}
@@ -108,4 +109,38 @@ func TestAgentPushFailureIsLocal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// enteredMoleAgent 仅替代进入时的业务响应，通过实际协议建立路由，不越过组件私有字段。
+func enteredMoleAgent(t *testing.T, client *accessPushClient, registry *protocol.Registry, userID uint64) *agent {
+	t.Helper()
+	agent := &agent{client: client, session: agentSession{userID: userID, loginID: "current-login"}}
+	mole := gameagent.NewMole(gameagent.Dependencies{
+		Identity:   agent.session.snapshot,
+		AllowEnter: agent.allowEnter,
+		Push:       agent.push,
+		Call: func(_ gsr.ServiceContext, _ cluster.NodeID, name cluster.ServiceName, _ runtime.CommandID, _ ...any) (any, error) {
+			if name == "mole" {
+				return map[string]any{"entry_name": "entry"}, nil
+			}
+			snapshot := fixtureSnapshot()
+			snapshot["silver"] = map[string]any{"balance": int64(1000)}
+			return snapshot, nil
+		},
+	})
+	agent.games = []gameagent.Component{mole}
+	agent.mustBindHandlers(registry)
+	frame, err := proto.Marshal(&commonv1.Envelope{MsgId: uint32(demopb.MsgId_C2S_ENTER), RequestId: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.HandleClientMessage(&exitContext{}, frame); err != nil {
+		t.Fatal(err)
+	}
+	if !mole.Entered() || len(client.frames) != 1 {
+		t.Fatal("未通过进入协议建立路由")
+	}
+	<-client.frames
+	client.attempts = 0
+	return agent
 }

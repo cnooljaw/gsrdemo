@@ -101,24 +101,38 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 ### 3.5 多游戏与通用协议的组合（2026-11-03 已实施）
 
-access 将持续接入不同游戏，并提供与游戏无关的通用协议。2026-11-03 按确认方案完成组合重构：agent.go 只组装连接与组件，agentsession.go 保存唯一身份并返回值快照，agent_login.go 承载现有通用登录，moleagent.go / landlordagent.go 分别处理各游戏。文件命名不代替职责边界，通用规则见 [Go 编码规范](GO-CODE-STYLE.md#27-接口struct-与构造)。
+access 将持续接入不同游戏，并提供与游戏无关的通用协议。2026-11-03 按确认方案完成组合重构：agent.go 只组装连接与组件，agentsession.go 保存唯一身份并返回值快照，agent_login.go 承载现有通用登录，gameagent/mole.go / gameagent/landlord.go 分别处理各游戏。文件命名不代替职责边界，通用规则见 [Go 编码规范](GO-CODE-STYLE.md#27-接口struct-与构造)。
 
 | 组成 | 职责与数据归属 |
 | --- | --- |
 | Agent | 连接生命周期、唯一的 UserID/LoginID 与自身地址、统一协议入口和组件组装；协调游戏进入互斥及断线清理。 |
 | 通用协议处理 | 按实际职责处理登录等跨游戏能力，不依赖某个游戏的房间路由；新增账号或钱包查询等协议时再增加相应处理，不预建空组件或万能 commonAgent。少量内聚的连接/登录逻辑可以留在 Agent。 |
-| moleAgent、landlordAgent 等游戏组件 | 各自持有游戏路由，处理本游戏请求、响应和推送，不持有权威玩法状态或钱包。组件使用具名字段组合，不匿名嵌入 Agent。 |
+| gameagent.Mole、gameagent.Landlord 等游戏组件 | 各自持有游戏路由，处理本游戏请求、响应和推送，不持有权威玩法状态或钱包。统一实现 gameagent.Component，根 Agent 只保存 games 清单。Agent 专指每连接的 GSR Service，Component 表示其内部游戏接入组件。 |
 
 接线与扩展：
 
 - 每条连接仍只有一个 Agent、一个 protocolDispatcher 和一个 commandDispatcher，共用现有 Protobuf Registry/Envelope。GSR v1.0.2 的 Dispatcher 接收绑定函数，普通组件的方法可以直接注册，无需组件实现 gsr.Service。
-- 通用协议和各游戏分别维护 protocolHandlers / commandHandlers；Agent 显式列出实际组件，通过本包 mustMergeHandlers 合并。重复消息/命令 ID 在初始化时失败，不按注册顺序覆盖；新增游戏只增加该游戏组件及必要接线，不新增多层 Dispatcher、动态插件或通用 GameModule 框架。
-- 客户端 MsgID 在整个 access 协议目录内唯一，内部 CommandID 在 Agent 的命令表内唯一；两者是不同编号空间。新协议按通用/游戏归属组织和分配编号，不能因组件不同而复用同一目录内的 ID。现有编号和 payload 类型保持兼容，本轮不拆分 .proto 或修改生成流程。
-- Agent 是登录身份的唯一写入处。组件每次回调通过 identity 函数取得当前 agentSession 值快照，不各自缓存一份 UserID/LoginID；只注入身份读取、进入准入和推送函数，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
-- 保留同一连接不能同时进入两种游戏的规则，进入互斥由 Agent 协调；各游戏负责自己的离开和路由清理，Agent 负责有界清理顺序、解绑和关闭连接。组件不直接关闭连接或退出 Agent，不自动重试结果未知的业务操作。推送仍校验当前登录及游戏路由。
+- 通用协议独立注册；各游戏提供 Name、ProtocolHandlers、CommandHandlers、Entered、Disconnect 五个方法。根 Agent 从同一份 games 清单收集注册表、判断进入互斥和执行断线清理。空白游戏名、重复游戏名、重复消息/命令 ID，以及占用 Gate 断线命令，均在组装时拒绝，不静默覆盖。
+- 客户端 MsgID 在整个 access 协议目录内唯一，内部 CommandID 在 Agent 的命令表内唯一；两者是不同编号空间。新协议按通用/游戏归属组织和分配编号，不能因组件不同而复用同一目录内的 ID。客户端现有编号和 payload 类型保持兼容，本轮不拆分 .proto 或修改生成流程。
+- 游戏推送直接按 CommandID 绑定具体方法：地鼠快照 100、余额校正 102，斗地主快照 110；101 继续用于旧登录替换。推送参数为 LoginID 和快照/余额 map，不传 kind 字符串二次分发。地鼠内部推送签名已调整，access 与 mole 需配套构建、重启，不保留旧 kind 入口。
+- Agent 是登录身份的唯一写入处。组件每次回调通过 Dependencies.Identity 取得当前 Identity 值快照，不各自缓存一份 UserID/LoginID；一次注入身份读取、进入准入、有界 Call 和客户端 Push 四种能力，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
+- 保留同一连接不能同时进入两种游戏的规则，进入互斥由 Agent 协调；各游戏负责自己的离开和路由清理，Agent 按清单顺序尽力清理，单个组件返回错误时记录游戏名并继续清理其他组件和解绑 Online，最后清空身份；OnStop 关闭连接。组件不直接关闭连接或退出 Agent，不自动重试结果未知的业务操作。推送仍校验当前登录及游戏路由。
 - 组合不增加并发与故障隔离：组件在同一 Agent 回调中串行执行，远程 Call 必须有限等待；某组件 panic 仍可能终止该连接所属 Agent，不能据此声称游戏组件已独立隔离。不同 Agent 的隔离沿用 GSR 机制，业务错误按当前请求返回。
 
-复用现有登录、替换、推送、断线、双接入和两游戏闭环用例；新增重复 ID 拒绝、跨游戏进入互斥、通用登录不依赖房间及身份更新/清理后组件立即读取新值的用例。组件不承诺自动防止错误接线：同一类型方法重名由 Go 编译器拒绝，签名/消息类型由 Dispatcher 校验，注册到语义错误的方法仍须通过行为测试发现。
+新增游戏的接入改动只有两类：在 gameagent/ 实现该游戏组件；在 agent.go 的唯一清单追加一项。注册、互斥和清理循环不再逐个增加游戏分支。需要新增协议时，仍须正常维护 .proto、生成代码和客户端，不承诺整个项目只改一个文件。
+
+```go
+agent.games = []gameagent.Component{
+    gameagent.NewMole(deps),
+    gameagent.NewLandlord(deps),
+}
+```
+
+这是固定组件的显式组装，不新增多层 Dispatcher、动态插件或全局注册机制。Entered 从组件现有路由推导，不另存 activeGame。
+
+复用现有登录、替换、推送、断线、双接入和两游戏闭环用例；补充第三个游戏仅加入清单即可注册与互斥、名称/编号冲突拒绝、清理错误后继续解绑，以及组件读取当前身份的用例。同一类型方法重名由 Go 编译器拒绝，签名/消息类型由 Dispatcher 校验，注册到语义错误的方法仍须通过行为测试发现。
+
+本轮验证：统一 `./scripts/dev.sh check`、`./scripts/dev.sh build` 通过；拆分推送命令后，启用 `GSRDEMO_ACCESS_PROCESSES=1` 的 access/gameagent 全量 race 通过，Access 约 34.1 秒，覆盖真实 MySQL、临时 AOF Redis、双接入重连、三客户端地鼠/斗地主及恢复流程。定向用例验证命令 100/102/110 的直接注册、旧登录/路由过滤和结算差异仅校正当前登录。子节点使用正常构建，不宣称子进程已运行 race。
 
 ## 4. GSR 与参考边界
 
