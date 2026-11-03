@@ -14,7 +14,6 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 // 测试后端按公开 wire 协议注册命令；游戏业务不持有这些编号。
@@ -356,9 +355,8 @@ func (service *moleTestPeer) OnStart(ctx context.Context, self gsr.ServiceContex
 	if err := self.Node().RegisterService(cluster.ServiceName(service.name), id); err != nil {
 		return err
 	}
-	if service.node == "settlement" {
-		writes, reads := routing.Services()
-		for _, name := range append(writes, reads...) {
+	if service.name == "settlement" {
+		for _, name := range []string{"settlement-write", "settlement-read"} {
 			if err := self.Node().RegisterService(cluster.ServiceName(name), id); err != nil {
 				return err
 			}
@@ -491,7 +489,7 @@ func newMoleTestMain(t *testing.T, fixture *settlementFixture) gsr.Service {
 	if fixture.checkpoint.client == nil {
 		fixture.checkpoint = testMoleCheckpoint(t)
 	}
-	return NewMain("mole", fixture.checkpoint, nil)
+	return NewMain("mole", "settlement", fixture.checkpoint, nil)
 }
 
 func prepareMoleCluster(t *testing.T, fixture *settlementFixture) (map[cluster.NodeID]string, func()) {
@@ -896,7 +894,7 @@ func TestMolePanickedGroupDoesNotStopOtherGroups(t *testing.T) {
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: newSettlementFixture()})
 	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
-	main := &moleFaultMain{main: NewMain("mole", testMoleCheckpoint(t), nil)}
+	main := &moleFaultMain{main: NewMain("mole", "settlement", testMoleCheckpoint(t), nil)}
 	address, _ := startMoleTestNode(t, "mole", routes, main)
 	routes["mole"] = address
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
@@ -1010,4 +1008,18 @@ func TestMoleMissingCheckpointNeedsExplicitInitialization(t *testing.T) {
 	if snapshot["silver"].(map[string]any)["balance"] != int64(10000) {
 		t.Fatal("explicit initialization did not open accounting")
 	}
+}
+
+// TestMoleUsesConfiguredSettlementNode 保护余额查询与批次提交都使用配置目标，节点表无需存在默认 settlement 名称。
+func TestMoleUsesConfiguredSettlementNode(t *testing.T) {
+	fixture := newSettlementFixture()
+	fixture.checkpoint = testMoleCheckpoint(t)
+	address, _ := startMoleTestNode(t, "settlement-02", nil, &moleTestPeer{node: "settlement-02", name: "settlement", service: fixture})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	routes := map[cluster.NodeID]string{"settlement-02": address, "online": online}
+	mole, _ := startMoleTestNode(t, "mole", routes, NewMain("mole", "settlement-02", fixture.checkpoint, nil))
+	routes["mole"] = mole
+	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
+	hit := testHitTarget(t, routes, snapshot, 1, "login", "configured-node")
+	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
 }

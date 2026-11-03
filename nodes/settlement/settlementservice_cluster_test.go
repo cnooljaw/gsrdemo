@@ -14,7 +14,6 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 type settlementTestMain struct {
@@ -111,7 +110,7 @@ func settlementRPC(t *testing.T, address string, command runtime.CommandID, args
 	var value any
 	var callErr error
 	caller := &settlementCaller{cancel: cancel, work: func(self gsr.ServiceContext) {
-		value, callErr = settlementClientCall(ctx, self, command, args...)
+		value, callErr = settlementCall(ctx, self, command, args...)
 	}}
 	if err := gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"settlement": address}}}, caller); err != nil {
 		t.Fatal(err)
@@ -119,25 +118,13 @@ func settlementRPC(t *testing.T, address string, command runtime.CommandID, args
 	return value, callErr
 }
 
-// settlementClientCall 让功能测试和压测使用相同的公开业务方法；未知命令单独验证底层拒绝契约。
-func settlementClientCall(ctx context.Context, self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
-	switch command {
-	case settleBatchCommand:
-		return routing.SettleBatch(ctx, self.Cluster(), args[0].(map[string]any))
-	case settleSingleCommand:
-		return routing.SettleSingle(ctx, self.Cluster(), args[0].(map[string]any))
-	case settleGroupCommand:
-		return routing.SettleGroup(ctx, self.Cluster(), args[0].(map[string]any))
-	case getBatchCommand:
-		return routing.GetBatch(ctx, self.Cluster(), args[0].(string))
-	case getOperationCommand:
-		return routing.GetOperation(ctx, self.Cluster(), args[0].(uint64), args[1].(string))
-	case getBalanceCommand:
-		return routing.GetBalance(ctx, self.Cluster(), args[0].(uint64))
-	default:
-		_, reads := routing.Services()
-		return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(reads[0]), command, args...)
+// settlementCall 供功能测试和压测直达固定公开入口；未知命令交由读入口验证拒绝契约。
+func settlementCall(ctx context.Context, self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
+	name := settlementReadName
+	if command == settleBatchCommand || command == settleSingleCommand || command == settleGroupCommand {
+		name = settlementWriteName
 	}
+	return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
 }
 
 func businessRPC(t *testing.T, routes map[cluster.NodeID]string, node, name string, command runtime.CommandID, args ...any) (any, error) {

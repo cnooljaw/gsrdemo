@@ -131,8 +131,13 @@ func TestLandlordOperationUsesCurrentIdentity(t *testing.T) {
 	current := Identity{}
 	calls := 0
 	landlord := NewLandlord(Dependencies{
-		Identity: func() Identity { return current },
-		SettlementOperation: func(_ gsr.ServiceContext, userID uint64, operationID string) (any, error) {
+		Identity:       func() Identity { return current },
+		SettlementNode: "settlement-02",
+		Call: func(_ gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
+			if node != "settlement-02" || name != "settlement-read" || command != 3 {
+				t.Fatalf("未使用配置中的公开结算地址: %s %s %d", node, name, command)
+			}
+			userID, operationID := args[0].(uint64), args[1].(string)
 			calls++
 			if userID != current.UserID || operationID != "round-original" {
 				t.Fatalf("使用过期身份或改变操作: %d %s", userID, operationID)

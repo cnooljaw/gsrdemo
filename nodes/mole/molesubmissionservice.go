@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr"
+	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
@@ -21,20 +21,21 @@ const (
 
 // moleSubmissionService 独占 Redis 检查点和结算调用；只推进一个在途批次，不持有钱包。
 type moleSubmissionService struct {
-	store      moleCheckpoint
-	batch      *moleBatch
-	receipt    *batchReceipt
-	ready      bool
-	fault      error
-	retryAt    time.Time
-	retryDelay time.Duration
-	dispatcher *gsr.Dispatcher
+	store          moleCheckpoint
+	settlementNode cluster.NodeID
+	batch          *moleBatch
+	receipt        *batchReceipt
+	ready          bool
+	fault          error
+	retryAt        time.Time
+	retryDelay     time.Duration
+	dispatcher     *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*moleSubmissionService)(nil)
 
-func newMoleSubmissionService(store moleCheckpoint) *moleSubmissionService {
-	service := &moleSubmissionService{store: store}
+func newMoleSubmissionService(store moleCheckpoint, settlementNode cluster.NodeID) *moleSubmissionService {
+	service := &moleSubmissionService{store: store, settlementNode: settlementNode}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		submissionBatchCommand: service.handleSubmit,
 		submissionTickCommand:  service.handleTick,
@@ -164,7 +165,7 @@ func (service *moleSubmissionService) settlePending(self gsr.ServiceContext) (mo
 	if service.receipt == nil {
 		// 先保存原批次，再直接幂等提交；超时不换 ID，也不增加 GetBatch 前置查询。
 		ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
-		value, err := settlement.SettleBatch(ctx, self.Cluster(), service.batch.wire())
+		value, err := self.Cluster().Call(ctx, service.settlementNode, "settlement-write", 1, service.batch.wire())
 		cancel()
 		if err != nil {
 			return moleCheckpointState{}, err

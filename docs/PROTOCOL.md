@@ -120,9 +120,9 @@ Mole 使用一个 Entry；调用方仍使用 ResolveEntry 返回的地址。慢�
 
 ### 通用银子结算接口
 
-业务使用 `common/settlement` 的 SettleBatch、SettleSingle、SettleGroup、GetBatch、GetOperation、GetBalance，签名均为 `(ctx, self.Cluster(), 业务参数)`；请求/回执字段沿用下表，不直接选择读写入口或 CommandID。调用包至多等待 3 秒，尊重更短的 context，不自动重试或换 ID，错误/缺失结果原样返回；超时仍可能已经执行。只在当前 Service 回调内借用 Cluster.Call，不保存上下文。
+调用方直接使用有限 `self.Cluster().Call(ctx, settlementNode, serviceName, command, args...)`。settlement_node 来自 Mole/Landlord/Access 配置，默认 settlement；目标必须存在于 configs/nodes.yaml。每个结算节点只有两个固定公开服务：settlement-write 执行命令 1/6/7，settlement-read 执行命令 2/3/4。节点数量按部署扩展，业务显式选择目标，无客户端分片、公共调用包装或服务端中转。只在当前 Service 回调内使用 Cluster；超时仍可能已经执行，调用方保留原业务 ID 查询或重试。
 
-下表描述 wire 契约，供结算端注册和协议验证。目标 Node 为 settlement，version 固定 uint64=2。内部按 BatchID（批量）/OperationID（单人、多人）选择 settlement-write-00～03；查询按 BatchID/OperationID/UserID 十进制字符串选择 settlement-read-00～01。FNV-1a 32 位取模和入口数只在调用包内维护；Services 仅供节点组装/测试，业务不依赖入口数。入口数调整仍需配套部署调用包与结算节点。所有写入口返回持久事务提交后的回执。金额使用 int64 最小银子单位、非负 Debit/Credit，UserID 为非零 uint64。仅供受信任业务节点调用。
+version 固定 uint64=2，请求/回执字段和下列 CommandID 保持不变。所有结算节点连接同一套权威 MySQL，读入口也查询权威库；所有写入口返回持久事务提交后的回执。金额使用 int64 最小银子单位、非负 Debit/Credit，UserID 为非零 uint64。仅供受信任业务节点调用。
 
 | CommandID | 接口 | 请求与业务成功边界 |
 | --- | --- | --- |
@@ -151,7 +151,7 @@ CommandID=5（原 Summary）已移除且不复用，返回 ErrUnknownCommand。
 
 settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量阈值归批；棋牌可立即调用多人接口。mole 的累计统计与最多一个待处理批次保存在单个业务 Redis 检查点，不调用结算汇总。唯一提交地址为 mole-submission；序号只用于本地业务检查点，不传给 Settlement；同一批次的 ID、内容和序号在重试时保持不变。只有 committed 且 origin_batch 等于当前 batch_id 的操作新增统计。Redis 统计和检查点更新成功后才向 Accounting 交付回执。mole 不访问 SQL；尚未保存到 Redis 的内存操作仍可丢失，已保存批次在重启时原样补交。余额、操作幂等索引和完整批次明细归 settlement，冷热归档和短 ID 尚待下一阶段实施。
 
-结算写/读入口只接受各自命令；内部命令 9 仅供本地监督 Service 的非阻塞存活检查。每入口 Mailbox=4，满时返回 runtime.mailbox_full，仍按原身份退避重试，不能换 ID 重做。6 个入口最多保留 30 个执行/排队 Call，低于 GSR v1.0.2 每入站连接 32 个并发名额，避免慢入口占满同连接。进程内监督 Service 不持有钱包，只在执行 Service 已退出后重新发布同名实例，不自动重放请求。Call 超时仍不证明事务未执行。
+结算写/读入口只接受各自命令，不再提供内部健康命令 9 或自动重建。每入口 Mailbox=4，满时返回 runtime.mailbox_full；两个入口最多保留 10 个执行/排队 Call。慢写影响该节点写队列，独立读入口和其他结算节点仍可处理。入口 panic 不自动恢复，需人工或外部管理器重启该节点；未知结果仍按原身份处理，不能换 ID 重做。Call 超时不证明事务未执行。
 
 
 ## landlord 三人斗地主

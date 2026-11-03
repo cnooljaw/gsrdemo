@@ -7,7 +7,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/settlement"
 	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 )
 
@@ -32,10 +31,4 @@ func callBackend(self gsr.ServiceContext, node cluster.NodeID, name cluster.Serv
 	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
 	defer cancel()
 	return self.Cluster().Call(ctx, node, name, command, args...)
-}
-
-func getSettlementOperation(self gsr.ServiceContext, userID uint64, operationID string) (any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
-	defer cancel()
-	return settlement.GetOperation(ctx, self.Cluster(), userID, operationID)
 }

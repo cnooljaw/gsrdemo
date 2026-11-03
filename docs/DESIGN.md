@@ -14,7 +14,7 @@
 
 当前已完成 MAC Gate/Agent、用户名密码认证、Online 位置目录、地鼠玩法与业务记账、通用 Settlement/MySQL 持久化，以及 TypeScript CLI 闭环。三个客户端和双 access 已真实联调，接入进程骤停后的局部隔离与跨接入重新登录见第 3 节；未实现的目标不作为已验收能力。
 
-每个节点角色一个独立 Go module，源码默认放该项目根目录；common 包含共享配置和结算调用接口。没有调用者的通用框架、协议目录和业务包不提前建立。
+每个节点角色一个独立 Go module，源码默认放该项目根目录；common 仅保留实际共享的配置代码；跨节点业务直接使用 GSR Call/Send。没有调用者的通用框架、协议目录和业务包不提前建立。
 
 ## 2. 推进顺序
 
@@ -37,7 +37,7 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 打地鼠全流程、三客户端和 access 双实例接入已完成联调，见第 3 节。三人斗地主已进入第 10 节确认范围；第三方登录仍需选择真实提供商并确认方案。
 
-2026-10-30 优先级调整：Demo 先保持简单，下一阶段优先完成 TypeScript 客户端 → access 登录 → Online 绑定 → 进入地鼠 → 即时命中反馈与结算确认的业务闭环，具体接入方案已随后确认并实施，见第 3 节。Login 保持单个认证 Service，多认证入口、小队列背压及实例监督恢复暂缓，仅作为后续优化备忘；其他非必要的隔离扩展也不抢在闭环之前实施。已完成的 Mole/Settlement 隔离保留。
+2026-10-30 优先级调整：Demo 先保持简单，下一阶段优先完成 TypeScript 客户端 → access 登录 → Online 绑定 → 进入地鼠 → 即时命中反馈与结算确认的业务闭环，具体接入方案已随后确认并实施，见第 3 节。Login 保持单个认证 Service，多认证入口、小队列背压及实例监督恢复暂缓，仅作为后续优化备忘；其他非必要的隔离扩展也不抢在闭环之前实施。当前 Mole/Settlement 的简化与故障边界以第 8、9 节为准。
 
 2026-11-02 业务优先：暂缓慢客户端真实积压及持续负载验收，先推进未完成业务。打地鼠闭环已完成；已确认下一节点为三人斗地主，具体范围与实施结果见第 10 节。第三方登录尚未选择真实提供商；结算短 ID、日表和冷热归档保持第 9.8 节的后续存储改造计划。
 
@@ -115,7 +115,7 @@ access 将持续接入不同游戏，并提供与游戏无关的通用协议。2
 - 通用协议独立注册；各游戏提供 Name、ProtocolHandlers、CommandHandlers、Entered、Disconnect 五个方法。根 Agent 从同一份 games 清单收集注册表、判断进入互斥和执行断线清理。空白游戏名、重复游戏名、重复消息/命令 ID，以及占用 Gate 断线命令，均在组装时拒绝，不静默覆盖。
 - 客户端 MsgID 在整个 access 协议目录内唯一，内部 CommandID 在 Agent 的命令表内唯一；两者是不同编号空间。新协议按通用/游戏归属组织和分配编号，不能因组件不同而复用同一目录内的 ID。客户端现有编号和 payload 类型保持兼容，本轮不拆分 .proto 或修改生成流程。
 - 游戏推送直接按 CommandID 绑定具体方法：地鼠快照 100、余额校正 102，斗地主快照 110；101 继续用于旧登录替换。推送参数为 LoginID 和快照/余额 map，不传 kind 字符串二次分发。地鼠内部推送签名已调整，access 与 mole 需配套构建、重启，不保留旧 kind 入口。
-- Agent 是登录身份的唯一写入处。组件每次回调通过 Dependencies.Identity 取得当前 Identity 值快照，不各自缓存一份 UserID/LoginID；一次注入身份读取、进入准入、有界 Call、结算结果查询和客户端 Push 五种能力，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
+- Agent 是登录身份的唯一写入处。组件每次回调通过 Dependencies.Identity 取得当前 Identity 值快照，不各自缓存一份 UserID/LoginID；一次注入身份读取、进入准入、有界 Call 和客户端 Push 四种能力，以及只读的 SettlementNode 配置，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
 - 保留同一连接不能同时进入两种游戏的规则，进入互斥由 Agent 协调；各游戏负责自己的离开和路由清理，Agent 按清单顺序尽力清理，单个组件返回错误时记录游戏名并继续清理其他组件和解绑 Online，最后清空身份；OnStop 关闭连接。组件不直接关闭连接或退出 Agent，不自动重试结果未知的业务操作。推送仍校验当前登录及游戏路由。
 - 组合不增加并发与故障隔离：组件在同一 Agent 回调中串行执行，远程 Call 必须有限等待；某组件 panic 仍可能终止该连接所属 Agent，不能据此声称游戏组件已独立隔离。不同 Agent 的隔离沿用 GSR 机制，业务错误按当前请求返回。
 
@@ -123,11 +123,11 @@ access 将持续接入不同游戏，并提供与游戏无关的通用协议。2
 
 ```go
 deps := gameagent.Dependencies{
-	Identity:            agent.session.snapshot,
-	AllowEnter:          agent.allowEnter,
-	Call:                callBackend,
-	SettlementOperation: getSettlementOperation,
-	Push:                agent.push,
+	Identity:       agent.session.snapshot,
+	AllowEnter:     agent.allowEnter,
+	Call:           callBackend,
+	SettlementNode: settlementNode,
+	Push:           agent.push,
 }
 
 agent.games = []gameagent.Component{
@@ -136,7 +136,7 @@ agent.games = []gameagent.Component{
 }
 ```
 
-deps 为每条连接构造，组件持有的是这些能力的函数绑定。SettlementOperation 通过结算调用包查询，组件不接触读入口或结算命令编号。Identity 调用时才读取当前 session 并返回值快照，不冻结构造时的身份；Call 的 self 由当前回调临时传入，不保存在依赖中。组件构造仅保存依赖，待 Dispatcher 组装完成后才处理请求或调用 Push。
+deps 为每条连接构造，组件持有的是这些能力的函数绑定。SettlementNode 是节点配置中的结算目标；斗地主结果查询通过有界 Call 直接访问公开 settlement-read / 3。Identity 调用时才读取当前 session 并返回值快照，不冻结构造时的身份；Call 的 self 由当前回调临时传入，不保存在依赖中。组件构造仅保存依赖，待 Dispatcher 组装完成后才处理请求或调用 Push。
 
 这是固定组件的显式组装，不新增多层 Dispatcher、动态插件或全局注册机制。Entered 从组件现有路由推导，不另存 activeGame。
 
@@ -307,13 +307,13 @@ AttackService 负责消息、成员、Call/Send 与生命周期；attackGame 私
 
 ### 9.1 职责与接口
 
-独立 settlement 节点唯一负责修改持久银子和账务；进程内固定 4 个 SettlementService 写入口、2 个 SettlementQueryService 只读入口，不持有游戏或内存钱包副本。宿主 mysqlclient.Open 后用 database/sql 将连接池上限设为 6，对应最多 4 个写事务和 2 个查询；MainService 创建并命名入口和私有监督 Service，OpenCluster 后退出，Run 停止后宿主关闭池。Service 仍使用有限 SQL context，不保存 self、不启动业务 goroutine。
+每个 settlement 节点只创建一个 SettlementService（固定名称 settlement-write）和一个 SettlementQueryService（settlement-read），不持有游戏或内存钱包副本。MainService 创建两个 Service、OpenCluster 后退出；宿主创建和关闭 MySQL 池，上限为 2，分别供一个写事务和一个查询并行使用。Service 使用有限 SQL context，不保存 self、不启动业务 goroutine。
 
-业务统一调用 common/settlement 的 SettleBatch、SettleSingle、SettleGroup、GetBatch、GetOperation、GetBalance；只传业务请求、当前回调借用的 Cluster.Call 能力和 context，不选择节点名称、内部入口或 CommandID。调用包无状态，最多等待 3 秒，尊重业务更短的 context；不保存 Service 上下文、不自动重试、不增加同步中转 Service。Mole 保持 500ms、斗地主 1s、Access 3s 的预算，重试和补偿仍归业务。公开请求/回执仍使用既有 version=2 规范 map，不另建 DTO 或编解码层。
+调用方直接 `self.Cluster().Call(ctx, settlementNode, "settlement-write"/"settlement-read", command, args...)`；服务名、CommandID 和规范字段是公开协议，不通过 common 包选择入口。Mole、Landlord、Access 的 settlement_node 指定目标节点，默认 settlement，且必须在共享 nodes_file 中存在。Mole 保持 500ms、斗地主 1s、Access 3s 的预算；归批、原 ID 重试与补偿归业务。协议保持 version=2，不新增 DTO、编解码或中转 Service。
 
-内部路由仍按 BatchID/OperationID 的 FNV-1a 32 位哈希选择四个写入口，查询按 BatchID/OperationID/UserID 选择两个读入口；Services 仅供结算节点组装和协议测试使用，路由函数不导出。并行度变更不需要改游戏调用代码，但本版为编译期配置，调用包和结算节点仍须配套部署，不提供运行时发现。路由不替代钱包行锁或全局幂等键。
+Demo 默认启动一个结算节点，需要时另配 settlement-02 等节点：同角色共用二进制，各自配置 listen、端口和日志，调用方显式指定目标。所有结算节点连接同一套权威 MySQL，查询也读权威库，钱包行锁、全局 OperationID/BatchID 唯一键与事务保护跨节点并发。节点选择不替代行锁或幂等；没有自动发现、负载均衡或自动切换。
 
-每个入口 Mailbox=4，6 个入口最多保留 6×(4+1)=30 个执行/排队 Call，低于 GSR v1.0.2 入站连接默认的 32 个并发槽位。队列满快速返回背压，调用方原 ID 退避重试，不通过大队列隐藏积压。私有 SettlementSupervisor 只接收自身 Timer，不等待 SQL 或 Call；入口已退出时重建同名无状态实例，不重放未知请求。一个慢入口仍影响其排队请求，但不占住整个节点的公共 Handler。
+每个入口 Mailbox=4，两个入口最多保留 2×(4+1)=10 个执行/排队 Call，满时快速返回背压。一个慢写会影响该节点后续写请求，但独立读 Service 和其他结算节点继续处理；共享数据库故障或热点行锁仍可能共同影响。删除六入口路由、共享调用包、私有监督与健康命令：执行 Service panic 由 GSR 清理，不自动重建；另一 Service 可继续工作，失败入口需人工或外部管理器重启节点恢复。进程拉起和健康检查不在本 Demo 中实现，不重放结果未知的请求。
 
 按场景分三个入口：SettleSingle 单用户一笔，SettleBatch 多笔独立单人操作，SettleGroup 多用户整体操作。接口共享金额校验、幂等和事务实现，调用方不必统一组装多用户结构。地鼠调用批量入口；棋牌一局可立即调用多人入口，批量周期由调用方决定。GetBatch/GetOperation/GetBalance 提供查询，具体字段和编号见 PROTOCOL.md。
 
@@ -327,7 +327,7 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 4. 余额不足等业务拒绝保存为终局结果，同批其他操作可成功。只对新成功操作涉及用户批量更新余额/版本，再批量插入新操作索引和完整批次/回执，Commit 成功才返回。
 5. SQL/连接/提交错误是未知或失败，不保存成余额不足、不假报入账；事务回滚或调用方用原 ID 重试，已提交但丢回复时返回已有结果。数据库唯一键与余额行锁同时保护重复写入；竞争导致 SQL 失败时按原身份重试。
 
-写/读执行 Service 没有进度状态机、额外后台队列、归批 Timer 或镜像余额缓存；监督 Service 的 Timer 仅管理实例存活。事务临时数据归当前回调；持久终局状态归 MySQL。全局 OperationID 和 BatchID 的去重记录不自动过期。
+写/读执行 Service 没有进度状态机、额外后台队列、Timer、监督 Service 或镜像余额缓存。事务临时数据归当前回调；持久终局状态归 MySQL。全局 OperationID 和 BatchID 的去重记录不自动过期。
 
 ### 9.3 三张表及初始化
 
@@ -357,7 +357,9 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 
 真实环境 MySQL 8.0.46、binlog_format=ROW：外部事务持续持锁时，4 个写入口的多人操作均快速返回未确认，未部分入账；无关钱包仍经所有写入口成功扣款，解锁后原 ID 重试只转账一次。跨 4 个入口并发 16 次同身份调用只保存 1 项操作、扣款一次；16 项独立扣款和多人转账在 1000 银子/每项扣 100 下均为 10 成功、6 拒绝，余额/版本及总额一致；同 ID 不同内容并发仅一个成功、另一个冲突。重建三个节点后，独立 online/mole/settlement 进程完成新路由进入、即时命中、MySQL 入账与 Redis 检查点确认。所有测试仅清理独占账务样本和临时进程；未改表结构、数据库全局配置或历史压测数据，未重测大库负载、CPU、长期稳定性及真实客户端链路。
 
-2026-11-03 调用边界收敛：common/settlement 提供六个具体方法，读写路由改为私有；Mole、斗地主、Access 结果查询及测试/压测调用入口均迁移。调用包测试覆盖参数/结果传递、有限预算、缺失结果和错误不自动重试；Access 组件测试覆盖结算查询使用当前身份。统一 check/build、调用包 race、Access 启用真实节点与 TS 客户端的全量 race，以及 Settlement 启用真实 MySQL/独立进程的全量测试通过。MySQL 事务、幂等键、批次恢复和业务等待预算保持原契约，未重跑负载或 CPU 测量。
+2026-11-03 调用边界收敛（共享调用包旧方案的历史记录，已由本节双 Service 直连方案替代）：common/settlement 提供六个具体方法，读写路由改为私有；Mole、斗地主、Access 结果查询及测试/压测调用入口均迁移。调用包测试覆盖参数/结果传递、有限预算、缺失结果和错误不自动重试；Access 组件测试覆盖结算查询使用当前身份。统一 check/build、调用包 race、Access 启用真实节点与 TS 客户端的全量 race，以及 Settlement 启用真实 MySQL/独立进程的全量测试通过。MySQL 事务、幂等键、批次恢复和业务等待预算保持原契约，未重跑负载或 CPU 测量。
+
+2026-11-03 双 Service 直连验收：删除共享调用包、客户端分片路由、六入口监督和健康命令；默认每节点一写一读，SQL 池上限 2，调用方按 settlement_node 直连。统一 check/build、Settlement 启用真实 MySQL 的全量 race、Access 启用独立进程/TS 客户端的全量 race 通过；覆盖地鼠、斗地主、双接入重连和结算恢复。默认测试覆盖固定服务名/读写互斥、慢 SQL 不阻塞异类入口或另一节点、panic 不扩散且不自动重建、非默认结算目标的配置与真实调用；真实 MySQL 并发用例改为多个独立 Runtime/Cluster，共享测试连接池。另用两个独立 OS 进程、各自 SQL 池和编号节点名共用权威库，验证跨节点重提同 ID 回执一致、余额/版本仅变化一次；online/mole/settlement 独立进程入账与 Redis 检查点确认也通过。只清理独占样本和临时进程，未测自动拉起、自动切换、持续负载或 CPU，不沿用旧四写二读的容量结论。
 
 通用结算阶段不实现游戏牌局、资金冻结、匹配或外部明细导出；后续斗地主实现见第 10 节。mole 崩溃可丢失尚未保存到 Redis 的内存操作；已保存批次可恢复，settlement 保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。
 
@@ -512,7 +514,7 @@ Summary 失败的业务影响：当前 MoleSubmission.advance 在 ready=false �
 
 2026-10-29 用户进一步确认优先处理局部故障隔离。Mole 当时实施了多进入/提交通道，随后推进 Settlement 隔离。当前 Mole 按教学目标收敛为单 Entry、单 Accounting、单 Submission，保留独立周期驱动、按用户索引余额计算和有界积压，见第 8 节；Settlement 仍按第 9 节执行。后续逐节点事项：
 
-- Settlement：本轮实施 4 写/2 读入口、钱包锁冲突快速回滚、独立监督恢复及小 Mailbox 背压；详见第 9 节。数据库整体不可用、全部入口饱和、同入口排队、跨节点链路拥塞仍有共同影响，未建设逐钱包调度器或数据库高可用。
+- Settlement：当前按教学目标收敛为每节点一写一读，调用方直连公开入口；保留钱包锁冲突快速回滚与小 Mailbox 背压，移除进程内多入口路由和监督恢复。节点扩容通过独立配置部署，详见第 9 节；数据库整体不可用、同节点写排队和热点钱包仍有共同影响。
 - Login（2026-10-30 暂缓）：保留单个认证 Service；多认证入口、小队列背压及实例监督恢复待业务闭环后按实际需要重新评估，不作为当前实施任务。
 - Access：已完成第 3 节业务闭环、双节点重连、单接入骤停隔离及 Online 重启后显式重登恢复；实际负载下的出站背压仍待验证，自动重新绑定未实现。
 - 基础可用性：生产进程拉起、健康检查、MySQL/Redis 部署冗余和资源隔离另行验收。本轮没有建设数据库高可用或通用监督框架。

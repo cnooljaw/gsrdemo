@@ -38,16 +38,17 @@ type landlordTable struct {
 
 // landlordService 只拥有随机凑桌的预留目录，不等待 Online、钱包、出牌或结算。
 type landlordService struct {
-	routes     map[uint64]landlordRoute
-	tables     map[string]landlordTable
-	journal    landlordJournal
-	dispatcher *gsr.Dispatcher
+	routes         map[uint64]landlordRoute
+	tables         map[string]landlordTable
+	journal        landlordJournal
+	settlementNode cluster.NodeID
+	dispatcher     *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*landlordService)(nil)
 
-func newLandlordService(journal landlordJournal) *landlordService {
-	service := &landlordService{routes: map[uint64]landlordRoute{}, tables: map[string]landlordTable{}, journal: journal}
+func newLandlordService(journal landlordJournal, settlementNode cluster.NodeID) *landlordService {
+	service := &landlordService{routes: map[uint64]landlordRoute{}, tables: map[string]landlordTable{}, journal: journal, settlementNode: settlementNode}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		resolveCommand:    service.handleResolve,
 		releaseCommand:    service.handleRelease,
@@ -118,7 +119,7 @@ func (service *landlordService) handleResolve(self gsr.CommandContext, uid uint6
 				return nil, err
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-			_, err = self.CreateService(ctx, newAttackService(name, service.journal, nil))
+			_, err = self.CreateService(ctx, newAttackService(name, service.journal, nil, service.settlementNode))
 			cancel()
 			if err != nil {
 				return nil, err

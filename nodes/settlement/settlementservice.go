@@ -7,20 +7,20 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr"
-	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
 )
 
 const (
-	settleBatchCommand      runtime.CommandID = 1
-	getBatchCommand         runtime.CommandID = 2
-	getOperationCommand     runtime.CommandID = 3
-	getBalanceCommand       runtime.CommandID = 4
-	settleSingleCommand     runtime.CommandID = 6
-	settleGroupCommand      runtime.CommandID = 7
-	settlementSQLTimeout                      = 2 * time.Second
-	settlementHealthCommand runtime.CommandID = 9
-	// 六个入口最多接纳 6*(4+1)=30 个排队/执行中的 Call，低于 v1.0.2 单连接的 32 个槽位。
+	settlementWriteName                    = "settlement-write"
+	settlementReadName                     = "settlement-read"
+	settleBatchCommand   runtime.CommandID = 1
+	getBatchCommand      runtime.CommandID = 2
+	getOperationCommand  runtime.CommandID = 3
+	getBalanceCommand    runtime.CommandID = 4
+	settleSingleCommand  runtime.CommandID = 6
+	settleGroupCommand   runtime.CommandID = 7
+	settlementSQLTimeout                   = 2 * time.Second
+	// 两个入口最多接纳 2*(4+1)=10 个排队/执行中的 Call，低于 v1.0.2 单连接的 32 个槽位。
 	// 不以大队列掩盖慢请求，给同连接的其他目标留出接纳机会。
 	settlementMailboxCapacity = 4
 )
@@ -34,15 +34,14 @@ var (
 
 // settlementService 是一个独立写入入口；三个命令共享事务规则，不持有钱包副本。
 type settlementService struct {
-	name       cluster.ServiceName
 	store      settlementStore
 	dispatcher *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*settlementService)(nil)
 
-func newSettlementService(db *sql.DB, name cluster.ServiceName) *settlementService {
-	service := &settlementService{name: name, store: settlementStore{db: db}}
+func newSettlementService(db *sql.DB) *settlementService {
+	service := &settlementService{store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		settleBatchCommand:  service.handleSettleBatch,
 		settleSingleCommand: service.handleSettleSingle,
@@ -55,13 +54,10 @@ func (service *settlementService) OnStart(_ context.Context, self gsr.ServiceCon
 	if service.store.db == nil {
 		return errors.New("settlement requires a database")
 	}
-	return self.Node().RegisterService(service.name, self.Self())
+	return self.Node().RegisterService(settlementWriteName, self.Self())
 }
 
 func (service *settlementService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
-	if command == settlementHealthCommand && self.Source() != 0 {
-		return nil, nil
-	}
 	return service.dispatcher.Handle(self, command, args...)
 }
 

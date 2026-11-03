@@ -4,11 +4,12 @@ import (
 	"context"
 
 	"github.com/cnooljaw/gsr"
-	"github.com/cnooljaw/gsrdemo/common/settlement"
+	"github.com/cnooljaw/gsr/cluster"
 )
 
 // roundSettlement 只拥有本桌资金请求和提交进度，由 AttackService 串行调用。
 type roundSettlement struct {
+	node    cluster.NodeID
 	journal landlordJournal
 	result  *landlordResult
 }
@@ -120,7 +121,7 @@ func (round *roundSettlement) settle(self gsr.ServiceContext) error {
 		return err
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), callTimeout)
-	value, err := settlement.SettleGroup(ctx, self.Cluster(), result.wire())
+	value, err := self.Cluster().Call(ctx, round.node, "settlement-write", 7, result.wire())
 	cancel()
 	if err != nil {
 		return err

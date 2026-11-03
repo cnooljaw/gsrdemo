@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -11,8 +12,17 @@ import (
 
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
+
+func startSettlementTestNodes(t *testing.T, db *sql.DB, count int) []string {
+	t.Helper()
+	addresses := make([]string, 0, count)
+	for range count {
+		address, _ := startSettlementTestNode(t, db)
+		addresses = append(addresses, address)
+	}
+	return addresses
+}
 
 func retryLiveSettlement(t *testing.T, address, name string, command runtime.CommandID, request map[string]any) (map[string]any, error) {
 	t.Helper()
@@ -45,8 +55,8 @@ func TestSettlementHotWalletLiveMySQL(t *testing.T) {
 	sample := newLiveSettlementSample(t, store, 3)
 	sample.Business = "isolation-" + rand.Text()
 	users := sample.Users
-	address, _ := startSettlementTestNode(t, store.db)
-	writes, reads := routing.Services()
+	addresses := startSettlementTestNodes(t, store.db, 4)
+	address := addresses[0]
 	var version, binlog string
 	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
 	defer cancel()
@@ -63,34 +73,33 @@ func TestSettlementHotWalletLiveMySQL(t *testing.T) {
 	if err := lock.QueryRowContext(ctx, "SELECT amount FROM silver_balances WHERE user_id = ? FOR UPDATE", users[0]).Scan(&amount); err != nil {
 		t.Fatal(err)
 	}
-	routes := map[cluster.NodeID]string{"settlement": address}
-	for index, name := range writes {
+	for index, peerAddress := range addresses {
 		id := fmt.Sprintf("%s-locked-%d", sample.Business, index)
 		request := liveGroupRequest(id, sample.Business, users[0], users[2], 100)
 		sample.Operations = append(sample.Operations, id)
 		sample.Batches = append(sample.Batches, derivedBatchID("group", id))
 		begin := time.Now()
-		if _, err := businessRPC(t, routes, "settlement", name, settleGroupCommand, request); !errors.Is(err, errSettlementUnavailable) {
+		if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": peerAddress}, "settlement", settlementWriteName, settleGroupCommand, request); !errors.Is(err, errSettlementUnavailable) {
 			t.Fatalf("locked group claimed a terminal result: %v", err)
 		}
 		if elapsed := time.Since(begin); elapsed >= 500*time.Millisecond {
-			t.Fatalf("locked wallet occupied %s: %v", name, elapsed)
+			t.Fatalf("locked wallet occupied %s: %v", peerAddress, elapsed)
 		}
 	}
 	// 持锁期间向每个写入口提交另一个钱包，不能只证明读查询仍可用。
-	for index, name := range writes {
+	for index, peerAddress := range addresses {
 		id := fmt.Sprintf("%s-healthy-%d", sample.Business, index)
 		request := testSingle(id, users[1], 10, 0)
 		request["version"], request["business"] = uint64(2), sample.Business
 		sample.Operations = append(sample.Operations, id)
 		sample.Batches = append(sample.Batches, derivedBatchID("single", id))
-		value, err := businessRPC(t, routes, "settlement", name, settleSingleCommand, request)
+		value, err := businessRPC(t, map[cluster.NodeID]string{"settlement": peerAddress}, "settlement", settlementWriteName, settleSingleCommand, request)
 		if err != nil || value.(map[string]any)["results"].([]any)[0].(map[string]any)["status"] != "committed" {
 			t.Fatalf("unrelated wallet blocked: %v %v", value, err)
 		}
 	}
-	for _, name := range reads {
-		value, err := businessRPC(t, routes, "settlement", name, getBalanceCommand, users[2])
+	for _, peerAddress := range addresses {
+		value, err := businessRPC(t, map[cluster.NodeID]string{"settlement": peerAddress}, "settlement", settlementReadName, getBalanceCommand, users[2])
 		if err != nil || value.(map[string]any)["amount"] != int64(1000) {
 			t.Fatalf("locked group partly applied: %v %v", value, err)
 		}
@@ -100,8 +109,8 @@ func TestSettlementHotWalletLiveMySQL(t *testing.T) {
 	}
 	id := sample.Business + "-locked-0"
 	request := liveGroupRequest(id, sample.Business, users[0], users[2], 100)
-	for _, name := range writes {
-		value, err := retryLiveSettlement(t, address, name, settleGroupCommand, request)
+	for _, peerAddress := range addresses {
+		value, err := retryLiveSettlement(t, peerAddress, settlementWriteName, settleGroupCommand, request)
 		if err != nil || value["results"].([]any)[0].(map[string]any)["status"] != "committed" {
 			t.Fatalf("original group did not recover: %v %v", value, err)
 		}
@@ -114,17 +123,17 @@ func TestSettlementHotWalletLiveMySQL(t *testing.T) {
 	}
 }
 
-// TestSettlementConcurrentIdentitiesLiveMySQL 保护跨执行入口的重复身份不多扣，独立同钱包操作不透支、多人输赢整体原子。
+// TestSettlementConcurrentIdentitiesLiveMySQL 保护跨结算节点的重复身份不多扣，独立同钱包操作不透支、多人输赢整体原子。
 func TestSettlementConcurrentIdentitiesLiveMySQL(t *testing.T) {
 	for _, kind := range []string{"duplicate", "debit", "group"} {
 		t.Run(kind, func(t *testing.T) {
 			store, _ := liveSettlementStore(t)
 			sample := newLiveSettlementSample(t, store, 3)
 			sample.Business = "isolation-" + rand.Text()
-			address, _ := startSettlementTestNode(t, store.db)
-			writes, _ := routing.Services()
+			addresses := startSettlementTestNodes(t, store.db, 4)
+			address := addresses[0]
 			type job struct {
-				name    string
+				address string
 				command runtime.CommandID
 				request map[string]any
 			}
@@ -141,7 +150,7 @@ func TestSettlementConcurrentIdentitiesLiveMySQL(t *testing.T) {
 					command, prefix = settleGroupCommand, "group"
 					request = liveGroupRequest(id, sample.Business, sample.Users[0], sample.Users[1+index%2], 100)
 				}
-				jobs = append(jobs, job{writes[index%len(writes)], command, request})
+				jobs = append(jobs, job{addresses[index%len(addresses)], command, request})
 				if kind != "duplicate" || index == 0 {
 					sample.Operations = append(sample.Operations, id)
 					sample.Batches = append(sample.Batches, derivedBatchID(prefix, id))
@@ -158,7 +167,7 @@ func TestSettlementConcurrentIdentitiesLiveMySQL(t *testing.T) {
 			for _, item := range jobs {
 				go func() {
 					defer workers.Done()
-					value, err := retryLiveSettlement(t, address, item.name, item.command, item.request)
+					value, err := retryLiveSettlement(t, item.address, settlementWriteName, item.command, item.request)
 					done <- outcome{value, err}
 				}()
 			}
@@ -221,8 +230,8 @@ func TestSettlementConflictingConcurrentIdentityLiveMySQL(t *testing.T) {
 	store, _ := liveSettlementStore(t)
 	sample := newLiveSettlementSample(t, store, 1)
 	sample.Business = "conflict-" + rand.Text()
-	address, _ := startSettlementTestNode(t, store.db)
-	writes, _ := routing.Services()
+	addresses := startSettlementTestNodes(t, store.db, 2)
+	address := addresses[0]
 	id := "conflict-" + rand.Text()
 	sample.Operations = append(sample.Operations, id)
 	sample.Batches = append(sample.Batches, derivedBatchID("single", id))
@@ -235,7 +244,7 @@ func TestSettlementConflictingConcurrentIdentityLiveMySQL(t *testing.T) {
 		request["version"], request["business"] = uint64(2), sample.Business
 		go func() {
 			defer workers.Done()
-			_, err := retryLiveSettlement(t, address, writes[index], settleSingleCommand, request)
+			_, err := retryLiveSettlement(t, addresses[index], settlementWriteName, settleSingleCommand, request)
 			done <- err
 		}()
 	}

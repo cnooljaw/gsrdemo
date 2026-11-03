@@ -8,7 +8,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
@@ -33,10 +32,10 @@ type attackService struct {
 
 var _ gsr.Service = (*attackService)(nil)
 
-func newAttackService(name string, journal landlordJournal, pending *landlordResult) *attackService {
+func newAttackService(name string, journal landlordJournal, pending *landlordResult, settlementNode cluster.NodeID) *attackService {
 	service := &attackService{
 		game:       newAttackGame(name),
-		settlement: roundSettlement{journal: journal, result: pending},
+		settlement: roundSettlement{journal: journal, result: pending, node: settlementNode},
 		recovery:   pending != nil,
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
@@ -131,7 +130,7 @@ func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, l
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	balance, err := settlement.GetBalance(ctx, self.Cluster(), uid)
+	balance, err := self.Cluster().Call(ctx, service.settlement.node, "settlement-read", 4, uid)
 	cancel()
 	if err != nil {
 		return nil, err

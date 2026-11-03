@@ -69,8 +69,8 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 	}{
 		{moleAccountingName, newMoleAccountingService()},
 		{moleServiceName, root},
-		{moleEntryName, newMoleEntryService()},
-		{moleSubmissionName, newMoleSubmissionService(service.checkpoint)},
+		{moleEntryName, newMoleEntryService("settlement")},
+		{moleSubmissionName, newMoleSubmissionService(service.checkpoint, "settlement")},
 	} {
 		id, err := self.CreateService(ctx, child.service)
 		if err != nil {

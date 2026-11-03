@@ -63,7 +63,7 @@ func (worker *settlementLoadWorker) Handle(self gsr.CommandContext, _ gsrruntime
 		if args == nil {
 			args = []any{job.request}
 		}
-		value, err := settlementClientCall(ctx, self, job.command, args...)
+		value, err := settlementCall(ctx, self, job.command, args...)
 		cancel()
 		receipt, _ := value.(map[string]any)
 		worker.results <- settlementLoadResult{job: job, elapsed: time.Since(job.scheduled), rpc: time.Since(started), err: err, receipt: receipt}

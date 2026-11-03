@@ -18,9 +18,10 @@ import (
 )
 
 type landlordConfig struct {
-	Node     model.NodeConfig `yaml:",inline"`
-	RedisURL string           `yaml:"redis_url"`
-	RedisKey string           `yaml:"redis_key"`
+	SettlementNode string           `yaml:"settlement_node"`
+	Node           model.NodeConfig `yaml:",inline"`
+	RedisURL       string           `yaml:"redis_url"`
+	RedisKey       string           `yaml:"redis_key"`
 }
 
 func loadLandlordConfig(path string) (landlordConfig, error) {
@@ -33,7 +34,13 @@ func loadLandlordConfig(path string) (landlordConfig, error) {
 		return config, err
 	}
 	config.Node = node
-	if node.Nodes["online"] == "" || node.Nodes["settlement"] == "" || config.RedisKey == "" {
+	if config.SettlementNode == "" {
+		config.SettlementNode = "settlement"
+	}
+	if node.Nodes[config.SettlementNode] == "" {
+		return config, errors.New("settlement_node must exist in nodes_file")
+	}
+	if node.Nodes["online"] == "" || config.RedisKey == "" {
 		return config, errors.New("online, settlement and redis_key are required")
 	}
 	if _, err := redis.ParseURL(config.RedisURL); err != nil {
@@ -79,5 +86,5 @@ func run() (result error) {
 		nodes[cluster.NodeID(name)] = address
 	}
 	return gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: config.Node.LogDirectory}, Cluster: gsr.ClusterConfig{Nodes: nodes}},
-		&mainService{node: cluster.NodeID(config.Node.Listen), journal: journal, pending: pending})
+		&mainService{node: cluster.NodeID(config.Node.Listen), settlementNode: cluster.NodeID(config.SettlementNode), journal: journal, pending: pending})
 }

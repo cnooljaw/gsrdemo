@@ -109,6 +109,8 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 
 演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。
 
+每个 settlement 节点只有 `settlement-write`、`settlement-read` 两个 Service。access、mole、landlord 的 `settlement_node` 默认使用地址表中的 `settlement`；需要第二实例时，在 `nodes.yaml` 增加如 `settlement-02` 的地址，复制私密结算配置并修改 `instance`、`listen`、日志目录，再将对应调用方的 `settlement_node` 指向它。所有结算实例使用同一权威 MySQL；节点启动后不自动切换目标。
+
 `run` 前台运行节点，优先读取 `configs/<节点>-01.local.yaml`，没有时读取对应 `.yaml`。mole 监听启动后会恢复 Redis 检查点，恢复成功才接纳玩家；全部服务正常运行后再启动客户端。日志在 `logs/<实例名>/`。
 
 两个 access 共用同一个二进制，第二个实例另开终端执行表中命令。所有节点的地址表仍只维护 `configs/nodes.yaml`；各实例的配置文件、`instance` 和 `listen` 统一使用 `access-01`、`access-02`、`access-03` 等编号名称，不保留 `access` 路由别名。每个实例使用独立的 Cluster、WS 端口和日志目录；修改地址表后，重启所有节点以加载新路由。
@@ -196,7 +198,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
 
 ## 源码与文档
 
-每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，结算调用接口在 `common/settlement`，客户端在 `typeclient`。构建依赖发布的 GSR v1.0.2。
+每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，客户端在 `typeclient`；节点间直接使用 GSR Call/Send。构建依赖发布的 GSR v1.0.2。
 
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)、[Mole 调用结算](nodes/mole/molesubmissionservice.go)。
 - 节点间 Send 与客户端推送：见 [AttackService](nodes/mole/attackservice.go) 和 [地鼠接入组件](nodes/access/gameagent/mole.go)。

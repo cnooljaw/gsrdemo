@@ -10,7 +10,6 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 type landlordTestMain struct {
@@ -171,12 +170,11 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 	routes := map[cluster.NodeID]string{}
 	startLandlordTestNode(t, routes, "online", map[string]gsr.Service{"online": &landlordTestBackend{logins: map[uint64]string{}}})
 	reads := map[string]gsr.Service{}
-	_, readNames := routing.Services()
-	for _, name := range readNames {
+	for _, name := range []string{"settlement-read"} {
 		reads[name] = &landlordTestBackend{}
 	}
-	startLandlordTestNode(t, routes, "settlement", reads)
-	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{landlordName: newLandlordService(landlordJournal{})})
+	startLandlordTestNode(t, routes, "settlement-02", reads)
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{landlordName: newLandlordService(landlordJournal{}, "settlement-02")})
 	var first map[string]any
 	name := ""
 	for uid := uint64(1); uid <= 3; uid++ {

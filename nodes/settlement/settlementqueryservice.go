@@ -6,21 +6,19 @@ import (
 	"errors"
 
 	"github.com/cnooljaw/gsr"
-	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
 )
 
 // settlementQueryService 只读，不与写入入口共享 Mailbox，也不拥有余额缓存。
 type settlementQueryService struct {
-	name       cluster.ServiceName
 	store      settlementStore
 	dispatcher *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*settlementQueryService)(nil)
 
-func newSettlementQueryService(db *sql.DB, name cluster.ServiceName) *settlementQueryService {
-	service := &settlementQueryService{name: name, store: settlementStore{db: db}}
+func newSettlementQueryService(db *sql.DB) *settlementQueryService {
+	service := &settlementQueryService{store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		getBatchCommand:     service.handleGetBatch,
 		getOperationCommand: service.handleGetOperation,
@@ -32,12 +30,9 @@ func (service *settlementQueryService) OnStart(_ context.Context, self gsr.Servi
 	if service.store.db == nil {
 		return errors.New("settlement requires a database")
 	}
-	return self.Node().RegisterService(service.name, self.Self())
+	return self.Node().RegisterService(settlementReadName, self.Self())
 }
 func (service *settlementQueryService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
-	if command == settlementHealthCommand && self.Source() != 0 {
-		return nil, nil
-	}
 	return service.dispatcher.Handle(self, command, args...)
 }
 func (service *settlementQueryService) OnStop(context.Context) error { return nil }

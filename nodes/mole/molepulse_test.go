@@ -89,7 +89,7 @@ func TestMoleTicksSurviveFullMailbox(t *testing.T) {
 			case "accounting":
 				inner, command = newMoleAccountingService(), accountingTickCommand
 			case "submission":
-				inner, command = newMoleSubmissionService(testMoleCheckpoint(t)), submissionTickCommand
+				inner, command = newMoleSubmissionService(testMoleCheckpoint(t), "settlement"), submissionTickCommand
 			case "attack":
 				inner, command = newAttackService("attack-timer"), attackTickCommand
 			}

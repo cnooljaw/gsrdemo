@@ -4,7 +4,7 @@ import "testing"
 
 // TestLandlordFillsAvailableTables 保护优先填满可入座桌、跳过封桌及重登保留原桌的凑桌规则。
 func TestLandlordFillsAvailableTables(t *testing.T) {
-	service := newLandlordService(landlordJournal{})
+	service := newLandlordService(landlordJournal{}, "settlement")
 	service.tables = map[string]landlordTable{
 		"one":    {Count: 1},
 		"two":    {Count: 2},

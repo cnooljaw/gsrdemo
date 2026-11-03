@@ -13,15 +13,16 @@ import (
 )
 
 type mainService struct {
-	node cluster.NodeID
-	gate gateOptions
+	node           cluster.NodeID
+	settlementNode cluster.NodeID
+	gate           gateOptions
 }
 
 var _ gsr.Service = (*mainService)(nil)
 
 // NewMain 组装 access 的 Cluster、Gate 与连接私有 Agent。
-func NewMain(node cluster.NodeID, options gateOptions) gsr.Service {
-	return &mainService{node: node, gate: options}
+func NewMain(node cluster.NodeID, options gateOptions, settlementNode cluster.NodeID) gsr.Service {
+	return &mainService{node: node, gate: options, settlementNode: settlementNode}
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
@@ -39,7 +40,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		MaxFrameBytes:         service.gate.MaxFrameBytes,
 		MaxOutboundQueueBytes: service.gate.MaxOutboundQueueBytes,
 		NewAgent: func(client gate.ClientSession) gsr.Service {
-			agent := newAgent(client, registry)
+			agent := newAgent(client, registry, service.settlementNode)
 			agent.session.node = service.node
 			return agent
 		},

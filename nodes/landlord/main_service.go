@@ -10,15 +10,16 @@ import (
 )
 
 type mainService struct {
-	node    cluster.NodeID
-	journal landlordJournal
-	pending []*landlordResult
+	node           cluster.NodeID
+	settlementNode cluster.NodeID
+	journal        landlordJournal
+	pending        []*landlordResult
 }
 
 var _ gsr.Service = (*mainService)(nil)
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	id, err := self.CreateService(ctx, newLandlordService(service.journal))
+	id, err := self.CreateService(ctx, newLandlordService(service.journal, service.settlementNode))
 	if err != nil {
 		return err
 	}
@@ -26,7 +27,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		return err
 	}
 	for _, result := range service.pending {
-		if _, err := self.CreateService(ctx, newAttackService("", service.journal, result)); err != nil {
+		if _, err := self.CreateService(ctx, newAttackService("", service.journal, result, service.settlementNode)); err != nil {
 			return err
 		}
 	}

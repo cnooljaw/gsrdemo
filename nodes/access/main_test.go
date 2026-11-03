@@ -41,7 +41,7 @@ func accessConfigFile(t *testing.T, node, routes string) string {
 
 // TestAccessConfigKeepsGatePrivateAndResolvesSharedHost 保护 access 私有字段严格解析且地址表/日志按配置目录解析。
 func TestAccessConfigKeepsGatePrivateAndResolvesSharedHost(t *testing.T) {
-	path := accessConfigFile(t, testNodeYAML+testGateYAML, "nodes:\n  access-01: 127.0.0.1:19001\n")
+	path := accessConfigFile(t, testNodeYAML+testGateYAML, "nodes:\n  access-01: 127.0.0.1:19001\n  settlement: 127.0.0.1:19005\n")
 	config, err := loadAccessConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestAccessConfigKeepsGatePrivateAndResolvesSharedHost(t *testing.T) {
 		"wrong host role":      strings.Replace(testNodeYAML, "listen: access-01", "listen: login", 1) + testGateYAML,
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := accessConfigFile(t, node, "nodes:\n  access-01: 127.0.0.1:19001\n")
+			path := accessConfigFile(t, node, "nodes:\n  access-01: 127.0.0.1:19001\n  settlement: 127.0.0.1:19005\n")
 			if _, err := loadAccessConfig(path); err == nil {
 				t.Fatal("invalid config accepted")
 			}
@@ -107,7 +107,7 @@ func startAccess(t *testing.T) (string, string, func()) {
 	t.Helper()
 	clusterAddress, gateAddress := testAddresses(t)
 	gateYAML := strings.Replace(testGateYAML, "127.0.0.1:7888", gateAddress, 1)
-	path := accessConfigFile(t, testNodeYAML+gateYAML, "nodes:\n  access-01: "+clusterAddress+"\n")
+	path := accessConfigFile(t, testNodeYAML+gateYAML, "nodes:\n  access-01: "+clusterAddress+"\n  settlement: 127.0.0.1:19005\n")
 	config, err := loadAccessConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func startAccess(t *testing.T) (string, string, func()) {
 		done <- gsr.Run(ctx, gsr.Config{
 			Logging: logging.Config{Directory: config.Node.LogDirectory},
 			Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access-01": clusterAddress}},
-		}, &readyMain{Service: NewMain("access-01", config.Gate), ready: ready})
+		}, &readyMain{Service: NewMain("access-01", config.Gate, "settlement"), ready: ready})
 	}()
 	stopped := false
 	stop := func() {
@@ -325,7 +325,7 @@ func TestAccessStartupFailureReleasesCluster(t *testing.T) {
 		Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access-01": clusterAddress}},
 	}, NewMain("access-01", gateOptions{
 		Address: occupied.Addr().String(), MaxConnections: 4, MaxFrameBytes: 256, MaxOutboundQueueBytes: 1024,
-	}))
+	}, "settlement"))
 	if err == nil {
 		t.Fatal("Gate startup failure reported success")
 	}
@@ -340,7 +340,7 @@ func TestAccessStartupFailureReleasesCluster(t *testing.T) {
 func TestAccessConfigSupportsIndependentRoutes(t *testing.T) {
 	for _, route := range []string{"access-01", "access-02", "access-03", "access-100"} {
 		node := strings.Replace(testNodeYAML, "listen: access-01", "listen: "+route, 1)
-		path := accessConfigFile(t, node+testGateYAML, "nodes:\n  "+route+": 127.0.0.1:29001\n")
+		path := accessConfigFile(t, node+testGateYAML, "nodes:\n  "+route+": 127.0.0.1:29001\n  settlement: 127.0.0.1:19005\n")
 		config, err := loadAccessConfig(path)
 		if err != nil || config.Node.Listen != route || config.Node.Nodes[route] != "127.0.0.1:29001" {
 			t.Fatalf("独立接入路由 %s: %+v %v", route, config, err)
@@ -348,13 +348,27 @@ func TestAccessConfigSupportsIndependentRoutes(t *testing.T) {
 	}
 	for _, route := range []string{"login", "access", "access-", "accessor", "access-1", "access-00", "access-001", "access-abc", "access-+1"} {
 		node := strings.Replace(testNodeYAML, "listen: access-01", "listen: "+route, 1)
-		path := accessConfigFile(t, node+testGateYAML, "nodes:\n  "+route+": 127.0.0.1:29001\n")
+		path := accessConfigFile(t, node+testGateYAML, "nodes:\n  "+route+": 127.0.0.1:29001\n  settlement: 127.0.0.1:19005\n")
 		if _, err := loadAccessConfig(path); err == nil {
 			t.Fatalf("非法接入路由 %s 被接纳", route)
 		}
 	}
 	node := strings.Replace(testNodeYAML, "listen: access-01", "listen: access-02", 1)
-	if _, err := loadAccessConfig(accessConfigFile(t, node+testGateYAML, "nodes:\n  access-01: 127.0.0.1:29001\n")); err == nil {
+	if _, err := loadAccessConfig(accessConfigFile(t, node+testGateYAML, "nodes:\n  access-01: 127.0.0.1:29001\n  settlement: 127.0.0.1:19005\n")); err == nil {
 		t.Fatal("路由未配置时不应退回 access-01")
+	}
+}
+
+// TestAccessSettlementNodeConfig 保护接入查询可指定另一个结算节点，拼错或缺失的目标不能静默回退。
+func TestAccessSettlementNodeConfig(t *testing.T) {
+	routes := "nodes:\n  access-01: 127.0.0.1:19001\n  settlement-02: 127.0.0.1:29005\n"
+	path := accessConfigFile(t, testNodeYAML+testGateYAML+"settlement_node: settlement-02\n", routes)
+	config, err := loadAccessConfig(path)
+	if err != nil || config.SettlementNode != "settlement-02" {
+		t.Fatalf("目标未保留: %+v %v", config, err)
+	}
+	path = accessConfigFile(t, testNodeYAML+testGateYAML+"settlement_node: missing\n", routes)
+	if _, err := loadAccessConfig(path); err == nil {
+		t.Fatal("缺失目标被静默回退")
 	}
 }

@@ -26,9 +26,10 @@ func main() {
 }
 
 type moleConfig struct {
-	Node     model.NodeConfig `yaml:",inline"`
-	RedisURL string           `yaml:"redis_url"`
-	RedisKey string           `yaml:"redis_key"`
+	SettlementNode string           `yaml:"settlement_node"`
+	Node           model.NodeConfig `yaml:",inline"`
+	RedisURL       string           `yaml:"redis_url"`
+	RedisKey       string           `yaml:"redis_key"`
 }
 
 func loadMoleConfig(path string) (moleConfig, error) {
@@ -44,8 +45,14 @@ func loadMoleConfig(path string) (moleConfig, error) {
 		return config, err
 	}
 	config.Node = node
-	if node.Nodes["settlement"] == "" || node.Nodes["online"] == "" {
-		return config, errors.New("online and settlement routes are required")
+	if config.SettlementNode == "" {
+		config.SettlementNode = "settlement"
+	}
+	if node.Nodes[config.SettlementNode] == "" {
+		return config, errors.New("settlement_node must exist in nodes_file")
+	}
+	if node.Nodes["online"] == "" {
+		return config, errors.New("online route is required")
 	}
 	if strings.TrimSpace(config.RedisURL) == "" || strings.TrimSpace(config.RedisKey) == "" {
 		return config, errors.New("redis_url and redis_key are required")
@@ -98,7 +105,7 @@ func run() (result error) {
 	err = gsr.Run(runContext, gsr.Config{
 		Logging: logging.Config{Directory: config.Node.LogDirectory},
 		Cluster: gsr.ClusterConfig{Nodes: nodes},
-	}, NewMain(cluster.NodeID(config.Node.Listen), checkpoint, fail))
+	}, NewMain(cluster.NodeID(config.Node.Listen), cluster.NodeID(config.SettlementNode), checkpoint, fail))
 	if cause := context.Cause(runContext); cause != nil && !errors.Is(cause, context.Canceled) {
 		return errors.Join(err, cause)
 	}

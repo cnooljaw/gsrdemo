@@ -13,7 +13,6 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 type settlementPeerResult struct {
@@ -98,14 +97,13 @@ func TestSettlementBusyEntryDoesNotExhaustPeer(t *testing.T) {
 	mock.ExpectRollback()
 	mock.ExpectQuery("SELECT amount, version").WithArgs(uint64(2)).WillReturnRows(sqlmock.NewRows([]string{"amount", "version"}).AddRow(1000, 1))
 	address, _ := startSettlementTestNode(t, db)
-	writes, reads := routing.Services()
 	results := make(chan settlementPeerResult, 42)
-	requests := []*settlementPeerRequest{{index: 0, name: writes[0], command: settleBatchCommand, args: []any{testBatch("slow-peer", testSingle("slow-op", 1, 100, 0))}, results: results}}
+	requests := []*settlementPeerRequest{{index: 0, name: settlementWriteName, command: settleBatchCommand, args: []any{testBatch("slow-peer", testSingle("slow-op", 1, 100, 0))}, results: results}}
 	for index := range 40 {
 		// 未知业务命令仍需进入同一 Mailbox；排队后无需额外 SQL，便于精确观察背压。
-		requests = append(requests, &settlementPeerRequest{index: index + 2, name: writes[0], command: 99, wait: started, issued: issued, results: results})
+		requests = append(requests, &settlementPeerRequest{index: index + 2, name: settlementWriteName, command: 99, wait: started, issued: issued, results: results})
 	}
-	requests = append(requests, &settlementPeerRequest{index: 1, name: reads[1], command: getBalanceCommand, args: []any{uint64(2)}, wait: allowed, results: results})
+	requests = append(requests, &settlementPeerRequest{index: 1, name: settlementReadName, command: getBalanceCommand, args: []any{uint64(2)}, wait: allowed, results: results})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	directory := t.TempDir()

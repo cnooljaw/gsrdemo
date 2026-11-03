@@ -17,7 +17,6 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/mysqlclient"
 	"github.com/cnooljaw/gsrdemo/common/model"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 func main() {
@@ -40,7 +39,10 @@ func loadSettlementConfig(path string) (settlementConfig, error) {
 	if err := model.ReadYAMLFile(path, &config); err != nil {
 		return config, err
 	}
-	node, err := model.ResolveNodeConfig(config.Node, path, "settlement")
+	if config.Node.Listen != "settlement" && !strings.HasPrefix(config.Node.Listen, "settlement-") {
+		return config, errors.New("listen must name a settlement node")
+	}
+	node, err := model.ResolveNodeConfig(config.Node, path, config.Node.Listen)
 	if err != nil {
 		return config, err
 	}
@@ -91,14 +93,13 @@ func run() (result error) {
 	}, NewMain(cluster.NodeID(config.Node.Listen), db))
 }
 
-// openSettlementDatabase 将共享池上限与固定写/读入口的并发数匹配，仍由宿主统一关闭。
+// openSettlementDatabase 将共享池上限与一个写、一个读 Service 的并发数匹配，仍由宿主统一关闭。
 func openSettlementDatabase(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := mysqlclient.Open(ctx, dsn)
 	if err != nil {
 		return nil, err
 	}
-	writes, reads := routing.Services()
-	db.SetMaxOpenConns(len(writes) + len(reads))
-	db.SetMaxIdleConns(len(writes) + len(reads))
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
 	return db, nil
 }

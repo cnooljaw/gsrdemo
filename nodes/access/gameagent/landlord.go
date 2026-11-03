@@ -135,7 +135,7 @@ func (landlord *Landlord) onOperation(self gsr.CommandContext, reply protocol.Co
 	if err := identity.RequireLogin(); err != nil {
 		return err
 	}
-	value, err := landlord.deps.SettlementOperation(self, identity.UserID, request.OperationId)
+	value, err := landlord.deps.Call(self, landlord.deps.SettlementNode, "settlement-read", 3, identity.UserID, request.OperationId)
 	if err != nil {
 		return err
 	}

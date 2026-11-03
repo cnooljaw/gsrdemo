@@ -15,7 +15,6 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -241,16 +240,7 @@ func accessSettlementWrite(t *testing.T, ctx context.Context, address string, co
 	var result any
 	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
 		var err error
-		switch command {
-		case 1:
-			result, err = routing.SettleBatch(wait, self.Cluster(), request)
-		case 6:
-			result, err = routing.SettleSingle(wait, self.Cluster(), request)
-		case 7:
-			result, err = routing.SettleGroup(wait, self.Cluster(), request)
-		default:
-			return runtime.ErrUnknownCommand
-		}
+		result, err = self.Cluster().Call(wait, "settlement", "settlement-write", command, request)
 		return err
 	}}
 	if err := gsr.Run(wait, gsr.Config{

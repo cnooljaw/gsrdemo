@@ -7,7 +7,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
@@ -18,13 +17,14 @@ const (
 
 // moleEntryService 协调低频进入与结果查询，不拥有目录、余额或房间状态。
 type moleEntryService struct {
-	dispatcher *gsr.Dispatcher
+	settlementNode cluster.NodeID
+	dispatcher     *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*moleEntryService)(nil)
 
-func newMoleEntryService() *moleEntryService {
-	service := &moleEntryService{}
+func newMoleEntryService(settlementNode cluster.NodeID) *moleEntryService {
+	service := &moleEntryService{settlementNode: settlementNode}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		moleEnterCommand:     service.handleEnter,
 		moleOperationCommand: service.handleOperation,
@@ -104,7 +104,7 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 		return cached, err
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
-	value, err := settlement.GetBalance(ctx, self.Cluster(), userID)
+	value, err := self.Cluster().Call(ctx, service.settlementNode, "settlement-read", 4, userID)
 	cancel()
 	if err != nil {
 		return nil, errAccountingUnavailable
@@ -125,5 +125,5 @@ func (service *moleEntryService) handleOperation(self gsr.CommandContext, userID
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
 	defer cancel()
-	return settlement.GetOperation(ctx, self.Cluster(), userID, hitID)
+	return self.Cluster().Call(ctx, service.settlementNode, "settlement-read", 3, userID, hitID)
 }
