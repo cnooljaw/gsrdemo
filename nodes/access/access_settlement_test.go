@@ -227,21 +227,30 @@ func applyAccessPreparedBatch(t *testing.T, ctx context.Context, address string,
 		})
 	}
 	request := map[string]any{"version": uint64(2), "batch_id": batch.ID, "operations": operations}
-	result := accessSettlementWrite(t, ctx, address, batch.ID, 1, request)
+	result := accessSettlementWrite(t, ctx, address, 1, request)
 	receipt, ok := result.(map[string]any)
 	if !ok || receipt["batch_id"] != batch.ID {
 		t.Fatalf("原批次提交结果不匹配: %v", result)
 	}
 }
 
-func accessSettlementWrite(t *testing.T, ctx context.Context, address, identity string, command runtime.CommandID, request map[string]any) any {
+func accessSettlementWrite(t *testing.T, ctx context.Context, address string, command runtime.CommandID, request map[string]any) any {
 	t.Helper()
 	wait, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var result any
 	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
 		var err error
-		result, err = self.Cluster().Call(wait, "settlement", cluster.ServiceName(routing.WriteService(identity)), command, request)
+		switch command {
+		case 1:
+			result, err = routing.SettleBatch(wait, self.Cluster(), request)
+		case 6:
+			result, err = routing.SettleSingle(wait, self.Cluster(), request)
+		case 7:
+			result, err = routing.SettleGroup(wait, self.Cluster(), request)
+		default:
+			return runtime.ErrUnknownCommand
+		}
 		return err
 	}}
 	if err := gsr.Run(wait, gsr.Config{

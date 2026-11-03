@@ -7,6 +7,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
@@ -102,7 +103,9 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 	if err != nil || cached != nil {
 		return cached, err
 	}
-	value, err := callSettlement(self, settlementBalanceCommand, userID)
+	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
+	value, err := settlement.GetBalance(ctx, self.Cluster(), userID)
+	cancel()
 	if err != nil {
 		return nil, errAccountingUnavailable
 	}
@@ -120,5 +123,7 @@ func (service *moleEntryService) handleOperation(self gsr.CommandContext, userID
 	if userID == 0 || !validMoleIdentifier(hitID) {
 		return nil, errInvalidMoleInput
 	}
-	return callSettlement(self, settlementOperationCommand, userID, hitID)
+	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
+	defer cancel()
+	return settlement.GetOperation(ctx, self.Cluster(), userID, hitID)
 }

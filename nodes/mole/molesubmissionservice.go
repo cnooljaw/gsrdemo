@@ -8,20 +8,15 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr"
-	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
+	"github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
-	moleSubmissionName                           = "mole-submission"
-	submissionBatchCommand     runtime.CommandID = 1
-	submissionTickCommand      runtime.CommandID = 10
-	submissionStateCommand     runtime.CommandID = 11
-	settlementSubmitCommand    runtime.CommandID = 1
-	settlementBatchCommand     runtime.CommandID = 2
-	settlementOperationCommand runtime.CommandID = 3
-	settlementBalanceCommand   runtime.CommandID = 4
+	moleSubmissionName                       = "mole-submission"
+	submissionBatchCommand runtime.CommandID = 1
+	submissionTickCommand  runtime.CommandID = 10
+	submissionStateCommand runtime.CommandID = 11
 )
 
 // moleSubmissionService 独占 Redis 检查点和结算调用；只推进一个在途批次，不持有钱包。
@@ -168,7 +163,9 @@ func (service *moleSubmissionService) settlePending(self gsr.ServiceContext) (mo
 	}
 	if service.receipt == nil {
 		// 先保存原批次，再直接幂等提交；超时不换 ID，也不增加 GetBatch 前置查询。
-		value, err := callSettlement(self, settlementSubmitCommand, service.batch.wire())
+		ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
+		value, err := settlement.SettleBatch(ctx, self.Cluster(), service.batch.wire())
+		cancel()
 		if err != nil {
 			return moleCheckpointState{}, err
 		}
@@ -181,21 +178,4 @@ func (service *moleSubmissionService) settlePending(self gsr.ServiceContext) (mo
 	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
 	defer cancel()
 	return service.store.finish(ctx, *service.batch, *service.receipt)
-}
-
-func callSettlement(self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
-	defer cancel()
-	name := ""
-	if command == settlementSubmitCommand {
-		request := args[0].(map[string]any)
-		name = routing.WriteService(request["batch_id"].(string))
-	} else {
-		key := fmt.Sprint(args[0])
-		if command == settlementOperationCommand {
-			key = fmt.Sprint(args[1])
-		}
-		name = routing.ReadService(key)
-	}
-	return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
 }

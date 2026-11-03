@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -107,28 +106,38 @@ func (service *settlementCaller) OnStop(context.Context) error {
 
 func settlementRPC(t *testing.T, address string, command runtime.CommandID, args ...any) (any, error) {
 	t.Helper()
-	return businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementRPCTarget(command, args...), command, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	var value any
+	var callErr error
+	caller := &settlementCaller{cancel: cancel, work: func(self gsr.ServiceContext) {
+		value, callErr = settlementClientCall(ctx, self, command, args...)
+	}}
+	if err := gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"settlement": address}}}, caller); err != nil {
+		t.Fatal(err)
+	}
+	return value, callErr
 }
 
-// settlementRPCTarget 与真实调用方按业务身份选择入口；请求校验仍在 Service 内。
-func settlementRPCTarget(command runtime.CommandID, args ...any) string {
-	if command == settleBatchCommand || command == settleSingleCommand || command == settleGroupCommand {
-		request, _ := args[0].(map[string]any)
-		field := "operation_id"
-		if command == settleBatchCommand {
-			field = "batch_id"
-		}
-		identity, _ := request[field].(string)
-		return routing.WriteService(identity)
+// settlementClientCall 让功能测试和压测使用相同的公开业务方法；未知命令单独验证底层拒绝契约。
+func settlementClientCall(ctx context.Context, self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
+	switch command {
+	case settleBatchCommand:
+		return routing.SettleBatch(ctx, self.Cluster(), args[0].(map[string]any))
+	case settleSingleCommand:
+		return routing.SettleSingle(ctx, self.Cluster(), args[0].(map[string]any))
+	case settleGroupCommand:
+		return routing.SettleGroup(ctx, self.Cluster(), args[0].(map[string]any))
+	case getBatchCommand:
+		return routing.GetBatch(ctx, self.Cluster(), args[0].(string))
+	case getOperationCommand:
+		return routing.GetOperation(ctx, self.Cluster(), args[0].(uint64), args[1].(string))
+	case getBalanceCommand:
+		return routing.GetBalance(ctx, self.Cluster(), args[0].(uint64))
+	default:
+		_, reads := routing.Services()
+		return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(reads[0]), command, args...)
 	}
-	key := ""
-	if len(args) > 0 {
-		key = fmt.Sprint(args[0])
-	}
-	if command == getOperationCommand && len(args) > 1 {
-		key = fmt.Sprint(args[1])
-	}
-	return routing.ReadService(key)
 }
 
 func businessRPC(t *testing.T, routes map[cluster.NodeID]string, node, name string, command runtime.CommandID, args ...any) (any, error) {

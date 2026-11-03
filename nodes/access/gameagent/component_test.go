@@ -125,3 +125,34 @@ func TestGameDisconnectClearsRouteOnFailure(t *testing.T) {
 		t.Fatalf("entry=%s calls=%d", mole.entryName, calls)
 	}
 }
+
+// TestLandlordOperationUsesCurrentIdentity 保护结算查询只使用当前登录用户和原操作身份，并原样返回下游未知结果。
+func TestLandlordOperationUsesCurrentIdentity(t *testing.T) {
+	current := Identity{}
+	calls := 0
+	landlord := NewLandlord(Dependencies{
+		Identity: func() Identity { return current },
+		SettlementOperation: func(_ gsr.ServiceContext, userID uint64, operationID string) (any, error) {
+			calls++
+			if userID != current.UserID || operationID != "round-original" {
+				t.Fatalf("使用过期身份或改变操作: %d %s", userID, operationID)
+			}
+			return nil, runtime.ErrCallTimeout
+		},
+	})
+	query := func() error {
+		return landlord.onOperation(nil, protocol.Context{}, &demopb.LandlordOperationRequest{OperationId: "round-original"})
+	}
+	if err := query(); !errors.Is(err, ErrLoginRequired) {
+		t.Fatal(err)
+	}
+	for _, userID := range []uint64{7, 9} {
+		current = Identity{UserID: userID}
+		if err := query(); !errors.Is(err, runtime.ErrCallTimeout) {
+			t.Fatal(err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("查询被自动重试或未登录时仍调用下游: %d", calls)
+	}
+}

@@ -17,6 +17,14 @@ import (
 	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
+// 测试后端按公开 wire 协议注册命令；游戏业务不持有这些编号。
+const (
+	settlementSubmitCommand    runtime.CommandID = 1
+	settlementBatchCommand     runtime.CommandID = 2
+	settlementOperationCommand runtime.CommandID = 3
+	settlementBalanceCommand   runtime.CommandID = 4
+)
+
 // settlementFixture 仅实现 mole 用到的单用户测试契约，不是 settlement 业务实现。
 type settlementFixture struct {
 	balances        map[uint64]silverBalance

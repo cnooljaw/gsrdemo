@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -172,8 +171,9 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 	routes := map[cluster.NodeID]string{}
 	startLandlordTestNode(t, routes, "online", map[string]gsr.Service{"online": &landlordTestBackend{logins: map[uint64]string{}}})
 	reads := map[string]gsr.Service{}
-	for i := 0; i < 2; i++ {
-		reads[routing.ReadService(fmt.Sprint(i+1))] = &landlordTestBackend{}
+	_, readNames := routing.Services()
+	for _, name := range readNames {
+		reads[name] = &landlordTestBackend{}
 	}
 	startLandlordTestNode(t, routes, "settlement", reads)
 	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{landlordName: newLandlordService(landlordJournal{})})

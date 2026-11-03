@@ -14,7 +14,7 @@
 
 当前已完成 MAC Gate/Agent、用户名密码认证、Online 位置目录、地鼠玩法与业务记账、通用 Settlement/MySQL 持久化，以及 TypeScript CLI 闭环。三个客户端和双 access 已真实联调，接入进程骤停后的局部隔离与跨接入重新登录见第 3 节；未实现的目标不作为已验收能力。
 
-每个节点角色一个独立 Go module，源码默认放该项目根目录；common 包含共享配置和结算路由。没有调用者的通用框架、协议目录和业务包不提前建立。
+每个节点角色一个独立 Go module，源码默认放该项目根目录；common 包含共享配置和结算调用接口。没有调用者的通用框架、协议目录和业务包不提前建立。
 
 ## 2. 推进顺序
 
@@ -115,7 +115,7 @@ access 将持续接入不同游戏，并提供与游戏无关的通用协议。2
 - 通用协议独立注册；各游戏提供 Name、ProtocolHandlers、CommandHandlers、Entered、Disconnect 五个方法。根 Agent 从同一份 games 清单收集注册表、判断进入互斥和执行断线清理。空白游戏名、重复游戏名、重复消息/命令 ID，以及占用 Gate 断线命令，均在组装时拒绝，不静默覆盖。
 - 客户端 MsgID 在整个 access 协议目录内唯一，内部 CommandID 在 Agent 的命令表内唯一；两者是不同编号空间。新协议按通用/游戏归属组织和分配编号，不能因组件不同而复用同一目录内的 ID。客户端现有编号和 payload 类型保持兼容，本轮不拆分 .proto 或修改生成流程。
 - 游戏推送直接按 CommandID 绑定具体方法：地鼠快照 100、余额校正 102，斗地主快照 110；101 继续用于旧登录替换。推送参数为 LoginID 和快照/余额 map，不传 kind 字符串二次分发。地鼠内部推送签名已调整，access 与 mole 需配套构建、重启，不保留旧 kind 入口。
-- Agent 是登录身份的唯一写入处。组件每次回调通过 Dependencies.Identity 取得当前 Identity 值快照，不各自缓存一份 UserID/LoginID；一次注入身份读取、进入准入、有界 Call 和客户端 Push 四种能力，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
+- Agent 是登录身份的唯一写入处。组件每次回调通过 Dependencies.Identity 取得当前 Identity 值快照，不各自缓存一份 UserID/LoginID；一次注入身份读取、进入准入、有界 Call、结算结果查询和客户端 Push 五种能力，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
 - 保留同一连接不能同时进入两种游戏的规则，进入互斥由 Agent 协调；各游戏负责自己的离开和路由清理，Agent 按清单顺序尽力清理，单个组件返回错误时记录游戏名并继续清理其他组件和解绑 Online，最后清空身份；OnStop 关闭连接。组件不直接关闭连接或退出 Agent，不自动重试结果未知的业务操作。推送仍校验当前登录及游戏路由。
 - 组合不增加并发与故障隔离：组件在同一 Agent 回调中串行执行，远程 Call 必须有限等待；某组件 panic 仍可能终止该连接所属 Agent，不能据此声称游戏组件已独立隔离。不同 Agent 的隔离沿用 GSR 机制，业务错误按当前请求返回。
 
@@ -123,10 +123,11 @@ access 将持续接入不同游戏，并提供与游戏无关的通用协议。2
 
 ```go
 deps := gameagent.Dependencies{
-	Identity:   agent.session.snapshot,
-	AllowEnter: agent.allowEnter,
-	Call:       callBackend,
-	Push:       agent.push,
+	Identity:            agent.session.snapshot,
+	AllowEnter:          agent.allowEnter,
+	Call:                callBackend,
+	SettlementOperation: getSettlementOperation,
+	Push:                agent.push,
 }
 
 agent.games = []gameagent.Component{
@@ -135,7 +136,7 @@ agent.games = []gameagent.Component{
 }
 ```
 
-deps 为每条连接构造，组件持有的是这四项能力的函数绑定。Identity 调用时才读取当前 session 并返回值快照，不冻结构造时的身份；Call 的 self 由当前回调临时传入，不保存在依赖中。组件构造仅保存依赖，待 Dispatcher 组装完成后才处理请求或调用 Push。
+deps 为每条连接构造，组件持有的是这些能力的函数绑定。SettlementOperation 通过结算调用包查询，组件不接触读入口或结算命令编号。Identity 调用时才读取当前 session 并返回值快照，不冻结构造时的身份；Call 的 self 由当前回调临时传入，不保存在依赖中。组件构造仅保存依赖，待 Dispatcher 组装完成后才处理请求或调用 Push。
 
 这是固定组件的显式组装，不新增多层 Dispatcher、动态插件或全局注册机制。Entered 从组件现有路由推导，不另存 activeGame。
 
@@ -308,7 +309,9 @@ AttackService 负责消息、成员、Call/Send 与生命周期；attackGame 私
 
 独立 settlement 节点唯一负责修改持久银子和账务；进程内固定 4 个 SettlementService 写入口、2 个 SettlementQueryService 只读入口，不持有游戏或内存钱包副本。宿主 mysqlclient.Open 后用 database/sql 将连接池上限设为 6，对应最多 4 个写事务和 2 个查询；MainService 创建并命名入口和私有监督 Service，OpenCluster 后退出，Run 停止后宿主关闭池。Service 仍使用有限 SQL context，不保存 self、不启动业务 goroutine。
 
-入口选择只共享真实调用需要的 common/settlement 路由函数，不共享节点实现。写入按 BatchID 或 OperationID 的 FNV-1a 32 位哈希分到 settlement-write-00～03；查询按 BatchID/OperationID/UserID 分到 settlement-read-00～01。命令字段和 version=2 不变，Mole 与测试工具同步迁移；不保留同步中转或旧 settlement 服务别名。路由仅用于分摊负载，不替代钱包行锁或全局幂等键。
+业务统一调用 common/settlement 的 SettleBatch、SettleSingle、SettleGroup、GetBatch、GetOperation、GetBalance；只传业务请求、当前回调借用的 Cluster.Call 能力和 context，不选择节点名称、内部入口或 CommandID。调用包无状态，最多等待 3 秒，尊重业务更短的 context；不保存 Service 上下文、不自动重试、不增加同步中转 Service。Mole 保持 500ms、斗地主 1s、Access 3s 的预算，重试和补偿仍归业务。公开请求/回执仍使用既有 version=2 规范 map，不另建 DTO 或编解码层。
+
+内部路由仍按 BatchID/OperationID 的 FNV-1a 32 位哈希选择四个写入口，查询按 BatchID/OperationID/UserID 选择两个读入口；Services 仅供结算节点组装和协议测试使用，路由函数不导出。并行度变更不需要改游戏调用代码，但本版为编译期配置，调用包和结算节点仍须配套部署，不提供运行时发现。路由不替代钱包行锁或全局幂等键。
 
 每个入口 Mailbox=4，6 个入口最多保留 6×(4+1)=30 个执行/排队 Call，低于 GSR v1.0.2 入站连接默认的 32 个并发槽位。队列满快速返回背压，调用方原 ID 退避重试，不通过大队列隐藏积压。私有 SettlementSupervisor 只接收自身 Timer，不等待 SQL 或 Call；入口已退出时重建同名无状态实例，不重放未知请求。一个慢入口仍影响其排队请求，但不占住整个节点的公共 Handler。
 
@@ -354,7 +357,9 @@ OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是
 
 真实环境 MySQL 8.0.46、binlog_format=ROW：外部事务持续持锁时，4 个写入口的多人操作均快速返回未确认，未部分入账；无关钱包仍经所有写入口成功扣款，解锁后原 ID 重试只转账一次。跨 4 个入口并发 16 次同身份调用只保存 1 项操作、扣款一次；16 项独立扣款和多人转账在 1000 银子/每项扣 100 下均为 10 成功、6 拒绝，余额/版本及总额一致；同 ID 不同内容并发仅一个成功、另一个冲突。重建三个节点后，独立 online/mole/settlement 进程完成新路由进入、即时命中、MySQL 入账与 Redis 检查点确认。所有测试仅清理独占账务样本和临时进程；未改表结构、数据库全局配置或历史压测数据，未重测大库负载、CPU、长期稳定性及真实客户端链路。
 
-本轮只完成通用银子结算，不实现斗地主牌局、资金冻结、匹配或外部明细导出。mole 崩溃可丢失尚未保存到 Redis 的内存操作；已保存批次可恢复，settlement 保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。
+2026-11-03 调用边界收敛：common/settlement 提供六个具体方法，读写路由改为私有；Mole、斗地主、Access 结果查询及测试/压测调用入口均迁移。调用包测试覆盖参数/结果传递、有限预算、缺失结果和错误不自动重试；Access 组件测试覆盖结算查询使用当前身份。统一 check/build、调用包 race、Access 启用真实节点与 TS 客户端的全量 race，以及 Settlement 启用真实 MySQL/独立进程的全量测试通过。MySQL 事务、幂等键、批次恢复和业务等待预算保持原契约，未重跑负载或 CPU 测量。
+
+通用结算阶段不实现游戏牌局、资金冻结、匹配或外部明细导出；后续斗地主实现见第 10 节。mole 崩溃可丢失尚未保存到 Redis 的内存操作；已保存批次可恢复，settlement 保证已提交财务事实与幂等结果。真实业务吞吐、12,000/100,000 在线下的结算积压及约 0.5～1 秒确认目标仍待负载测试。
 
 ### 9.5 结算层负载基线
 

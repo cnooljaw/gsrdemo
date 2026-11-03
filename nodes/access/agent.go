@@ -31,10 +31,11 @@ var (
 func newAgent(client gate.ClientSession, registry *protocol.Registry) *agent {
 	agent := &agent{client: client}
 	deps := gameagent.Dependencies{
-		Identity:   agent.session.snapshot,
-		AllowEnter: agent.allowEnter,
-		Call:       callBackend,
-		Push:       agent.push,
+		Identity:            agent.session.snapshot,
+		AllowEnter:          agent.allowEnter,
+		Call:                callBackend,
+		SettlementOperation: getSettlementOperation,
+		Push:                agent.push,
 	}
 	// 新增游戏的接入接线只需在此追加一项；其他入口均遍历此清单。
 	agent.games = []gameagent.Component{

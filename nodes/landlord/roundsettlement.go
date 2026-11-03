@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/cnooljaw/gsr"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
+	"github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 // roundSettlement 只拥有本桌资金请求和提交进度，由 AttackService 串行调用。
@@ -51,10 +50,6 @@ type landlordResult struct {
 	Status     string                     `json:"-"`
 	Reason     string                     `json:"-"`
 	Balances   map[uint64]landlordBalance `json:"-"`
-}
-
-func uintString(uid uint64) string {
-	return strconv.FormatUint(uid, 10)
 }
 
 func resultForGame(game attackGame) *landlordResult {
@@ -124,7 +119,9 @@ func (round *roundSettlement) settle(self gsr.ServiceContext) error {
 	if err != nil {
 		return err
 	}
-	value, err := remote(self, "settlement", routing.WriteService(result.ID), 7, result.wire())
+	ctx, cancel = context.WithTimeout(context.Background(), callTimeout)
+	value, err := settlement.SettleGroup(ctx, self.Cluster(), result.wire())
+	cancel()
 	if err != nil {
 		return err
 	}

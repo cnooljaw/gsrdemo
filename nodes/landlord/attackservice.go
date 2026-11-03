@@ -8,7 +8,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
+	"github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
@@ -130,7 +130,9 @@ func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, l
 	if err != nil {
 		return nil, err
 	}
-	balance, err := remote(self, "settlement", routing.ReadService(uintString(uid)), 4, uid)
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	balance, err := settlement.GetBalance(ctx, self.Cluster(), uid)
+	cancel()
 	if err != nil {
 		return nil, err
 	}

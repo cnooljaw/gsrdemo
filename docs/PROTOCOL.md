@@ -120,7 +120,9 @@ Mole 使用一个 Entry；调用方仍使用 ResolveEntry 返回的地址。慢�
 
 ### 通用银子结算接口
 
-目标 Node 为 settlement，version 固定 uint64=2。写入调用 `common/settlement.WriteService(identity)`：SettleBatch 使用 BatchID，SettleSingle/SettleGroup 使用 OperationID；返回 settlement-write-00～03。只读调用 ReadService(identity)：GetBatch 使用 BatchID、GetOperation 使用 OperationID、GetBalance 使用 UserID 十进制字符串，返回 settlement-read-00～01。FNV-1a 32 位散列后取模，函数与完整入口清单在 common/settlement/routing.go；入口数固定，调用方同步升级，不保留旧 Service=settlement 的转发兼容层。所有写入口返回持久事务提交后的回执，不根据游戏类型分派玩法。金额使用 int64 最小银子单位，非负 Debit/Credit，UserID 为非零 uint64。仅供受信任业务节点调用。
+业务使用 `common/settlement` 的 SettleBatch、SettleSingle、SettleGroup、GetBatch、GetOperation、GetBalance，签名均为 `(ctx, self.Cluster(), 业务参数)`；请求/回执字段沿用下表，不直接选择读写入口或 CommandID。调用包至多等待 3 秒，尊重更短的 context，不自动重试或换 ID，错误/缺失结果原样返回；超时仍可能已经执行。只在当前 Service 回调内借用 Cluster.Call，不保存上下文。
+
+下表描述 wire 契约，供结算端注册和协议验证。目标 Node 为 settlement，version 固定 uint64=2。内部按 BatchID（批量）/OperationID（单人、多人）选择 settlement-write-00～03；查询按 BatchID/OperationID/UserID 十进制字符串选择 settlement-read-00～01。FNV-1a 32 位取模和入口数只在调用包内维护；Services 仅供节点组装/测试，业务不依赖入口数。入口数调整仍需配套部署调用包与结算节点。所有写入口返回持久事务提交后的回执。金额使用 int64 最小银子单位、非负 Debit/Credit，UserID 为非零 uint64。仅供受信任业务节点调用。
 
 | CommandID | 接口 | 请求与业务成功边界 |
 | --- | --- | --- |

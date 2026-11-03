@@ -7,7 +7,6 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
-	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
@@ -136,7 +135,7 @@ func (landlord *Landlord) onOperation(self gsr.CommandContext, reply protocol.Co
 	if err := identity.RequireLogin(); err != nil {
 		return err
 	}
-	value, err := landlord.deps.Call(self, "settlement", cluster.ServiceName(routing.ReadService(request.OperationId)), 3, identity.UserID, request.OperationId)
+	value, err := landlord.deps.SettlementOperation(self, identity.UserID, request.OperationId)
 	if err != nil {
 		return err
 	}

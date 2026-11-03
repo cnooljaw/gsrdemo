@@ -40,7 +40,9 @@ type Dependencies struct {
 	Identity   func() Identity
 	AllowEnter func(string) error
 	Call       func(self gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error)
-	Push       func(uint32, proto.Message) error
+	// SettlementOperation 查询当前用户的结算结果，组件不选择结算读入口或命令。
+	SettlementOperation func(self gsr.ServiceContext, userID uint64, operationID string) (any, error)
+	Push                func(uint32, proto.Message) error
 }
 
 var (

@@ -196,7 +196,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
 
 ## 源码与文档
 
-每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，结算路由在 `common/settlement`，客户端在 `typeclient`。构建依赖发布的 GSR v1.0.2。
+每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，结算调用接口在 `common/settlement`，客户端在 `typeclient`。构建依赖发布的 GSR v1.0.2。
 
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)、[Mole 调用结算](nodes/mole/molesubmissionservice.go)。
 - 节点间 Send 与客户端推送：见 [AttackService](nodes/mole/attackservice.go) 和 [地鼠接入组件](nodes/access/gameagent/mole.go)。
