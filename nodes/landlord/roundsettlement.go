@@ -8,6 +8,29 @@ import (
 	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
+// roundSettlement 只拥有本桌资金请求和提交进度，由 AttackService 串行调用。
+type roundSettlement struct {
+	journal landlordJournal
+	result  *landlordResult
+}
+
+func (round *roundSettlement) prepare(game attackGame) {
+	if game.Phase == "finished" && game.Winner >= 0 && round.result == nil {
+		round.result = resultForGame(game)
+	}
+}
+
+func (round *roundSettlement) pending() bool {
+	return round.result != nil && round.result.Status == "pending"
+}
+
+func (round *roundSettlement) view(uid uint64) map[string]any {
+	if round.result == nil {
+		return nil
+	}
+	return round.result.view(uid)
+}
+
 type landlordChange struct {
 	UserID uint64 `json:"user_id"`
 	Debit  int64  `json:"debit"`
@@ -93,10 +116,10 @@ func (result *landlordResult) view(uid uint64) map[string]any {
 	return view
 }
 
-func (service *attackService) settle(self gsr.ServiceContext) error {
-	result := service.result
+func (round *roundSettlement) settle(self gsr.ServiceContext) error {
+	result := round.result
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	err := service.journal.save(ctx, result)
+	err := round.journal.save(ctx, result)
 	cancel()
 	if err != nil {
 		return err
@@ -151,7 +174,7 @@ func (service *attackService) settle(self gsr.ServiceContext) error {
 		balances[uid] = landlordBalance{amount, version}
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), callTimeout)
-	err = service.journal.client.HDel(ctx, service.journal.key, result.ID).Err()
+	err = round.journal.client.HDel(ctx, round.journal.key, result.ID).Err()
 	cancel()
 	if err != nil {
 		return err

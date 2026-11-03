@@ -11,13 +11,29 @@ import (
 
 // TestAgentRequiresLoginBeforeGame 保护未登录连接不能调用任何游戏入口，不触发下游请求。
 func TestAgentRequiresLoginBeforeGame(t *testing.T) {
-	agent := &agent{}
+	registry, err := protocol.NewRegistry(demopb.MessageCatalogDemoV1Game)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := newAgent(&testClientSession{}, registry)
 	calls := []func() error{
-		func() error { return agent.onEnter(nil, protocol.Context{}, &demopb.EnterRequest{}) },
-		func() error { return agent.onHit(nil, protocol.Context{}, &demopb.HitRequest{}) },
-		func() error { return agent.onSnapshot(nil, protocol.Context{}, &demopb.SnapshotRequest{}) },
-		func() error { return agent.onLeave(nil, protocol.Context{}, &demopb.LeaveRequest{}) },
-		func() error { return agent.onOperation(nil, protocol.Context{}, &demopb.OperationRequest{}) },
+		func() error { return agent.mole.onEnter(nil, protocol.Context{}, &demopb.EnterRequest{}) },
+		func() error { return agent.mole.onHit(nil, protocol.Context{}, &demopb.HitRequest{}) },
+		func() error { return agent.mole.onSnapshot(nil, protocol.Context{}, &demopb.SnapshotRequest{}) },
+		func() error { return agent.mole.onLeave(nil, protocol.Context{}, &demopb.LeaveRequest{}) },
+		func() error { return agent.mole.onOperation(nil, protocol.Context{}, &demopb.OperationRequest{}) },
+		func() error { return agent.landlord.onEnter(nil, protocol.Context{}, &demopb.LandlordEnterRequest{}) },
+		func() error { return agent.landlord.onReady(nil, protocol.Context{}, &demopb.LandlordReadyRequest{}) },
+		func() error { return agent.landlord.onCall(nil, protocol.Context{}, &demopb.LandlordCallRequest{}) },
+		func() error { return agent.landlord.onRob(nil, protocol.Context{}, &demopb.LandlordRobRequest{}) },
+		func() error { return agent.landlord.onPlay(nil, protocol.Context{}, &demopb.LandlordPlayRequest{}) },
+		func() error {
+			return agent.landlord.onSnapshot(nil, protocol.Context{}, &demopb.LandlordSnapshotRequest{})
+		},
+		func() error { return agent.landlord.onLeave(nil, protocol.Context{}, &demopb.LandlordLeaveRequest{}) },
+		func() error {
+			return agent.landlord.onOperation(nil, protocol.Context{}, &demopb.LandlordOperationRequest{})
+		},
 	}
 	for index, call := range calls {
 		if err := call(); !errors.Is(err, errLoginRequired) {

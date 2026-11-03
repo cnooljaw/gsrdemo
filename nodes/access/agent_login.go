@@ -1,9 +1,6 @@
 package main
 
 import (
-	"context"
-	"time"
-
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
@@ -12,7 +9,6 @@ import (
 )
 
 const (
-	agentCallTimeout                           = 3 * time.Second
 	loginAuthenticateCommand runtime.CommandID = 1
 	onlineBindCommand        runtime.CommandID = 1
 	onlineUnbindCommand      runtime.CommandID = 3
@@ -28,10 +24,10 @@ var (
 
 // onLogin 只接受凭据，身份和连接地址始终由服务端填写。
 func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, request *demopb.LoginRequest) error {
-	if agent.userID != 0 {
+	if agent.session.userID != 0 {
 		return errAlreadyLoggedIn
 	}
-	value, err := agent.call(self, "login", "login", loginAuthenticateCommand, request.GetUsername(), request.GetPassword())
+	value, err := callBackend(self, "login", "login", loginAuthenticateCommand, request.GetUsername(), request.GetPassword())
 	if err != nil {
 		return err
 	}
@@ -43,7 +39,7 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 	if err != nil {
 		return err
 	}
-	previous, err := agent.call(self, "online", "online", onlineBindCommand, userID, loginID, string(agent.node), string(agent.name))
+	previous, err := callBackend(self, "online", "online", onlineBindCommand, userID, loginID, string(agent.session.node), string(agent.session.name))
 	if err != nil {
 		// Bind 超时可能已经执行；不重发 Bind，只尝试清理该候选身份并结束连接。
 		if cleanupErr := self.Cluster().Send("online", "online", onlineUnbindCommand, userID, loginID); cleanupErr != nil {
@@ -52,7 +48,7 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 		self.Exit()
 		return err
 	}
-	agent.userID, agent.loginID = userID, loginID
+	agent.session.userID, agent.session.loginID = userID, loginID
 	if previous != nil {
 		old, ok := previous.(map[string]any)
 		if !ok {
@@ -76,14 +72,8 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 	return reply.Response(uint32(demopb.MsgId_S2C_LOGIN), &demopb.LoginResponse{UserId: userID})
 }
 
-func (agent *agent) call(self gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
-	defer cancel()
-	return self.Cluster().Call(ctx, node, name, command, args...)
-}
-
 func (agent *agent) handleReplaced(self gsr.CommandContext, loginID string) error {
-	if agent.loginID == "" || agent.loginID != loginID {
+	if agent.session.loginID == "" || agent.session.loginID != loginID {
 		return nil
 	}
 	agent.disconnect(self)
@@ -93,22 +83,29 @@ func (agent *agent) handleReplaced(self gsr.CommandContext, loginID string) erro
 
 // disconnect 只做有界的尽力清理；进程骤停的残留位置由后续登录覆盖。
 func (agent *agent) disconnect(self gsr.ServiceContext) {
-	if agent.userID == 0 {
+	if agent.session.userID == 0 {
 		return
 	}
-	if agent.landlordRoom != "" {
-		if _, err := agent.call(self, "landlord", agent.landlordRoom, 5, agent.userID, agent.loginID); err != nil {
-			_ = self.Logger().Error("断线离开斗地主未确认", "error", err.Error())
-		}
+	if err := agent.landlord.disconnect(self); err != nil {
+		_ = self.Logger().Error("断线离开斗地主未确认", "error", err.Error())
 	}
-	if agent.attackName != "" {
-		if _, err := agent.call(self, "mole", agent.attackName, moleLeaveCommand, agent.userID, agent.loginID); err != nil {
-			_ = self.Logger().Error("断线离开地鼠未确认", "error", err.Error())
-		}
+	if err := agent.mole.disconnect(self); err != nil {
+		_ = self.Logger().Error("断线离开地鼠未确认", "error", err.Error())
 	}
-	if _, err := agent.call(self, "online", "online", onlineUnbindCommand, agent.userID, agent.loginID); err != nil {
+	if _, err := callBackend(self, "online", "online", onlineUnbindCommand, agent.session.userID, agent.session.loginID); err != nil {
 		_ = self.Logger().Error("断线解绑未确认", "error", err.Error())
 	}
-	agent.userID, agent.loginID = 0, ""
-	agent.entryName, agent.attackName, agent.landlordRoom = "", "", ""
+	agent.session.userID, agent.session.loginID = 0, ""
+}
+
+func (agent *agent) commonProtocolHandlers() map[uint32]any {
+	return map[uint32]any{
+		uint32(demopb.MsgId_C2S_LOGIN): agent.onLogin,
+	}
+}
+
+func (agent *agent) commonCommandHandlers() map[runtime.CommandID]any {
+	return map[runtime.CommandID]any{
+		agentReplacedCommand: agent.handleReplaced,
+	}
 }

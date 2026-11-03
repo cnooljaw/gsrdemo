@@ -58,7 +58,7 @@ func TestAgentPushFailureIsLocal(t *testing.T) {
 			healthy := &accessPushClient{frames: make(chan []byte, 2)}
 			failedAgent, healthyAgent := newAgent(failed, registry), newAgent(healthy, registry)
 			for index, agent := range []*agent{failedAgent, healthyAgent} {
-				agent.userID, agent.loginID, agent.attackName = uint64(index+1), "current-login", "attack"
+				agent.session.userID, agent.session.loginID, agent.mole.attackName = uint64(index+1), "current-login", "attack"
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()

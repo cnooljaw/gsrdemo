@@ -42,16 +42,16 @@ func (service *PlayerService) Close() error {
 - 使用中的参数必须表达用途；为满足接口而未使用的参数显式命名为 `_`。
 - `gsr.ServiceContext` 参数统一命名为 `self`，表示当前 Service 的身份与能力，不使用 `scoped` 或 `ctx`；普通 `context.Context` 仍命名为 `ctx`。未使用的 ServiceContext 参数保持 `_`。此规则针对上下文参数，不把业务 Service 的方法接收者改名为 self。
 - 沿用项目稳定术语，不为相同概念创造近义词。
-- 消息处理方法按入口命名：GSR 内部命令入口使用 `handle...`（如 `handleMolePush`、`handleSettleGroup`），客户端协议入口使用 `on...`（如 `onLogin`、`onLandlordCall`）。普通业务方法、值对象方法和生命周期回调不套用这些前缀；GSR 要求的 `Handle`、`HandleClientMessage`、`OnStart`、`OnStop` 保留原名。
+- 消息处理方法按入口命名：GSR 内部命令入口使用 `handle...`（如 `mole.handlePush`、`handleSettleGroup`），客户端协议入口使用 `on...`（如 `onLogin`、`landlord.onCall`）。组件归属由具名字段表达，不重复把游戏名塞入组件的每个方法名。普通业务方法、值对象方法和生命周期回调不套用这些前缀；GSR 要求的 `Handle`、`HandleClientMessage`、`OnStart`、`OnStop` 保留原名。
 
 ```go
 agent.commandDispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-	molePushCommand:      agent.handleMolePush,
+	molePushCommand:      agent.mole.handlePush,
 	agentReplacedCommand: agent.handleReplaced,
 })
 agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, map[uint32]any{
 	uint32(demopb.MsgId_C2S_LOGIN): agent.onLogin,
-	uint32(demopb.MsgId_C2S_HIT):   agent.onHit,
+	uint32(demopb.MsgId_C2S_HIT):   agent.mole.onHit,
 })
 ```
 

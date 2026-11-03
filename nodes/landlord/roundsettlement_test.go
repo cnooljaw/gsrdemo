@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // TestRoundChanges 保护不同地主与胜方按当前倍率结算，三人变化守恒，异常金额和倍率不能持久化。
 func TestRoundChanges(t *testing.T) {
@@ -31,5 +34,23 @@ func TestRoundChanges(t *testing.T) {
 				t.Fatal("篡改金额被接受")
 			}
 		}
+	}
+}
+
+// TestRoundPreparationKeepsOriginalRequest 保护结束前不生成账务，固定的局末请求不随游戏对象的后续修改而改变。
+func TestRoundPreparationKeepsOriginalRequest(t *testing.T) {
+	game := testLandlordGame(t)
+	round := roundSettlement{}
+	round.prepare(*game)
+	if round.pending() || round.view(1) != nil {
+		t.Fatal("进行中的牌局生成了局末账务")
+	}
+	game.Phase, game.Winner = "finished", game.Landlord
+	round.prepare(*game)
+	want := round.result.wire()
+	game.Name, game.Multiplier, game.Players[0].UserID = "another-table", 8, 100
+	round.prepare(*game)
+	if !round.pending() || !reflect.DeepEqual(want, round.result.wire()) {
+		t.Fatal("待提交的原 ID 或资金内容被后续游戏修改覆盖")
 	}
 }

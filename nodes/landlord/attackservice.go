@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
+	"math/rand/v2"
 	"time"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	routing "github.com/cnooljaw/gsrdemo/common/settlement"
 )
 
 const (
@@ -25,8 +26,7 @@ const (
 // attackService 独占一桌的状态；局末 Redis/Settlement 等待只影响本桌。
 type attackService struct {
 	game       attackGame
-	journal    landlordJournal
-	result     *landlordResult
+	settlement roundSettlement
 	recovery   bool
 	dispatcher *gsr.Dispatcher
 }
@@ -34,9 +34,10 @@ type attackService struct {
 var _ gsr.Service = (*attackService)(nil)
 
 func newAttackService(name string, journal landlordJournal, pending *landlordResult) *attackService {
-	service := &attackService{game: newAttackGame(name), journal: journal, result: pending, recovery: pending != nil}
-	if pending != nil {
-		service.game.Phase = "finished"
+	service := &attackService{
+		game:       newAttackGame(name),
+		settlement: roundSettlement{journal: journal, result: pending},
+		recovery:   pending != nil,
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		roomJoinCommand:     service.handleJoin,
@@ -74,24 +75,17 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	if self.Source() == 0 {
 		return runtime.ErrUnknownCommand
 	}
-	now := time.Now()
-	if (service.game.Phase == "calling" || service.game.Phase == "robbing") && !now.Before(service.game.Deadline) {
-		if err := service.applyBid(self, service.game.Players[service.game.Seat].UserID, service.game.Turn, false); err != nil {
-			return err
-		}
+	changed, err := service.game.timeout(time.Now())
+	if err != nil {
+		return err
+	}
+	if changed {
+		service.settlement.prepare(service.game)
 		service.broadcast(self)
 	}
-	if service.game.Phase == "playing" && !now.Before(service.game.Deadline) {
-		uid := service.game.Players[service.game.Seat].UserID
-		if err := service.game.play(uid, service.game.Turn, service.game.defaultPlay(), now); err != nil {
-			return err
-		}
-		service.finishGame()
-		service.broadcast(self)
-	}
-	if service.result != nil && service.result.Status == "pending" {
-		if err := service.settle(self); err != nil {
-			_ = self.Logger().Error("斗地主待结算保留原操作", "operation_id", service.result.ID, "error", err.Error())
+	if service.settlement.pending() {
+		if err := service.settlement.settle(self); err != nil {
+			_ = self.Logger().Error("斗地主待结算保留原操作", "operation_id", service.settlement.result.ID, "error", err.Error())
 			return nil
 		}
 		if service.recovery {
@@ -103,31 +97,163 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	return nil
 }
 
-// landlordPulse 只负责唤醒本桌；先续订自身 Timer，再非阻塞 Send，满队列不切断后续超时推进。
-type landlordPulse struct{ target runtime.ServiceID }
-
-var _ gsr.Service = (*landlordPulse)(nil)
-
-func (pulse *landlordPulse) OnStart(_ context.Context, self gsr.ServiceContext) error {
-	_, err := self.After(250*time.Millisecond, 1)
-	return err
-}
-
-func (pulse *landlordPulse) OnStop(context.Context) error {
-	return nil
-}
-
-func (pulse *landlordPulse) Handle(self gsr.CommandContext, cmd runtime.CommandID, _ ...any) (any, error) {
-	if cmd != 1 || self.Source() != 0 {
-		return nil, runtime.ErrUnknownCommand
+func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, login, node, agent, membership string) (map[string]any, error) {
+	if uid == 0 || !validIdentity(login) || !validIdentity(node) || !validIdentity(agent) || !validIdentity(membership) {
+		return nil, errLandlordInput
 	}
-	if _, err := self.After(250*time.Millisecond, 1); err != nil {
+	value, err := remote(self, "online", "online", 2, uid)
+	if err != nil {
 		return nil, err
 	}
-	err := self.Send(pulse.target, roomTickCommand)
-	if err != nil && !errors.Is(err, runtime.ErrMailboxFull) {
+	location, ok := value.(map[string]any)
+	if !ok || location["login_id"] != login || location["access_node"] != node || location["agent_name"] != agent {
+		return nil, errLandlordStale
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	allowed, err := self.CallName(ctx, landlordName, checkRouteCommand, uid, login, service.game.Name, membership)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if allowed != true {
+		return nil, errLandlordStale
+	}
+	if err := service.game.join(uid, login, node, agent, membership); err != nil {
+		return nil, err
+	}
+	service.broadcast(self)
+	return service.view(uid), nil
+}
+
+func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
+	seat, err := service.game.readySeat(uid, login)
+	if err != nil {
+		return nil, err
+	}
+	balance, err := remote(self, "settlement", routing.ReadService(uintString(uid)), 4, uid)
+	if err != nil {
+		return nil, err
+	}
+	fields, ok := balance.(map[string]any)
+	if !ok {
+		return nil, errLandlordInput
+	}
+	amount, ok := fields["amount"].(int64)
+	if !ok || amount < 2*baseSilver {
+		return nil, errLandlordFunds
+	}
+	if service.game.markReady(seat) {
+		deck, err := shuffledDeck()
+		if err != nil {
+			return nil, err
+		}
+		if err := self.SendName(landlordName, sealCommand, service.game.Name, true); err != nil {
+			return nil, err
+		}
+		service.game.deal(deck, rand.IntN(3), time.Now())
+	}
+	service.broadcast(self)
+	return service.view(uid), nil
+}
+
+func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, login string) (bool, error) {
+	seat, err := service.game.member(uid, login)
+	if err != nil {
+		return false, err
+	}
+	player := service.game.Players[seat]
+	if (service.game.Phase != "waiting" && service.game.Phase != "finished") || service.settlement.pending() {
+		service.game.detach(seat)
+		return true, nil
+	}
+	if err := self.SendName(landlordName, releaseCommand, uid, login, service.game.Name, player.Membership, service.game.Phase == "waiting"); err != nil {
+		return false, err
+	}
+	if service.game.remove(seat) {
 		self.Exit()
+		return true, nil
+	}
+	service.broadcast(self)
+	return true, nil
+}
+
+func (service *attackService) bid(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (map[string]any, error) {
+	if _, err := service.game.member(uid, login); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	if !time.Now().Before(service.game.Deadline) {
+		return nil, errLandlordTurn
+	}
+	if err := service.game.applyBid(uid, turn, yes, time.Now()); err != nil {
+		return nil, err
+	}
+	service.broadcast(self)
+	return service.view(uid), nil
+}
+
+func (service *attackService) handleCallLandlord(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (map[string]any, error) {
+	if service.game.Phase != "calling" {
+		return nil, errLandlordTurn
+	}
+	return service.bid(self, uid, login, turn, yes)
+}
+
+func (service *attackService) handleRobLandlord(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (map[string]any, error) {
+	if service.game.Phase != "robbing" {
+		return nil, errLandlordTurn
+	}
+	return service.bid(self, uid, login, turn, yes)
+}
+
+func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, login string, turn uint64, values []any) (map[string]any, error) {
+	if _, err := service.game.member(uid, login); err != nil {
+		return nil, err
+	}
+	cards := make([]int64, len(values))
+	if len(values) > 20 {
+		return nil, errLandlordCards
+	}
+	for i, v := range values {
+		card, ok := v.(int64)
+		if !ok {
+			return nil, errLandlordCards
+		}
+		cards[i] = card
+	}
+	now := time.Now()
+	if !now.Before(service.game.Deadline) {
+		return nil, errLandlordTurn
+	}
+	if err := service.game.play(uid, turn, cards, now); err != nil {
+		return nil, err
+	}
+	service.settlement.prepare(service.game)
+	service.broadcast(self)
+	return service.view(uid), nil
+}
+
+func (service *attackService) handleSnapshot(_ gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
+	if _, err := service.game.member(uid, login); err != nil {
+		return nil, err
+	}
+	return service.view(uid), nil
+}
+
+func (service *attackService) view(uid uint64) map[string]any {
+	view := service.game.view(uid)
+	if result := service.settlement.view(uid); result != nil {
+		view["settlement"] = result
+	}
+	return view
+}
+
+func (service *attackService) broadcast(self gsr.ServiceContext) {
+	for _, p := range service.game.Players {
+		if p.UserID == 0 || p.AccessNode == "" {
+			continue
+		}
+		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), landlordPushCommand, p.LoginID, service.view(p.UserID)); err != nil {
+			_ = self.Logger().Error("斗地主推送未接纳，客户端可查询快照", "error", err.Error())
+		}
+	}
 }

@@ -199,6 +199,6 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
 每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，结算路由在 `common/settlement`，客户端在 `typeclient`。构建依赖发布的 GSR v1.0.2。
 
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)、[Mole 调用结算](nodes/mole/molesubmissionservice.go)。
-- 节点间 Send 与客户端推送：见 [AttackService](nodes/mole/attackservice.go) 和 [Agent 推送接收](nodes/access/agent_mole.go)。
+- 节点间 Send 与客户端推送：见 [AttackService](nodes/mole/attackservice.go) 和 [地鼠接入组件](nodes/access/moleagent.go)。
 - [业务协议](docs/PROTOCOL.md)、[设计与恢复边界](docs/DESIGN.md)、[Go 代码规范](docs/GO-CODE-STYLE.md)、[工作规则](AGENTS.md)。
 - 容量测试另见 [Online](docs/DESIGN.md#6-online-容量估算与待测计划)、[结算负载](docs/DESIGN.md#95-结算层负载基线)、[大数据历史压测](docs/DESIGN.md#97-大数据历史压测)，不属于运行 Demo 的必需步骤。

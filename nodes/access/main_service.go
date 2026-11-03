@@ -40,7 +40,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		MaxOutboundQueueBytes: service.gate.MaxOutboundQueueBytes,
 		NewAgent: func(client gate.ClientSession) gsr.Service {
 			agent := newAgent(client, registry)
-			agent.node = service.node
+			agent.session.node = service.node
 			return agent
 		},
 	})

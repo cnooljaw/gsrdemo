@@ -54,7 +54,7 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 ### 3.2 最小业务接入（2026-10-30 已确认并实施）
 
-- Agent 只保存 ClientSession、两个具名 Dispatcher、接入 Node/私有 AgentName、当前 UserID/LoginID 和 entry/attack 路由；没有余额缓存、游戏状态、副本钱包或额外状态机。拆文件沿用 agent_login.go、agent_mole.go、agent_wire.go 的类型前缀命名。
+- 初版 Agent 只保存 ClientSession、两个具名 Dispatcher、接入 Node/私有 AgentName、当前 UserID/LoginID 和 entry/attack 路由；没有余额缓存、游戏状态、副本钱包或额外状态机。当前按第 3.5 节采用具名组件组合。
 - 客户端登录经 Cluster.Call(login/login/1) 验证，再绑定 Online；每次成功登录使用随机 LoginID，每条连接只成功登录一次。具名 Agent 地址在 OnStart 发布，由 GSR 自动退役清理。绑定失败不开放游戏，不盲目重发 Bind，尽力清理候选身份后退出。
 - Enter 通过 Mole.ResolveEntry 得到地址，再调用进入通道；之后 Hit/Snapshot/Leave 直接到 AttackName，Operation 到进入通道查询当前用户的原 HitID。所有 Cluster Call 最多 3 秒；不逐锤查询 Online，不自动重试命中，不改 ActionID 或重抽奖励。
 - 普通断线尽力 Leave 和条件 Unbind；OnStop 只关闭连接。重复登录用 Online 返回的旧地址发送 Command 101，旧 Agent 按 LoginID 核对后退出。异常退出/超时可能残留目录或成员；Join 已执行但回执丢失时接入可能尚不知道 AttackName，无法保证当次断线立即释放，后续登录/进入覆盖。没有增加全局撤权或恢复协调器。
@@ -99,9 +99,9 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 边界：CLI 不自动重连，Online 不自动重建全量目录；未保存的内存命中、原房间及存储丢失不承诺恢复。上述故障测试仅扩展 access 测试，未修改其他节点业务或表结构。单 Agent 故障注入不等于真实慢客户端压测；持续业务负载、出站积压、Redis/MySQL 同时故障及容量/入账延迟目标仍待验收。access 的 race 检查覆盖测试进程，子节点使用普通构建，不宣称全部子进程通过 race。
 
-### 3.5 多游戏与通用协议的组合方向（待实施）
+### 3.5 多游戏与通用协议的组合（2026-11-03 已实施）
 
-2026-11-02 补充需求：access 将持续接入不同游戏，并提供与游戏无关的通用协议。当前 Agent 仍以同一类型跨文件实现；下述组合方向用于后续重构，不表示代码已经完成改造。文件命名不代替职责边界，通用规则见 [Go 编码规范](GO-CODE-STYLE.md#27-接口struct-与构造)。
+access 将持续接入不同游戏，并提供与游戏无关的通用协议。2026-11-03 按确认方案完成组合重构：agent.go 只组装连接与组件，agentsession.go 保存唯一身份并返回值快照，agent_login.go 承载现有通用登录，moleagent.go / landlordagent.go 分别处理各游戏。文件命名不代替职责边界，通用规则见 [Go 编码规范](GO-CODE-STYLE.md#27-接口struct-与构造)。
 
 | 组成 | 职责与数据归属 |
 | --- | --- |
@@ -112,13 +112,13 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 接线与扩展：
 
 - 每条连接仍只有一个 Agent、一个 protocolDispatcher 和一个 commandDispatcher，共用现有 Protobuf Registry/Envelope。GSR v1.0.2 的 Dispatcher 接收绑定函数，普通组件的方法可以直接注册，无需组件实现 gsr.Service。
-- 通用协议和各游戏分别维护静态注册项；组装处显式列出实际组件，新增游戏只增加该游戏组件及必要接线。合并注册项检查重复消息/命令 ID，冲突在初始化时失败，不按注册顺序覆盖；不新增多层 Dispatcher、动态插件或通用 GameModule 框架。
+- 通用协议和各游戏分别维护 protocolHandlers / commandHandlers；Agent 显式列出实际组件，通过本包 mustMergeHandlers 合并。重复消息/命令 ID 在初始化时失败，不按注册顺序覆盖；新增游戏只增加该游戏组件及必要接线，不新增多层 Dispatcher、动态插件或通用 GameModule 框架。
 - 客户端 MsgID 在整个 access 协议目录内唯一，内部 CommandID 在 Agent 的命令表内唯一；两者是不同编号空间。新协议按通用/游戏归属组织和分配编号，不能因组件不同而复用同一目录内的 ID。现有编号和 payload 类型保持兼容，本轮不拆分 .proto 或修改生成流程。
-- Agent 是登录身份的唯一写入处。组件通过明确的会话读取能力或当前调用传入的身份快照取得身份，不各自缓存一份 UserID/LoginID；仅传递实际依赖，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
+- Agent 是登录身份的唯一写入处。组件每次回调通过 identity 函数取得当前 agentSession 值快照，不各自缓存一份 UserID/LoginID；只注入身份读取、进入准入和推送函数，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
 - 保留同一连接不能同时进入两种游戏的规则，进入互斥由 Agent 协调；各游戏负责自己的离开和路由清理，Agent 负责有界清理顺序、解绑和关闭连接。组件不直接关闭连接或退出 Agent，不自动重试结果未知的业务操作。推送仍校验当前登录及游戏路由。
 - 组合不增加并发与故障隔离：组件在同一 Agent 回调中串行执行，远程 Call 必须有限等待；某组件 panic 仍可能终止该连接所属 Agent，不能据此声称游戏组件已独立隔离。不同 Agent 的隔离沿用 GSR 机制，业务错误按当前请求返回。
 
-实施时先复用现有登录、替换、推送、断线、双接入和两游戏闭环用例，再补注册项冲突、跨游戏准入和通用协议不依赖游戏路由的缺口。组件不承诺自动防止错误接线：同一类型方法重名由 Go 编译器拒绝，签名/消息类型由 Dispatcher 校验，注册到语义错误的方法仍须通过行为测试发现。本节只记录方向，具体组件字段与组装辅助随实施确认。
+复用现有登录、替换、推送、断线、双接入和两游戏闭环用例；新增重复 ID 拒绝、跨游戏进入互斥、通用登录不依赖房间及身份更新/清理后组件立即读取新值的用例。组件不承诺自动防止错误接线：同一类型方法重名由 Go 编译器拒绝，签名/消息类型由 Dispatcher 校验，注册到语义错误的方法仍须通过行为测试发现。
 
 ## 4. GSR 与参考边界
 
@@ -533,18 +533,15 @@ nodes/landlord/
   main.go                    # 配置、Redis 客户端、信号与 gsr.Run
   main_service.go            # 启动组装、待结算恢复与 Cluster 监听
   landlordservice.go         # 随机凑桌目录，不处理出牌
-  attackservice.go            # 本桌类型、Dispatcher、生命周期与阶段入口
-  attackservice_game.go       # 本桌私有值对象、阶段与发牌状态
-  attackservice_seat.go       # 入座、准备、离开与重登
-  attackservice_bidding.go    # 叫地主、抢地主、重发牌
-  attackservice_play.go       # 出牌、不出、回合与默认动作
-  attackservice_snapshot.go   # 按玩家生成可见快照、广播
-  attackservice_settlement.go # 计算本桌资金结果、提交与确认
-  settlement_pending.go     # 本游戏 Redis 待结算记录
+  attackservice.go           # 本桌命令入口、外部调用与广播编排
+  attackgame.go              # 入座、准备、叫抢、出牌、超时与可见快照
+  roundsettlement.go         # 本桌资金结果、提交与确认
+  landlordjournal.go         # 本游戏 Redis 待结算记录
+  landlordpulse.go           # 仅负责定时唤醒本桌
   cards.go                   # 普通牌型与比较纯函数
 ```
 
-不按每条命令新建文件，不创建空包或通用层；实际实现时仅在上述职责确实需要独立文件时拆分。同一份状态仅由 AttackService 读写，辅助值对象不对外暴露指针。
+AttackService 具名组合 attackGame 与 roundSettlement；游戏对象处理游戏状态变化，不依赖 GSR/Redis/RPC，结算组件持有局末请求、Redis 依赖和确认结果。Service 协调外部权限/余额查询、房间目录与广播，不再跨文件直接修改游戏成员或资金结果。两个组件由本桌 Service 串行调用，不增加 Service、Mailbox、goroutine 或父 Service 指针；进行中牌局与局末账务的恢复边界保持不变。2026-11-03 合并旧 attackservice_* 分类文件，按实际类型组织生产代码与测试，不按每条命令新建文件。
 
 客户端 → Agent → LandlordService 获取预留桌地址 → AttackService 入座。之后准备、叫地主、抢地主、出牌/不出、快照及离开直接 Call AttackService；状态变化 Send 到当前 Agent。客户端查询原结算结果时按当前登录 UserID 限定参与身份。业务 Protobuf 每个消息编号使用独立的 payload 类型，遵守现有 GSR Registry 契约。
 
@@ -556,4 +553,4 @@ nodes/landlord/
 
 2026-11-02 业务验证：普通牌型、叫抢分支、重发牌/旧轮次、非法操作不改状态、炸弹/王炸倍率及资金守恒用例通过。真实 Cluster 验证三人凑桌、第四人另开桌、叫抢中重登保留原手牌、旧身份离开被拒、阶段错误及实际 10 秒 Pulse 超时推进。真实六节点（双 access）+ 三个 TS CLI + MySQL/临时 AOF Redis 跑完一局，1 次叫地主、3 次抢地主、倍率 8；一次样本共 67 次出牌/不出，地主 +160、农民各 -80，三个钱包版本均为 2、只有一笔共同操作。另以真实 MAC 客户端跑完两局，结算节点中断时保存实际局末结果，覆盖未入账及 SQL 已提交但游戏未确认两种重启路径：原 ID 唯一入账、余额/版本各变化一次、Redis pending 清除。已提交未确认状态经真实 Settlement 接口构造，不注入网络丢包，不手工改账；只回收本用例的节点和随机测试数据。进行中手牌、Redis 数据丢失及持续负载不在本次恢复承诺内。
 
-工程收尾：全仓 `./scripts/dev.sh build`、`./scripts/dev.sh check` 通过；受影响的 landlord 和 access 包 race 通过，access 同时启用真实进程验收（子进程使用正常构建）。新增凑桌用例验证优先填满可入座桌、跳过满桌/封桌和旧预留不能释放新登录座位。旧固定地主草稿及重复拆分已合并替换，无旧类型/文件名引用；前次提交的 Online 恢复用例仍被使用，予以保留。
+2026-11-03 组合重构验收：全仓 `./scripts/dev.sh build`、`./scripts/dev.sh check` 通过；access 完整 race 启用真实进程验收，耗时约 33.0 秒，覆盖双接入、三客户端、地鼠/斗地主和真实 MySQL/AOF Redis 的原 ID 恢复；landlord race 约 12.2 秒，通过真实 Cluster 重连与阶段超时用例。子节点使用正常构建，不宣称子进程已运行 race。新增注册冲突、当前身份读取与清理、游戏进入互斥、游戏对象断线保留手牌和局末请求固定后不受后续游戏修改影响的用例；保留凑桌及旧登录清理隔离测试。旧分类文件已合并或按实际类型改名，协议编号、SQL 表结构和恢复承诺没有扩展。

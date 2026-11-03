@@ -10,7 +10,6 @@ import (
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
-	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
 // agent 独占当前连接身份和路由，不持有权威游戏状态或钱包。
@@ -18,13 +17,9 @@ type agent struct {
 	client             gate.ClientSession
 	protocolDispatcher *protocol.Dispatcher[gsr.CommandContext]
 	commandDispatcher  *gsr.Dispatcher
-	node               cluster.NodeID
-	name               cluster.ServiceName
-	userID             uint64
-	loginID            string
-	entryName          cluster.ServiceName
-	attackName         cluster.ServiceName
-	landlordRoom       cluster.ServiceName
+	session            agentSession
+	mole               moleAgent
+	landlord           landlordAgent
 }
 
 var (
@@ -34,27 +29,20 @@ var (
 
 func newAgent(client gate.ClientSession, registry *protocol.Registry) *agent {
 	agent := &agent{client: client}
-	agent.commandDispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		molePushCommand:      agent.handleMolePush,
-		agentReplacedCommand: agent.handleReplaced,
-		landlordPushCommand:  agent.handleLandlordPush,
-	})
-	agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, map[uint32]any{
-		uint32(demopb.MsgId_C2S_LANDLORD_CALL):      agent.onLandlordCall,
-		uint32(demopb.MsgId_C2S_LANDLORD_ROB):       agent.onLandlordRob,
-		uint32(demopb.MsgId_C2S_LANDLORD_ENTER):     agent.onLandlordEnter,
-		uint32(demopb.MsgId_C2S_LANDLORD_READY):     agent.onLandlordReady,
-		uint32(demopb.MsgId_C2S_LANDLORD_PLAY):      agent.onLandlordPlay,
-		uint32(demopb.MsgId_C2S_LANDLORD_SNAPSHOT):  agent.onLandlordSnapshot,
-		uint32(demopb.MsgId_C2S_LANDLORD_LEAVE):     agent.onLandlordLeave,
-		uint32(demopb.MsgId_C2S_LANDLORD_OPERATION): agent.onLandlordOperation,
-		uint32(demopb.MsgId_C2S_LOGIN):              agent.onLogin,
-		uint32(demopb.MsgId_C2S_ENTER):              agent.onEnter,
-		uint32(demopb.MsgId_C2S_HIT):                agent.onHit,
-		uint32(demopb.MsgId_C2S_SNAPSHOT):           agent.onSnapshot,
-		uint32(demopb.MsgId_C2S_LEAVE):              agent.onLeave,
-		uint32(demopb.MsgId_C2S_OPERATION):          agent.onOperation,
-	})
+	agent.mole = moleAgent{identity: agent.session.snapshot, allowEnter: agent.allowEnter}
+	agent.landlord = landlordAgent{identity: agent.session.snapshot, allowEnter: agent.allowEnter}
+	agent.commandDispatcher = gsr.MustDispatcher(mustMergeHandlers(
+		agent.commonCommandHandlers(),
+		agent.mole.commandHandlers(),
+		agent.landlord.commandHandlers(),
+	))
+	agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, client, mustMergeHandlers(
+		agent.commonProtocolHandlers(),
+		agent.mole.protocolHandlers(),
+		agent.landlord.protocolHandlers(),
+	))
+	agent.mole.push = agent.protocolDispatcher.Push
+	agent.landlord.push = agent.protocolDispatcher.Push
 	return agent
 }
 
@@ -63,8 +51,8 @@ func (agent *agent) OnStart(_ context.Context, self gsr.ServiceContext) error {
 	if err != nil {
 		return err
 	}
-	agent.name = cluster.ServiceName("agent-" + id)
-	return self.Node().RegisterService(agent.name, self.Self())
+	agent.session.name = cluster.ServiceName("agent-" + id)
+	return self.Node().RegisterService(agent.session.name, self.Self())
 }
 
 func (agent *agent) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
@@ -90,4 +78,18 @@ func connectionID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes[:]), nil
+}
+
+// allowEnter 由连接 owner 统一协调进入互斥，不在组件间保存彼此的指针。
+func (agent *agent) allowEnter(game string) error {
+	if err := agent.session.requireLogin(); err != nil {
+		return err
+	}
+	if game != "mole" && agent.mole.entered() {
+		return errEnterRequired
+	}
+	if game != "landlord" && agent.landlord.entered() {
+		return errEnterRequired
+	}
+	return nil
 }
