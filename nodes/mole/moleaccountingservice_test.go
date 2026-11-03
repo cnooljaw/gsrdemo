@@ -45,14 +45,14 @@ func TestMoleHandoffRetainsAcceptedOperationsOnBusy(t *testing.T) {
 		}
 	}
 	sink := &submissionSink{reject: true}
-	if err := service.flush(sink); !errors.Is(err, runtime.ErrMailboxFull) || len(service.lanes[0].buffer) != 2 || service.lanes[0].inFlightID != "" {
+	if err := service.flush(sink); !errors.Is(err, runtime.ErrMailboxFull) || len(service.buffer) != 2 || service.inFlightID != "" {
 		t.Fatalf("failed admission lost accepted operations: %v", err)
 	}
 	sink.reject = false
 	if err := service.flush(sink); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.flush(sink); err != nil || len(sink.batches) != 1 || len(service.lanes[0].buffer) != 0 {
+	if err := service.flush(sink); err != nil || len(sink.batches) != 1 || len(service.buffer) != 0 {
 		t.Fatalf("duplicate handoff: %v", err)
 	}
 	if len(sink.batches[0].Events) != 2 || sink.batches[0].Events[0].AttackName == sink.batches[0].Events[1].AttackName {
@@ -66,8 +66,8 @@ func TestMoleHandoffRetainsAcceptedOperationsOnBusy(t *testing.T) {
 
 func fundedAccounting(t *testing.T, amount int64) *moleAccountingService {
 	t.Helper()
-	service := newMoleAccountingService(1)
-	if err := service.handleInitPool(nil, molePool{}, 0, 0); err != nil {
+	service := newMoleAccountingService()
+	if err := service.handleInitPool(nil, molePool{}, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.handleSetBalance(nil, 7, silverBalance{Amount: amount, Version: 1}.snapshot()); err != nil {
@@ -76,16 +76,14 @@ func fundedAccounting(t *testing.T, amount int64) *moleAccountingService {
 	return service
 }
 
-// TestMolePendingLimitIsPerLane 保护一个通道积压到容量上限时，不占用其他通道的接纳额度。
-func TestMolePendingLimitIsPerLane(t *testing.T) {
-	service := newMoleAccountingService(moleSubmissionCount)
-	for lane := uint64(0); lane < moleSubmissionCount; lane++ {
-		if err := service.handleInitPool(nil, molePool{}, 0, lane); err != nil {
-			t.Fatal(err)
-		}
+// TestMolePendingLimitIsBounded 保护单提交链路积压有上限，拒绝不修改余额，回执释放容量后可继续接纳。
+func TestMolePendingLimitIsBounded(t *testing.T) {
+	service := newMoleAccountingService()
+	if err := service.handleInitPool(nil, molePool{}, 0); err != nil {
+		t.Fatal(err)
 	}
-	for _, userID := range []uint64{1, 2} {
-		if _, err := service.handleSetBalance(nil, userID, silverBalance{Amount: 1000000, Version: 1}.snapshot()); err != nil {
+	for _, uid := range []uint64{1, 2} {
+		if _, err := service.handleSetBalance(nil, uid, silverBalance{Amount: 1000000, Version: 1}.snapshot()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -94,14 +92,20 @@ func TestMolePendingLimitIsPerLane(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := service.accept(exampleHit("overflow", 1), false); !errors.Is(err, errMoleBusy) {
-		t.Fatalf("lane did not enforce capacity: %v", err)
+	for _, uid := range []uint64{1, 2} {
+		if _, err := service.accept(exampleHit("overflow", uid), false); !errors.Is(err, errMoleBusy) {
+			t.Fatalf("未执行总容量限制: %v", err)
+		}
 	}
-	if _, err := service.accept(exampleHit("other", 2), false); err != nil {
-		t.Fatalf("unrelated lane blocked: %v", err)
+	if accountAvailable(t, service, 2) != 1000000 {
+		t.Fatal("拒绝修改了无关用户余额")
 	}
-	if available := accountAvailable(t, service, 2); available != 999900 {
-		t.Fatalf("unrelated pending changed balance: %d", available)
+	service.applyReceipt(batchReceipt{BatchID: "batch-1", Results: []operationResult{{HitID: "full-0", Status: "committed", OriginBatch: "batch-1"}}, Balances: map[uint64]silverBalance{1: {Amount: 999900, Version: 2}}})
+	if _, err := service.accept(exampleHit("after-receipt", 2), false); err != nil {
+		t.Fatal(err)
+	}
+	if accountAvailable(t, service, 2) != 999900 {
+		t.Fatal("确认后未正确接纳新命中")
 	}
 }
 
@@ -141,7 +145,7 @@ func TestMemoryHitReturnsFullResultAndDoesNotSpendPendingCredit(t *testing.T) {
 
 // TestMemoryHitRequiresInitializationAndNeverReappliesUnknownRetry 保护未知余额及已淘汰结果的重试不重新扣款。
 func TestMemoryHitRequiresInitializationAndNeverReappliesUnknownRetry(t *testing.T) {
-	service := newMoleAccountingService(1)
+	service := newMoleAccountingService()
 	event := exampleHit("hit-1", 7)
 	if _, err := service.handleResumeBalance(nil, 7); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("uninitialized resume became a cache miss: %v", err)
@@ -180,8 +184,8 @@ func TestSettlementReconcilesProjectionWithoutDoubleSubtracting(t *testing.T) {
 	service.applyReceipt(receipt)
 	service.applyReceipt(receipt)
 	view, err := service.balanceView(7)
-	if err != nil || view["balance"] != int64(100) || view["available"] != int64(100) || service.lanes[0].pool.Hits != 1 {
-		t.Fatalf("double applied result: %v %+v %v", view, service.lanes[0].pool, err)
+	if err != nil || view["balance"] != int64(100) || view["available"] != int64(100) || service.pool.Hits != 1 {
+		t.Fatalf("double applied result: %v %+v %v", view, service.pool, err)
 	}
 	service.updateBalance(7, silverBalance{Amount: 999, Version: 1})
 	if accountAvailable(t, service, 7) != 100 {

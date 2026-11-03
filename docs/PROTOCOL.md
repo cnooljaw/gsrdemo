@@ -88,7 +88,7 @@ mole 已实现下述节点内接口；settlement 已实现通用银子结算接�
 
 | 入口 | 参数/作用 | 返回/通知 |
 | --- | --- | --- |
-| mole / 1 ResolveEntry | UserID uint64、LoginID/AccessNode/AgentName string；仅解析进入通道，不验证身份、不分配座位 | entry_name string，调用方不自行拼接名称 |
+| mole / 1 ResolveEntry | UserID uint64、LoginID/AccessNode/AgentName string；返回固定进入地址 mole-entry，不验证身份、不分配座位 | entry_name string，调用方不自行拼接名称 |
 | entry_name / 1 Enter | 同上；核对 Online、复用本地账，缓存缺失直接查询 Settlement，再请求目录预留、Join | attack_id/name、seat int64、members/targets/hits 列表、server_ms int64、silver 余额视图 |
 | entry_name / 3 GetOperation | UserID uint64、HitID string；地址通过 ResolveEntry 获取 | 只读查询 Settlement 原操作；缺失返回 nil，不与提交共用等待队列 |
 | AttackName / 2 Hit | UserID uint64、LoginID/ActionID string、SpawnSeq uint64、洞位 int64（0～8） | hit_id/action_id/status/debit/credit/spawn_seq/hole；正常 status=accepted，附 balance/available int64、revision uint64 |
@@ -98,11 +98,11 @@ mole 已实现下述节点内接口；settlement 已实现通用银子结算接�
 | mole-accounting / 2 GetOperation | UserID uint64、HitID string | 本地 accepted/committed/rejected 记录，缓存缺失返回 nil |
 | mole-accounting / 4 PoolSnapshot | 无参数 | hits/debit/credit/net int64，仅含唯一已入账操作；初始化未完成时报不可用 |
 | mole-accounting / 6 ResumeBalance | UserID uint64 | 复用本地余额视图并取消延迟回收；缓存缺失返回 nil，未初始化等错误仍返回错误 |
-| mole-submission / 11 State | 无参数 | lane uint64、ready/blocked bool；有在途批次时附 batch_id string、sequence uint64；不访问外部存储 |
+| mole-submission / 11 State | 无参数 | ready/blocked bool；有在途批次时附 batch_id string、sequence uint64；不访问外部存储 |
 
-余额视图字段：balance int64 为内存显示余额，confirmed_balance int64 为最近确认余额，available int64 为保守可用额，version uint64 为结算余额版本，revision uint64 为节点内存修订号。Enter 先用本地 Accounting / 6 ResumeBalance，只有明确的 nil 缓存缺失才直接查询 Settlement，再用本地 Accounting / 3 SetBalance 应用。SetBalance 在实际回调中检查用户是否有 pending：有则忽略快照对确认基线的更新，返回当前本地视图；无则按版本初始化/更新。不依据版本推测快照已经覆盖哪些 HitID。Accounting / 5 InitPool（pool molePool、sequence/lane uint64）仅用于本地初始化；Accounting / 14 StopLane 暂停指定通道，均不供客户端调用。
+余额视图字段：balance int64 为内存显示余额，confirmed_balance int64 为最近确认余额，available int64 为保守可用额，version uint64 为结算余额版本，revision uint64 为节点内存修订号。Enter 先用本地 Accounting / 6 ResumeBalance，只有明确的 nil 缓存缺失才直接查询 Settlement，再用本地 Accounting / 3 SetBalance 应用。SetBalance 在实际回调中检查用户是否有 pending：有则忽略快照对确认基线的更新，返回当前本地视图；无则按版本初始化/更新。不依据版本推测快照已经覆盖哪些 HitID。Accounting / 5 InitPool（pool molePool、sequence uint64）仅用于本地初始化；Accounting / 14 Pause 无参数，暂停新记账，均不供客户端调用。
 
-AttackName / 1 Join、10 Timer、11 BalanceCorrection，以及 mole / 10 Departed、11 BalanceCorrection、12 Reserve、13 DiscardGroup、14 Health 均为内部协调入口，客户端不得直接调用。Join/Departed 带成员实例标识，隔离同 LoginID 离开再进入后的旧清理。Accounting / 10 Hit 接收本地不可变 hitEvent 和 retry bool，返回 memoryHitResult 值快照；事件只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule，不含登录/连接地址。11 Timer、12 ForgetBalance、13 Settled（batchReceipt、lane uint64）、14 StopLane，以及 Submission / 1 Batch、10 Timer 也只用于本地协作，引用字段传独立快照。
+AttackName / 1 Join、10 Timer、11 BalanceCorrection，以及 mole / 10 Departed、11 BalanceCorrection、12 Reserve、13 DiscardGroup、14 Health 均为内部协调入口，客户端不得直接调用。Join/Departed 带成员实例标识，隔离同 LoginID 离开再进入后的旧清理。Accounting / 10 Hit 接收本地不可变 hitEvent 和 retry bool，返回 memoryHitResult 值快照；事件只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule，不含登录/连接地址。11 Timer、12 ForgetBalance、13 Settled（batchReceipt）、14 Pause，以及 Submission / 1 Batch、10 Timer 也只用于本地协作，引用字段传独立快照。
 
 正常链路：AttackService 校验并固定扣返 → 本地 Call Accounting 完成内存预检查/接纳 → 立即返回 accepted 和余额，同时完成目标。Accounting 跨组归批并 Send Submission，后者独立等待远端持久结算。accepted 不是 committed，正常客户端不需要等待第二个奖励结果。
 
@@ -116,7 +116,7 @@ ActionID 在当前 LoginID 内不复用；相同内容在有界请求记录保�
 
 mole 不访问 SQL。尚未保存到业务 Redis 的内存事件可因崩溃丢失；已保存批次重启后按原身份和内容恢复结算、统计，再开放进入。余额和原操作仍可向 settlement 查询。UI 先展示内存结果，后续采用余额校正，不产生反向财务操作。
 
-Mole 的进入通道固定 8 个；调用方应使用 ResolveEntry 返回的地址。一个慢进入只占住该通道，目录和其他通道继续处理。提交按通道保持一个在途批次和最多 4,096 项待确认额度。Submission 原 2/3 查询入口移除且不复用；临时错误原 ID 退避重试，确定性错误保留批次、暂停该通道；State 可用于定位故障，不是财务成功证明。PoolSnapshot 需要所有通道就绪，不把部分合计冒充全池统计；它不可用不影响已就绪通道的命中。
+Mole 使用一个 Entry；调用方仍使用 ResolveEntry 返回的地址。慢进入会使后续进入排队，目录和已有房间独立处理。唯一提交流程保持一个在途批次和全局最多 4,096 项待确认额度。Submission 原 2/3 查询入口移除且不复用；临时错误原 ID 退避重试，确定性错误保留批次、暂停 Accounting 新记账；State 可用于定位故障，不是财务成功证明。PoolSnapshot 在恢复完成后直接返回唯一确认统计，未就绪时报不可用。
 
 ### 通用银子结算接口
 
@@ -147,7 +147,7 @@ CommandID=5（原 Summary）已移除且不复用，返回 ErrUnknownCommand。
 
 稳定 Domain 错误：settlement.invalid_request、settlement.identity_conflict、settlement.wallet_not_found、settlement.store_unavailable。钱包必须显式初始化；缺失钱包拒绝请求且不自动创建/发银子。用户中心决定创建钱包和初始银子，Settlement 只执行初始化账务；Demo 的 -init-wallet 模拟该管理入口，不自动接入 login 注册。initialize(ctx, userID, amount) 与普通 settle(ctx, batch) 分开：确定性 OperationID=wallet-init-{UserID}，BatchID=init-加该 OperationID 的 SHA-256 十六进制；先查初始化凭据，再在同一事务创建零余额钱包、执行 initial_balance 分类的 wallet_init 操作、保存索引/明细/回执并提交。相同金额重试返回原回执，不重置当前余额；不同金额或已有钱包缺少初始化凭据返回冲突。唯一键竞争等 SQL 错误回滚，由调用方按原 ID 重试，不增加内部重试循环。wallet_init 不接受普通 RPC 提交。
 
-settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量阈值归批；棋牌可立即调用多人接口。mole 的各通道累计统计与最多一个待处理批次保存在业务 Redis，不调用结算汇总。固定 4 条提交通道按 UserID % 4 分配，通道 0 为 mole-submission，其余追加 -01～-03；每条序号只用于自己的业务检查点，不传给 Settlement；同一批次的 ID、内容和序号在重试时保持不变。只有 committed 且 origin_batch 等于当前 batch_id 的操作新增统计。Redis 统计和检查点更新成功后才向 Accounting 交付回执。mole 不访问 SQL；尚未保存到 Redis 的内存操作仍可丢失，已保存批次在重启时原样补交。余额、操作幂等索引和完整批次明细归 settlement，冷热归档和短 ID 尚待下一阶段实施。
+settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量阈值归批；棋牌可立即调用多人接口。mole 的累计统计与最多一个待处理批次保存在单个业务 Redis 检查点，不调用结算汇总。唯一提交地址为 mole-submission；序号只用于本地业务检查点，不传给 Settlement；同一批次的 ID、内容和序号在重试时保持不变。只有 committed 且 origin_batch 等于当前 batch_id 的操作新增统计。Redis 统计和检查点更新成功后才向 Accounting 交付回执。mole 不访问 SQL；尚未保存到 Redis 的内存操作仍可丢失，已保存批次在重启时原样补交。余额、操作幂等索引和完整批次明细归 settlement，冷热归档和短 ID 尚待下一阶段实施。
 
 结算写/读入口只接受各自命令；内部命令 9 仅供本地监督 Service 的非阻塞存活检查。每入口 Mailbox=4，满时返回 runtime.mailbox_full，仍按原身份退避重试，不能换 ID 重做。6 个入口最多保留 30 个执行/排队 Call，低于 GSR v1.0.2 每入站连接 32 个并发名额，避免慢入口占满同连接。进程内监督 Service 不持有钱包，只在执行 Service 已退出后重新发布同名实例，不自动重放请求。Call 超时仍不证明事务未执行。
 

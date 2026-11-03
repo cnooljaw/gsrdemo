@@ -52,3 +52,37 @@ func TestAttackExpiredInstanceCannotHitReplacement(t *testing.T) {
 		t.Fatalf("late result changed new target: %+v", game.targets[0])
 	}
 }
+
+// TestAttackAcceptAndSnapshotOwnState 保护确认结果由游戏对象校验，快照修改不会改写目标或命中记录。
+func TestAttackAcceptAndSnapshotOwnState(t *testing.T) {
+	game := newAttackGame("attack-test")
+	now := time.Unix(100, 0)
+	game.spawn(now)
+	record, _, err := game.hit(now, 7, "login", "action", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := memoryHitResult{Event: record.Result.Event, Balance: 900, Available: 900, Revision: 2}
+	wrong := result
+	wrong.Event.HitID = "different"
+	if err := game.acceptHit(record, wrong, now); !errors.Is(err, errMoleOperationUnknown) || record.Status != "pending" {
+		t.Fatalf("错误确认改变记录: %v", err)
+	}
+	if err := game.acceptHit(record, result, now); err != nil {
+		t.Fatal(err)
+	}
+	if record.Status != "accepted" || record.Result != result {
+		t.Fatal("确认未保存完整结果")
+	}
+	snapshot := game.view(now, 7)
+	targets := snapshot["targets"].([]any)
+	targets[0].(map[string]any)["spawn_seq"] = uint64(999)
+	hits := snapshot["hits"].([]any)
+	hits[0].(map[string]any)["status"] = "rejected"
+	if game.targets[0].Sequence != 1 || record.Status != "accepted" {
+		t.Fatal("快照暴露可变状态")
+	}
+	if len(game.view(now, 8)["hits"].([]any)) != 0 {
+		t.Fatal("其他用户读到了私人命中记录")
+	}
+}

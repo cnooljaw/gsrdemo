@@ -67,9 +67,10 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 		name    cluster.ServiceName
 		service gsr.Service
 	}{
-		{moleAccountingName, newMoleAccountingService(moleSubmissionCount)},
-
+		{moleAccountingName, newMoleAccountingService()},
 		{moleServiceName, root},
+		{moleEntryName, newMoleEntryService()},
+		{moleSubmissionName, newMoleSubmissionService(service.checkpoint)},
 	} {
 		id, err := self.CreateService(ctx, child.service)
 		if err != nil {
@@ -79,18 +80,6 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 			return err
 		}
 	}
-	for lane := 0; lane < moleSubmissionCount; lane++ {
-		id, err := self.CreateService(ctx, newMoleSubmissionService(service.checkpoint.forLane(lane), uint64(lane)))
-		if err != nil {
-			return err
-		}
-		if err := self.Node().RegisterService(submissionName(lane), id); err != nil {
-			return err
-		}
-	}
-	if err := createMoleEntries(ctx, self); err != nil {
-		return err
-	}
 	if err := self.Node().OpenCluster("mole"); err != nil {
 		return err
 	}
@@ -98,8 +87,8 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 	return nil
 }
 
-// TestMoleSlowJoinDoesNotBlockOtherEntryOrDirectory 保护一个慢组的 Join 不占住目录和另一个进入通道。
-func TestMoleSlowJoinDoesNotBlockOtherEntryOrDirectory(t *testing.T) {
+// TestMoleSlowJoinDoesNotBlockDirectoryOrRooms 保护单入口的慢 Join 有限等待，不占住目录和已进入房间。
+func TestMoleSlowJoinDoesNotBlockDirectoryOrRooms(t *testing.T) {
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: newSettlementFixture()})
 	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
@@ -131,12 +120,15 @@ func TestMoleSlowJoinDoesNotBlockOtherEntryOrDirectory(t *testing.T) {
 		t.Fatal("slow Join did not start")
 	}
 	begin := time.Now()
-	value, err := callMoleEnter(t, routes, uint64(5), "login", "access-01", "agent")
-	if err != nil || value.(map[string]any)["attack_name"] != "attack-b-other" {
-		t.Fatalf("other entry: %v %v", value, err)
+	value, err := moleRPC(t, routes, "mole", moleServiceName, moleResolveEntryCommand, uint64(5), "login", "access-01", "agent")
+	if err != nil || value.(map[string]any)["entry_name"] != moleEntryName {
+		t.Fatalf("目录等待慢 Join: %v %v", value, err)
+	}
+	if _, err := moleRPC(t, routes, "mole", "attack-b-other", attackSnapshotCommand, uint64(4), "seeded"); err != nil {
+		t.Fatal(err)
 	}
 	if elapsed := time.Since(begin); elapsed > 300*time.Millisecond {
-		t.Errorf("unrelated entry waited for slow Join: %v", elapsed)
+		t.Errorf("目录或房间等待慢 Join: %v", elapsed)
 	}
 	if err := <-done; !errors.Is(err, runtime.ErrCallTimeout) {
 		t.Fatalf("slow Join: %v", err)

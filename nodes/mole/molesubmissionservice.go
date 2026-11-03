@@ -15,7 +15,6 @@ import (
 
 const (
 	moleSubmissionName                           = "mole-submission"
-	moleSubmissionCount                          = 4
 	submissionBatchCommand     runtime.CommandID = 1
 	submissionTickCommand      runtime.CommandID = 10
 	submissionStateCommand     runtime.CommandID = 11
@@ -28,7 +27,6 @@ const (
 // moleSubmissionService 独占 Redis 检查点和结算调用；只推进一个在途批次，不持有钱包。
 type moleSubmissionService struct {
 	store      moleCheckpoint
-	lane       uint64
 	batch      *moleBatch
 	receipt    *batchReceipt
 	ready      bool
@@ -40,8 +38,8 @@ type moleSubmissionService struct {
 
 var _ gsr.Service = (*moleSubmissionService)(nil)
 
-func newMoleSubmissionService(store moleCheckpoint, lane uint64) *moleSubmissionService {
-	service := &moleSubmissionService{store: store, lane: lane}
+func newMoleSubmissionService(store moleCheckpoint) *moleSubmissionService {
+	service := &moleSubmissionService{store: store}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		submissionBatchCommand: service.handleSubmit,
 		submissionTickCommand:  service.handleTick,
@@ -51,7 +49,7 @@ func newMoleSubmissionService(store moleCheckpoint, lane uint64) *moleSubmission
 }
 
 func (service *moleSubmissionService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	_, err := self.CreateService(ctx, &molePulse{target: self.Self(), command: submissionTickCommand, period: accountingPeriod, failedLane: int(service.lane)})
+	_, err := self.CreateService(ctx, &molePulse{target: self.Self(), command: submissionTickCommand, period: accountingPeriod, pauseAccounting: true})
 	return err
 }
 
@@ -89,7 +87,7 @@ func (service *moleSubmissionService) handleSubmit(self gsr.CommandContext, batc
 func (service *moleSubmissionService) handleTick(self gsr.CommandContext) error {
 	if service.fault != nil {
 		// 通知满队列时下次继续，原始批次和 Redis 记录始终保留。
-		return self.SendName(moleAccountingName, accountingStopLaneCommand, service.lane)
+		return self.SendName(moleAccountingName, accountingPauseCommand)
 	}
 	if time.Now().Before(service.retryAt) {
 		return nil
@@ -107,17 +105,17 @@ func (service *moleSubmissionService) failed(self gsr.ServiceContext, err error)
 	var status *runtime.StatusError
 	if errors.As(err, &status) && (status.Class == runtime.ErrorClassDomain && status.Code != "settlement.store_unavailable" && status.Code != "mole.accounting_unavailable") {
 		service.fault = err
-		_ = self.SendName(moleAccountingName, accountingStopLaneCommand, service.lane)
-		logMoleError(self, "当前结算通道暂停，保留原批次，修复后重启恢复", err)
+		_ = self.SendName(moleAccountingName, accountingPauseCommand)
+		logMoleError(self, "结算提交暂停，保留原批次，修复后重启恢复", err)
 		return
 	}
 	service.retryDelay = min(max(service.retryDelay*2, accountingPeriod), 2*time.Second)
 	service.retryAt = time.Now().Add(service.retryDelay)
-	logMoleError(self, "当前结算通道等待原批次重试", err)
+	logMoleError(self, "结算提交等待原批次重试", err)
 }
 
 func (service *moleSubmissionService) handleState(_ gsr.CommandContext) (map[string]any, error) {
-	view := map[string]any{"lane": service.lane, "ready": service.ready && service.fault == nil, "blocked": service.fault != nil}
+	view := map[string]any{"ready": service.ready && service.fault == nil, "blocked": service.fault != nil}
 	if service.batch != nil {
 		view["batch_id"], view["sequence"] = service.batch.ID, service.batch.Sequence
 	}
@@ -132,9 +130,6 @@ func (service *moleSubmissionService) advance(self gsr.ServiceContext) error {
 		if err != nil {
 			return err
 		}
-		if state.Routing != moleSubmissionCount {
-			return fmt.Errorf("%w: checkpoint routing requires explicit -init-accounting", errInvalidMoleInput)
-		}
 		// 恢复完 Redis 中的旧批次后才开放 Accounting，避免重用序号或读到未确认基线。
 		service.batch, service.receipt = nil, nil
 		if state.Pending != nil {
@@ -146,7 +141,7 @@ func (service *moleSubmissionService) advance(self gsr.ServiceContext) error {
 			}
 			service.batch, service.receipt = nil, nil
 		}
-		if err := self.SendName(moleAccountingName, accountingInitPoolCommand, state.Pool, state.Sequence, service.lane); err != nil {
+		if err := self.SendName(moleAccountingName, accountingInitPoolCommand, state.Pool, state.Sequence); err != nil {
 			return err
 		}
 		service.ready = true
@@ -157,7 +152,7 @@ func (service *moleSubmissionService) advance(self gsr.ServiceContext) error {
 	if _, err := service.settlePending(self); err != nil {
 		return err
 	}
-	if err := self.SendName(moleAccountingName, accountingSettledCommand, service.receipt.clone(), service.lane); err != nil {
+	if err := self.SendName(moleAccountingName, accountingSettledCommand, service.receipt.clone()); err != nil {
 		return err
 	}
 	service.batch, service.receipt = nil, nil
@@ -203,11 +198,4 @@ func callSettlement(self gsr.ServiceContext, command runtime.CommandID, args ...
 		name = routing.ReadService(key)
 	}
 	return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
-}
-
-func submissionName(lane int) cluster.ServiceName {
-	if lane == 0 {
-		return moleSubmissionName
-	}
-	return cluster.ServiceName(fmt.Sprintf("mole-submission-%02d", lane))
 }

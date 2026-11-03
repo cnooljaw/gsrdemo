@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
@@ -11,25 +10,20 @@ import (
 )
 
 const (
-	moleEntryCount                         = 8
+	moleEntryName                          = "mole-entry"
 	moleEnterCommand     runtime.CommandID = 1
 	moleOperationCommand runtime.CommandID = 3
 )
 
-// moleEntryService 仅协调进入，不拥有目录、余额或房间状态。慢请求限制在一个进入通道。
+// moleEntryService 协调低频进入与结果查询，不拥有目录、余额或房间状态。
 type moleEntryService struct {
-	lane       uint64
 	dispatcher *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*moleEntryService)(nil)
 
-func moleEntryName(userID uint64) string {
-	return fmt.Sprintf("mole-entry-%02d", userID%moleEntryCount)
-}
-
-func newMoleEntryService(lane uint64) *moleEntryService {
-	service := &moleEntryService{lane: lane}
+func newMoleEntryService() *moleEntryService {
+	service := &moleEntryService{}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		moleEnterCommand:     service.handleEnter,
 		moleOperationCommand: service.handleOperation,
@@ -44,7 +38,7 @@ func (service *moleEntryService) Handle(self gsr.CommandContext, command runtime
 }
 
 func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (map[string]any, error) {
-	if !validMember(userID, loginID, accessNode, agentName) || userID%moleEntryCount != service.lane {
+	if !validMember(userID, loginID, accessNode, agentName) {
 		return nil, errInvalidMoleInput
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
@@ -123,7 +117,7 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 
 // operation 的只读远端等待只占用进入通道，不与归批提交共享 Mailbox。
 func (service *moleEntryService) handleOperation(self gsr.CommandContext, userID uint64, hitID string) (any, error) {
-	if userID == 0 || userID%moleEntryCount != service.lane || !validMoleIdentifier(hitID) {
+	if userID == 0 || !validMoleIdentifier(hitID) {
 		return nil, errInvalidMoleInput
 	}
 	return callSettlement(self, settlementOperationCommand, userID, hitID)

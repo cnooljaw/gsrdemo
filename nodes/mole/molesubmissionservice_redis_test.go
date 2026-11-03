@@ -63,54 +63,36 @@ func startMoleRedis(t *testing.T) *redis.Client {
 func testMoleCheckpoint(t *testing.T) moleCheckpoint {
 	t.Helper()
 	store := moleCheckpoint{client: startMoleRedis(t), key: "test:mole"}
-	if err := store.initializeLanes(context.Background()); err != nil {
+	if err := store.initialize(context.Background(), molePool{}); err != nil {
 		t.Fatal(err)
 	}
 	return store
 }
 
-// TestMoleLaneInitializationPreservesLegacyState 保护旧统计不重置，旧在途批次必须先结清，才能明确迁移到固定通道。
-func TestMoleLaneInitializationPreservesLegacyState(t *testing.T) {
-	store := moleCheckpoint{client: startMoleRedis(t), key: "legacy"}
+// TestMoleCheckpointRequiresCurrentFormat 保护旧多通道格式不会被误当作新统计，显式初始化也不覆盖有效检查点。
+func TestMoleCheckpointRequiresCurrentFormat(t *testing.T) {
+	store := testMoleCheckpoint(t)
 	ctx := context.Background()
-	old := moleCheckpointState{Version: 1, Pool: molePool{Hits: 10, Debit: 1000, Credit: 1980}, Sequence: 3, LastBatchID: "batch-3",
-		Pending: &moleBatch{ID: "batch-4", Sequence: 4, Events: []hitEvent{exampleHit("old", 1)}}}
-	encoded, err := json.Marshal(old)
+	original := moleCheckpointState{Version: 2, Pool: molePool{Hits: 10, Debit: 1000, Credit: 1980}, Sequence: 3, LastBatchID: "batch-3"}
+	encoded, err := json.Marshal(original)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.client.Set(ctx, store.key, encoded, 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.initializeLanes(ctx); err == nil {
-		t.Fatal("migrated while legacy batch was pending")
+	if err := store.initialize(ctx, molePool{}); err != nil {
+		t.Fatal(err)
 	}
 	state, err := store.load(ctx)
-	if err != nil || !reflect.DeepEqual(state, old) {
-		t.Fatal("failed migration changed old accounting")
+	if err != nil || !reflect.DeepEqual(state, original) {
+		t.Fatalf("初始化覆盖已有统计: %+v %v", state, err)
 	}
-	if count, err := store.client.Exists(ctx, store.forLane(1).key).Result(); err != nil || count != 0 {
-		t.Fatal("opened new lane before legacy recovery")
-	}
-	// 模拟旧版已结清并保存检查点；迁移只增加路由元数据。
-	old.Pending = nil
-	encoded, _ = json.Marshal(old)
-	if err := store.client.Set(ctx, store.key, encoded, 0).Err(); err != nil {
+	if err := store.client.Set(ctx, store.key, `{"version":1,"routing":4,"pool":{}}`, 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.initializeLanes(ctx); err != nil {
-		t.Fatal(err)
-	}
-	state, err = store.load(ctx)
-	old.Routing = moleSubmissionCount
-	if err != nil || !reflect.DeepEqual(state, old) {
-		t.Fatalf("migration reset statistics or sequence: %+v %v", state, err)
-	}
-	for lane := 1; lane < moleSubmissionCount; lane++ {
-		state, err := store.forLane(lane).load(ctx)
-		if err != nil || state.Routing != moleSubmissionCount || state.Pool.Hits != 0 {
-			t.Fatalf("new lane not initialized: %+v %v", state, err)
-		}
+	if _, err := store.load(ctx); !errors.Is(err, errInvalidMoleInput) {
+		t.Fatalf("未拒绝旧检查点: %v", err)
 	}
 }
 
@@ -176,14 +158,13 @@ func TestMoleCheckpointAppliesOnlyFreshCommittedResults(t *testing.T) {
 func TestMoleCheckpointFailurePreservesPending(t *testing.T) {
 	store := testMoleCheckpoint(t)
 	ctx := context.Background()
-	state := moleCheckpointState{Version: 1, Pool: molePool{Hits: math.MaxInt64}}
 	if err := store.client.Del(ctx, store.key).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.load(ctx); err == nil {
 		t.Fatal("missing checkpoint treated as zero")
 	}
-	if err := store.initialize(ctx, state.Pool); err != nil {
+	if err := store.initialize(ctx, molePool{Hits: math.MaxInt64}); err != nil {
 		t.Fatal(err)
 	}
 	batch := moleBatch{ID: "batch-1", Sequence: 1, Events: []hitEvent{exampleHit("hit-1", 1)}}

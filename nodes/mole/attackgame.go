@@ -119,6 +119,34 @@ func (game *attackGame) finish(record *hitRecord, status string, now time.Time) 
 	}
 }
 
+// acceptHit 校验同一命中事实并保存完整内存结果，Service 不直接修改请求记录。
+func (game *attackGame) acceptHit(record *hitRecord, result memoryHitResult, now time.Time) error {
+	if result.Event != record.Result.Event {
+		return errMoleOperationUnknown
+	}
+	if record.Status == "pending" {
+		record.Result = result
+		game.finish(record, "accepted", now)
+	}
+	return nil
+}
+
+// view 只返回本用户可见的独立玩法快照，连接成员由 Service 补充。
+func (game *attackGame) view(now time.Time, userID uint64) map[string]any {
+	targets, hits := make([]any, 0), make([]any, 0)
+	for hole, target := range game.targets {
+		if target.Sequence != 0 && now.Before(target.Deadline) {
+			targets = append(targets, map[string]any{"hole": int64(hole), "spawn_seq": target.Sequence, "deadline_ms": target.Deadline.UnixMilli(), "claimed": target.Claim != ""})
+		}
+	}
+	for _, record := range game.requests {
+		if record.Result.Event.UserID == userID {
+			hits = append(hits, record.Result.Event.snapshot(record.Status))
+		}
+	}
+	return map[string]any{"attack_id": game.name, "attack_name": game.name, "server_ms": now.UnixMilli(), "targets": targets, "hits": hits}
+}
+
 func (event hitEvent) snapshot(status string) map[string]any {
 	return map[string]any{
 		"hit_id": event.HitID, "action_id": event.ActionID, "status": status,

@@ -13,17 +13,17 @@ import (
 // molePulse 仅接收自己的 Timer，不发布名称、不执行业务或 I/O。
 // 目标 Mailbox 满时丢弃本次唤醒，下一次仍会尝试，避免 owner 自续约链断裂。
 type molePulse struct {
-	target     runtime.ServiceID
-	command    runtime.CommandID
-	period     time.Duration
-	failedLane int
-	onStopped  func(error)
+	target          runtime.ServiceID
+	command         runtime.CommandID
+	period          time.Duration
+	pauseAccounting bool
+	onStopped       func(error)
 }
 
 var _ gsr.Service = (*molePulse)(nil)
 
 func startMolePulse(ctx context.Context, self gsr.ServiceContext, period time.Duration, command runtime.CommandID, onStopped func(error)) error {
-	_, err := self.CreateService(ctx, &molePulse{target: self.Self(), command: command, period: period, failedLane: -1, onStopped: onStopped})
+	_, err := self.CreateService(ctx, &molePulse{target: self.Self(), command: command, period: period, onStopped: onStopped})
 	return err
 }
 
@@ -42,8 +42,8 @@ func (service *molePulse) Handle(self gsr.CommandContext, command runtime.Comman
 	}
 	err := self.Send(service.target, service.command)
 	if errors.Is(err, runtime.ErrServiceNotFound) || errors.Is(err, runtime.ErrServiceClosed) || errors.Is(err, runtime.ErrServiceStopping) {
-		if service.failedLane >= 0 {
-			if notifyErr := self.SendName(moleAccountingName, accountingStopLaneCommand, uint64(service.failedLane)); notifyErr != nil {
+		if service.pauseAccounting {
+			if notifyErr := self.SendName(moleAccountingName, accountingPauseCommand); notifyErr != nil {
 				return nil, notifyErr
 			}
 		}

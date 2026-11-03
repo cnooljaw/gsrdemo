@@ -86,7 +86,7 @@ func run() (result error) {
 	if *initialize {
 		wait, stop := context.WithTimeout(ctx, moleCallTimeout)
 		defer stop()
-		return checkpoint.initializeLanes(wait)
+		return checkpoint.initialize(wait, molePool{})
 	}
 
 	nodes := make(map[cluster.NodeID]string, len(config.Node.Nodes))

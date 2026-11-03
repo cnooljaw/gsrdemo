@@ -57,7 +57,7 @@ chmod 600 configs/login-01.local.yaml configs/settlement-01.local.yaml configs/m
 | --- | --- |
 | `configs/login-01.local.yaml` | `mysql_dsn: "gsr_demo:本机密码@tcp(127.0.0.1:3306)/gsrdemo_login"` |
 | `configs/settlement-01.local.yaml` | `mysql_dsn: "gsr_demo:本机密码@tcp(127.0.0.1:3306)/gsrdemo_settlement"` |
-| `configs/mole-01.local.yaml` | `redis_url` 默认 `redis://127.0.0.1:6379/0`；`redis_key` 默认 `gsrdemo:mole:accounting` |
+| `configs/mole-01.local.yaml` | `redis_url` 默认 `redis://127.0.0.1:6379/0`；`redis_key` 默认 `gsrdemo:mole:accounting:v2` |
 
 `.local.yaml` 不提交到 Git。节点地址统一在 [configs/nodes.yaml](configs/nodes.yaml)，相对文件路径以配置文件所在目录为基准。
 
@@ -85,13 +85,13 @@ unset demo_password
 
 ### 4. 初始化地鼠检查点（仅地鼠需要）
 
-MySQL、Redis 可用后，在 mole 尚未启动时执行：
+MySQL、Redis 可用后，在 mole 尚未启动时执行。已有本地配置请将 `redis_key` 更新为 `gsrdemo:mole:accounting:v2`；本版使用单提交链路，不迁移旧多通道 Redis 演示数据。
 
 ```shell
 ./bin/mole -config configs/mole-01.local.yaml -init-accounting
 ```
 
-该命令为新演示创建零统计检查点，不重置已有统计。以后重启沿用同一 Redis 数据和 key，无需重复初始化。斗地主跳过此步骤，使用 `configs/landlord-01.yaml` 中的独立 `redis_key`，不需要新增 SQL 表。
+该命令创建版本 2 的零统计检查点，重复执行不重置同一 key 中已有的新统计。以后重启沿用同一 Redis 数据和 key，无需重复初始化。斗地主跳过此步骤，使用 `configs/landlord-01.yaml` 中的独立 `redis_key`，不需要新增 SQL 表。
 
 ### 5. 按顺序启动服务节点
 

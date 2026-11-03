@@ -136,8 +136,8 @@ func (service *settlementFixture) handleSubmit(_ gsr.CommandContext, request map
 	return receipt, nil
 }
 
-// TestMolePoisonBatchOnlyPausesItsLane 保护永久错误保留原批次并暂停本通道，无关通道仍可持久入账。
-func TestMolePoisonBatchOnlyPausesItsLane(t *testing.T) {
+// TestMolePoisonBatchPausesSubmission 保护永久错误保留原批次并停止新记账，不持续冲击结算节点。
+func TestMolePoisonBatchPausesSubmission(t *testing.T) {
 	fixture := newSettlementFixture()
 	fixture.rejectUser = 1
 	routes, _ := prepareMoleCluster(t, fixture)
@@ -148,22 +148,26 @@ func TestMolePoisonBatchOnlyPausesItsLane(t *testing.T) {
 	bad := testHitTarget(t, routes, first, 1, "login-1", "bad")
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		value, err := moleRPC(t, routes, "mole", string(submissionName(1)), submissionStateCommand)
+		value, err := moleRPC(t, routes, "mole", moleSubmissionName, submissionStateCommand)
 		if err == nil && value.(map[string]any)["blocked"] == true {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("poison lane did not pause: %v %v", value, err)
+			t.Fatalf("submission did not pause: %v %v", value, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	good := testHitTarget(t, routes, other, 4, "login-4", "good")
-	waitMoleOperation(t, routes, 4, good["hit_id"].(string), "committed")
+	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
+		t.Fatalf("提交暂停仍接纳新记账: %v", err)
+	}
+	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), attackSnapshotCommand, uint64(4), "login-4"); err != nil {
+		t.Fatal("提交暂停阻塞了房间快照", err)
+	}
 	value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, uint64(1), bad["hit_id"])
 	if err != nil || value.(map[string]any)["status"] != "accepted" {
 		t.Fatalf("unknown result was discarded: %v %v", value, err)
 	}
-	state, err := fixture.checkpoint.forLane(1).load(context.Background())
+	state, err := fixture.checkpoint.load(context.Background())
 	if err != nil || state.Pending == nil || state.Pending.Events[0].HitID != bad["hit_id"] {
 		t.Fatalf("poison batch lost: %+v %v", state, err)
 	}
@@ -175,8 +179,8 @@ func TestMolePoisonBatchOnlyPausesItsLane(t *testing.T) {
 	}
 }
 
-// TestMoleSubmissionPanicOnlyStopsItsLane 保护提交 Service panic 后暂停其通道，其他组仍能完成财务确认。
-func TestMoleSubmissionPanicOnlyStopsItsLane(t *testing.T) {
+// TestMoleSubmissionPanicPausesAccounting 保护唯一提交 Service 退出后明确暂停记账，房间快照仍可查询。
+func TestMoleSubmissionPanicPausesAccounting(t *testing.T) {
 	fixture := newSettlementFixture()
 	routes, _ := prepareMoleCluster(t, fixture)
 	first := enterMoleTestUser(t, routes, 1, "login-1", "access-01")
@@ -184,7 +188,7 @@ func TestMoleSubmissionPanicOnlyStopsItsLane(t *testing.T) {
 	_ = enterMoleTestUser(t, routes, 3, "login-3", "access-01")
 	other := enterMoleTestUser(t, routes, 4, "login-4", "access-02")
 	var enabled atomic.Bool
-	fixture.checkpoint.client.AddHook(moleRedisFaultHook{panicKey: fixture.checkpoint.forLane(1).key, panicEnabled: &enabled})
+	fixture.checkpoint.client.AddHook(moleRedisFaultHook{panicKey: fixture.checkpoint.key, panicEnabled: &enabled})
 	enabled.Store(true)
 	_ = testHitTarget(t, routes, first, 1, "login-1", "panic")
 	deadline := time.Now().Add(2 * time.Second)
@@ -194,32 +198,49 @@ func TestMoleSubmissionPanicOnlyStopsItsLane(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("dead submission did not pause its lane")
+			t.Fatal("dead submission did not pause accounting")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	hit := testHitTarget(t, routes, other, 4, "login-4", "healthy")
-	waitMoleOperation(t, routes, 4, hit["hit_id"].(string), "committed")
+	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
+		t.Fatalf("提交退出后仍显示账务可用: %v", err)
+	}
+	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), attackSnapshotCommand, uint64(4), "login-4"); err != nil {
+		t.Fatal(err)
+	}
 }
 
-// TestMoleDamagedCheckpointOnlyBlocksItsLane 保护一个检查点损坏时不当作零统计，也不阻止其他通道恢复与入账。
-func TestMoleDamagedCheckpointOnlyBlocksItsLane(t *testing.T) {
+// TestMoleDamagedCheckpointBlocksAccounting 保护损坏检查点不被当作零统计，单提交链路明确拒绝进入且不覆盖损坏内容。
+func TestMoleDamagedCheckpointBlocksAccounting(t *testing.T) {
 	fixture := newSettlementFixture()
 	fixture.checkpoint = testMoleCheckpoint(t)
-	broken := fixture.checkpoint.forLane(1)
+	broken := fixture.checkpoint
 	if err := broken.client.Set(context.Background(), broken.key, "broken", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 	routes, _ := prepareMoleCluster(t, fixture)
-	snapshot := enterMoleTestUser(t, routes, 4, "login-4", "access-02")
-	hit := testHitTarget(t, routes, snapshot, 4, "login-4", "healthy")
-	waitMoleOperation(t, routes, 4, hit["hit_id"].(string), "committed")
-	value, err := moleRPC(t, routes, "mole", string(submissionName(1)), submissionStateCommand)
-	if err != nil || value.(map[string]any)["blocked"] != true {
-		t.Fatalf("damaged lane not visible: %v %v", value, err)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		value, err := moleRPC(t, routes, "mole", moleSubmissionName, submissionStateCommand)
+		if err == nil && value.(map[string]any)["blocked"] == true {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("检查点损坏未显示暂停: %v %v", value, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand); !errors.Is(err, errAccountingUnavailable) {
+		t.Fatalf("损坏检查点被当作可用统计: %v", err)
+	}
+	if _, err := moleRPC(t, routes, "online", "online", 1, uint64(4), "login-4", "access-02", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callMoleEnter(t, routes, uint64(4), "login-4", "access-02", "agent"); !errors.Is(err, errAccountingUnavailable) {
+		t.Fatalf("损坏检查点未明确拒绝进入: %v", err)
 	}
 	if raw, err := broken.client.Get(context.Background(), broken.key).Result(); err != nil || raw != "broken" {
-		t.Fatal("damaged state was overwritten")
+		t.Fatal("损坏状态被覆盖")
 	}
 }
 
@@ -639,7 +660,7 @@ func TestMoleRestartReloadsSettlementState(t *testing.T) {
 		t.Fatal("batch was not received by settlement")
 	}
 	stop()
-	state, err := fixture.checkpoint.forLane(1).load(context.Background())
+	state, err := fixture.checkpoint.load(context.Background())
 	if err != nil || state.Pending == nil || state.Sequence != 0 {
 		t.Fatalf("lost reply was not recoverable: %+v %v", state, err)
 	}
@@ -653,7 +674,7 @@ func TestMoleRestartReloadsSettlementState(t *testing.T) {
 	if reconnected["silver"].(map[string]any)["balance"] != want {
 		t.Fatal("restart did not reload settlement balance")
 	}
-	value, err := moleRPC(t, routes, "mole", moleEntryName(1), moleOperationCommand, uint64(1), hit["hit_id"])
+	value, err := moleRPC(t, routes, "mole", moleEntryName, moleOperationCommand, uint64(1), hit["hit_id"])
 	if err != nil || value == nil || value.(map[string]any)["status"] != "committed" {
 		t.Fatalf("durable operation was not queryable: %v %v", value, err)
 	}
@@ -957,7 +978,7 @@ func TestMoleRedisFailureStopsSQLUntilCheckpointSaved(t *testing.T) {
 	}
 	unavailable.Store(false)
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
-	state, err := fixture.checkpoint.forLane(1).load(context.Background())
+	state, err := fixture.checkpoint.load(context.Background())
 	if err != nil || state.Pool.Hits != 1 || state.Pending != nil {
 		t.Fatalf("recovery missed accounting: %+v %v", state, err)
 	}
@@ -974,7 +995,7 @@ func TestMoleMissingCheckpointNeedsExplicitInitialization(t *testing.T) {
 	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("missing checkpoint initialized zero pool: %v", err)
 	}
-	if err := fixture.checkpoint.initializeLanes(context.Background()); err != nil {
+	if err := fixture.checkpoint.initialize(context.Background(), molePool{}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")

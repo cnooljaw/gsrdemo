@@ -81,7 +81,7 @@ func (service *moleService) handleEntryAddress(_ gsr.CommandContext, userID uint
 	if !validMember(userID, loginID, accessNode, agentName) {
 		return nil, errInvalidMoleInput
 	}
-	return map[string]any{"entry_name": moleEntryName(userID)}, nil
+	return map[string]any{"entry_name": moleEntryName}, nil
 }
 
 // reserve 在 Join 前保留座位；未知结果的重试始终回到原组。

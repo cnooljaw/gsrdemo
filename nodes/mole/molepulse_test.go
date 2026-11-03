@@ -87,9 +87,9 @@ func TestMoleTicksSurviveFullMailbox(t *testing.T) {
 			var command runtime.CommandID
 			switch name {
 			case "accounting":
-				inner, command = newMoleAccountingService(1), accountingTickCommand
+				inner, command = newMoleAccountingService(), accountingTickCommand
 			case "submission":
-				inner, command = newMoleSubmissionService(testMoleCheckpoint(t), 0), submissionTickCommand
+				inner, command = newMoleSubmissionService(testMoleCheckpoint(t)), submissionTickCommand
 			case "attack":
 				inner, command = newAttackService("attack-timer"), attackTickCommand
 			}
@@ -179,7 +179,7 @@ func TestMoleEssentialOwnerPanicStopsHost(t *testing.T) {
 			defer fail(nil)
 			var owner gsr.Service
 			if name == "accounting" {
-				service := newMoleAccountingService(1)
+				service := newMoleAccountingService()
 				service.onStopped = fail
 				owner = service
 			} else {

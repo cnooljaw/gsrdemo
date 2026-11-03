@@ -132,11 +132,12 @@ func (service *attackService) handleHit(self gsr.CommandContext, userID uint64, 
 		return nil, err
 	}
 	reply, ok := value.(memoryHitResult)
-	if !ok || reply.Event != event {
+	if !ok {
 		return nil, errMoleOperationUnknown
 	}
-	record.Result = reply
-	service.game.finish(record, "accepted", time.Now())
+	if err := service.game.acceptHit(record, reply, time.Now()); err != nil {
+		return nil, err
+	}
 	service.broadcastSnapshot(self)
 	return reply.snapshot(), nil
 }
@@ -194,28 +195,13 @@ func (service *attackService) member(userID uint64, loginID string) (attackMembe
 }
 
 func (service *attackService) view(userID uint64) map[string]any {
-	now := time.Now()
-	targets, members, hits := make([]any, 0), make([]any, 0), make([]any, 0)
-	for hole, target := range service.game.targets {
-		if target.Sequence != 0 && now.Before(target.Deadline) {
-			targets = append(targets, map[string]any{
-				"hole": int64(hole), "spawn_seq": target.Sequence,
-				"deadline_ms": target.Deadline.UnixMilli(), "claimed": target.Claim != "",
-			})
-		}
-	}
+	view := service.game.view(time.Now(), userID)
+	members := make([]any, 0, len(service.members))
 	for _, member := range service.members {
 		members = append(members, map[string]any{"user_id": member.UserID, "seat": member.Seat})
 	}
-	for _, record := range service.game.requests {
-		if record.Result.Event.UserID == userID {
-			hits = append(hits, record.Result.Event.snapshot(record.Status))
-		}
-	}
-	return map[string]any{
-		"attack_id": service.game.name, "attack_name": service.game.name, "server_ms": now.UnixMilli(),
-		"members": members, "targets": targets, "hits": hits, "seat": service.members[userID].Seat,
-	}
+	view["members"], view["seat"] = members, service.members[userID].Seat
+	return view
 }
 
 func (service *attackService) broadcastSnapshot(self gsr.ServiceContext) {

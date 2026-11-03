@@ -211,9 +211,6 @@ func TestSettlementMoleProcessesLiveMySQL(t *testing.T) {
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		key := "gsrdemo:test:mole"
-		if lane := userID % 4; lane != 0 {
-			key = fmt.Sprintf("%s:lane:%d", key, lane)
-		}
 		encoded, err := client.Get(ctx, key).Bytes()
 		cancel()
 		if err != nil {

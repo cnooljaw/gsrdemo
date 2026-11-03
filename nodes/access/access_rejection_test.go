@@ -22,7 +22,7 @@ func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddr
 		Scan(&amount, &version); err != nil || amount < 100 {
 		t.Fatalf("拒绝演练需要有初始余额: amount=%d err=%v", amount, err)
 	}
-	baseline := waitAccessMoleCheckpoint(t, ctx, redisAddress, player.id, func(state accessMoleCheckpoint) bool {
+	baseline := waitAccessMoleCheckpoint(t, ctx, redisAddress, func(state accessMoleCheckpoint) bool {
 		return state.Pending == nil
 	})
 	suffix, err := connectionID()
@@ -102,7 +102,7 @@ func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddr
 			t.Fatalf("扣款或拒绝记录不唯一: count=%d err=%v", count, err)
 		}
 	}
-	final := waitAccessMoleCheckpoint(t, ctx, redisAddress, player.id, func(state accessMoleCheckpoint) bool {
+	final := waitAccessMoleCheckpoint(t, ctx, redisAddress, func(state accessMoleCheckpoint) bool {
 		return state.Pending == nil && state.Sequence == baseline.Sequence+1
 	})
 	if final.Pool != baseline.Pool {

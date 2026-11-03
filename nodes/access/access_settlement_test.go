@@ -86,7 +86,7 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		var prepared accessMoleCheckpoint
 		if restartMole {
 			t.Logf("等待源批次保存：HitID=%s", hit.HitId)
-			prepared = waitAccessMoleCheckpoint(t, ctx, redisAddress, player.id, func(state accessMoleCheckpoint) bool {
+			prepared = waitAccessMoleCheckpoint(t, ctx, redisAddress, func(state accessMoleCheckpoint) bool {
 				if state.Pending == nil {
 					return false
 				}
@@ -115,7 +115,7 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 					Scan(&amount, &version); err != nil || amount != before-hit.Debit+hit.Credit || version != previousVersion+1 {
 					t.Fatalf("未构造出已入账状态: amount=%d version=%d err=%v", amount, version, err)
 				}
-				unconfirmed := waitAccessMoleCheckpoint(t, ctx, redisAddress, player.id, func(state accessMoleCheckpoint) bool {
+				unconfirmed := waitAccessMoleCheckpoint(t, ctx, redisAddress, func(state accessMoleCheckpoint) bool {
 					return state.Pending != nil && state.Pending.ID == prepared.Pending.ID && state.Sequence == prepared.Sequence
 				})
 				if unconfirmed.Pool != prepared.Pool {
@@ -125,7 +125,7 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 			}
 			mole.process = startAccessProcess(t, mole.binary, []string{"-config", mole.config}, mole.address)
 			t.Log("等待重启后完成原批次确认")
-			confirmed := waitAccessMoleCheckpoint(t, ctx, redisAddress, player.id, func(state accessMoleCheckpoint) bool {
+			confirmed := waitAccessMoleCheckpoint(t, ctx, redisAddress, func(state accessMoleCheckpoint) bool {
 				return state.Pending == nil && state.Sequence == prepared.Pending.Sequence && state.LastBatchID == prepared.Pending.ID
 			})
 			if confirmed.Pool.Hits != prepared.Pool.Hits+1 || confirmed.Pool.Debit != prepared.Pool.Debit+hit.Debit || confirmed.Pool.Credit != prepared.Pool.Credit+hit.Credit {
@@ -253,7 +253,7 @@ func accessSettlementWrite(t *testing.T, ctx context.Context, address, identity 
 	return result
 }
 
-func waitAccessMoleCheckpoint(t *testing.T, ctx context.Context, address string, userID uint64,
+func waitAccessMoleCheckpoint(t *testing.T, ctx context.Context, address string,
 	matches func(accessMoleCheckpoint) bool) accessMoleCheckpoint {
 	t.Helper()
 	binary, err := exec.LookPath("redis-cli")
@@ -265,9 +265,6 @@ func waitAccessMoleCheckpoint(t *testing.T, ctx context.Context, address string,
 		t.Fatal(err)
 	}
 	key := accessRedisKey
-	if lane := userID % 4; lane != 0 {
-		key = fmt.Sprintf("%s:lane:%d", key, lane)
-	}
 	deadline := time.Now().Add(5 * time.Second)
 	var state accessMoleCheckpoint
 	for time.Now().Before(deadline) {
