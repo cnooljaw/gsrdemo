@@ -37,6 +37,7 @@
 - 使用 gsr.Run + MainService；节点组装用 self.Node().RegisterService/OpenCluster/CreateGate/OpenHTTP，通信用 self.Cluster().Send/Call，不手工组装 Runtime/ClusterClient。
 - Gate 用 SecurityModeMAC 指定传输认证，业务协议由 Agent 选择；当前沿用 Protobuf protocol 包与 Envelope。
 - Service 显式实现 Handle，接口断言紧跟类型。有业务命令时具名持有 Dispatcher；没有命令的 MainService 直接返回 ErrUnknownCommand。客户端 Agent 另显式实现 HandleClientMessage。
+- 不同业务消息使用独立 CommandID 注册，避免在通用 Handler 中用字符串子指令再次分发；编号范围与示例见 [消息注册与分发](docs/GO-CODE-STYLE.md#212-消息注册与分发)。
 - 每份可变状态只有一个 Service owner，跨 Service 通过消息访问；纯规则和 owner 私有值对象按需保留。
 - self、Node 和 Handler 上下文仅在当前回调使用，不保存或借给异步任务，不在业务中启动 goroutine；引用参数和结果传独立快照。
 - 直接使用 GSR Call/Send；Call 有限等待，远程 Handler 使用规范参数类型，不另做内部 Protobuf 编解码。Send 成功只表示接纳，超时、重复和迟到结果的幂等或补偿由业务负责。
