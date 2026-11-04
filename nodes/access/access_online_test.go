@@ -45,7 +45,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 	accessProcessResponse(t, bound, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
 	hit := accessHitTarget(t, bound, fresh.Snapshot, "while-online-unavailable")
 	*operationIDs = append(*operationIDs, hit.HitId)
-	accessWaitCommitted(t, bound, hit.HitId)
+	accessWaitCommitted(t, ctx, db, hit.HitId)
 	var amount int64
 	var version uint64
 	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", players[0].id).
@@ -87,8 +87,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 	snapshot = accessNextSnapshot(t, recovered, snapshot.AttackName)
 	recoveryHit := accessHitTarget(t, recovered, snapshot, "after-online-restart")
 	*operationIDs = append(*operationIDs, recoveryHit.HitId)
-	accessWaitCommitted(t, recovered, recoveryHit.HitId)
-	accessWaitCommitted(t, recovered, hit.HitId)
+	accessWaitCommitted(t, ctx, db, recoveryHit.HitId, hit.HitId)
 	var recoveredAmount int64
 	var recoveredVersion uint64
 	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", players[0].id).

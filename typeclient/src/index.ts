@@ -7,7 +7,7 @@ import { runLandlord } from "./landlord.js";
 import {
   EnterRequestSchema, EnterResponseSchema, HitRequestSchema, HitResponseSchema,
   LeaveRequestSchema, LeaveResponseSchema, LoginRequestSchema, LoginResponseSchema,
-  MsgId, OperationRequestSchema, OperationResponseSchema, SnapshotRequestSchema, SnapshotResponseSchema,
+  MsgId, SnapshotRequestSchema, SnapshotResponseSchema,
 } from "./gen/demo/v1/game_pb.js";
 
 function print(event: string, value: unknown): void {
@@ -88,22 +88,7 @@ async function run(): Promise<void> {
       }
       if (!hit.silver) throw new Error("missing hit balance");
       client.applyBalance(hit.silver);
-      print("hit", hit); // 此处立即展示；查询入账不是奖励反馈的前置步骤。
-      const receiptDeadline = Date.now() + Math.max(10_000, config.timeout);
-      let found = false;
-      while (Date.now() < receiptDeadline) {
-        const receipt = await client.request(MsgId.C2S_OPERATION,
-          toBinary(OperationRequestSchema, create(OperationRequestSchema, { hitId: hit.hit.hitId })),
-          MsgId.S2C_OPERATION, OperationResponseSchema);
-        if (receipt.found) {
-          print("settlement", receipt);
-          if (receipt.status !== "committed") throw new Error(`settlement rejected: ${receipt.reason}`);
-          found = true;
-          break;
-        }
-        await delay(100);
-      }
-      if (!found) throw new Error(`settlement not confirmed; query original HitID ${hit.hit.hitId}`);
+      print("hit", hit); // 即时结果直接展示；财务回执由服务端处理，有差异时推送余额校正。
       const view = await client.request(MsgId.C2S_SNAPSHOT, toBinary(SnapshotRequestSchema, create(SnapshotRequestSchema)), MsgId.S2C_SNAPSHOT, SnapshotResponseSchema);
       client.snapshot = view.snapshot;
       hitIndex++;

@@ -108,6 +108,8 @@ func verifyLandlordCLI(t *testing.T, ctx context.Context, players []accessDemoPl
 					t.Fatal(err)
 				}
 				found = true
+			case "landlord_operation":
+				t.Fatal("客户端在财务终态后仍重复查账")
 			case "landlord_leave":
 				left = true
 			}

@@ -30,7 +30,7 @@ var (
 	errTargetUnavailable     = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.target_unavailable", "target is unavailable")
 	errAccountingUnavailable = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.accounting_unavailable", "accounting is unavailable")
 	errInsufficientSilver    = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.insufficient_silver", "insufficient silver")
-	errMoleOperationUnknown  = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.operation_unknown", "query the original operation; do not resubmit as new")
+	errMoleOperationUnknown  = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.operation_unknown", "operation outcome unknown; do not resubmit as new")
 )
 
 type moleRoute struct {

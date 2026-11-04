@@ -9,9 +9,10 @@ import (
 
 // roundSettlement 只拥有本桌资金请求和提交进度，由 AttackService 串行调用。
 type roundSettlement struct {
-	node    cluster.NodeID
-	journal landlordJournal
-	result  *landlordResult
+	node           cluster.NodeID
+	journal        landlordJournal
+	result         *landlordResult
+	cleanupPending bool // 终态已确认但 Redis 待记录尚未删除，不影响客户端结果。
 }
 
 func (round *roundSettlement) prepare(game attackGame) {
@@ -171,12 +172,17 @@ func (round *roundSettlement) settle(self gsr.ServiceContext) error {
 		}
 		balances[uid] = landlordBalance{amount, version}
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), callTimeout)
-	err = round.journal.client.HDel(ctx, round.journal.key, result.ID).Err()
-	cancel()
-	if err != nil {
+	result.Status, result.Reason, result.Balances = status, reason, balances
+	round.cleanupPending = true
+	return nil
+}
+
+func (round *roundSettlement) cleanup() error {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	if err := round.journal.client.HDel(ctx, round.journal.key, round.result.ID).Err(); err != nil {
 		return err
 	}
-	result.Status, result.Reason, result.Balances = status, reason, balances
+	round.cleanupPending = false
 	return nil
 }

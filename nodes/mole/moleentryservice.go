@@ -10,12 +10,11 @@ import (
 )
 
 const (
-	moleEntryName                          = "mole-entry"
-	moleEnterCommand     runtime.CommandID = 1
-	moleOperationCommand runtime.CommandID = 3
+	moleEntryName                      = "mole-entry"
+	moleEnterCommand runtime.CommandID = 1
 )
 
-// moleEntryService 协调低频进入与结果查询，不拥有目录、余额或房间状态。
+// moleEntryService 只协调低频进入，不拥有目录、余额或房间状态。
 type moleEntryService struct {
 	settlementNode cluster.NodeID
 	dispatcher     *gsr.Dispatcher
@@ -26,8 +25,7 @@ var _ gsr.Service = (*moleEntryService)(nil)
 func newMoleEntryService(settlementNode cluster.NodeID) *moleEntryService {
 	service := &moleEntryService{settlementNode: settlementNode}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		moleEnterCommand:     service.handleEnter,
-		moleOperationCommand: service.handleOperation,
+		moleEnterCommand: service.handleEnter,
 	})
 	return service
 }
@@ -116,14 +114,4 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
 	defer cancel()
 	return self.CallName(ctx, moleAccountingName, accountingSetBalanceCommand, userID, confirmed.snapshot())
-}
-
-// operation 的只读远端等待只占用进入通道，不与归批提交共享 Mailbox。
-func (service *moleEntryService) handleOperation(self gsr.CommandContext, userID uint64, hitID string) (any, error) {
-	if userID == 0 || !validMoleIdentifier(hitID) {
-		return nil, errInvalidMoleInput
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
-	defer cancel()
-	return self.Cluster().Call(ctx, service.settlementNode, "settlement-read", 3, userID, hitID)
 }

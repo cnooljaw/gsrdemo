@@ -10,20 +10,20 @@
 | 1011 / 1012 Enter | 空 | 地鼠快照、silver 余额基线 |
 | 1021 / 1022 Hit | action_id、spawn_seq、hole | hit（含 accepted/rejected）、silver；目标失效时返回 rejection=target_unavailable 且无 hit/silver；已拒绝重试结果可无 silver，不能显示奖励 |
 | 1031 / 1032 Snapshot | 空 | 当前组快照 |
-| 1041 / 1042 Leave | 空 | left；成功后不能命中，可继续查询原操作 |
-| 1051 / 1052 Operation | hit_id | found、hit_id、status、reason；只能查询当前用户参与的原操作 |
+| 1041 / 1042 Leave | 空 | left；成功后不能命中，已接纳操作仍在服务端继续提交 |
+| 1051 / 1052 Operation（已停用） | 保留旧定义与编号，不复用 | access 不注册 Handler，旧请求返回框架错误；不转发到结算 |
 | 1061 SnapshotPush | 服务端推送 | 当前组快照 |
 | 1062 BalancePush | 服务端推送 | 绝对余额视图，不是重复奖励 |
 
 `Balance.confirmed` 为确认金额 amount 和数据库版本 version 组成的消息：Enter 和确认校正可携带，普通即时命中可省略；省略不代表零。显示余额按 revision 只采纳新修订，重入以新基线重建。银子、UserID、SpawnSeq、版本和修订号在 TS 中均保持 bigint，不能转 Number 后参与账务显示或判断。
 
-Agent 仅保存当前身份和 entry/attack 路由；每条连接随机生成私有具名地址，每次登录随机生成不可复用 LoginID。Login 验证成功后 Call Online.Bind；绑定成功才开放游戏。Bind 失败/超时不重发绑定，只尝试清理该候选 LoginID 并关闭连接。正常替换后向旧地址 Send Command 101（旧 LoginID），旧 Agent 核对身份后尽力 Leave/Unbind 再退出；普通断线执行相同清理。进程骤停、清理超时或推送失败可能留下旧目录/成员，后续登录和进入覆盖；不承诺 Online 绑定已替换时旧在途操作被撤销，也不承诺网络分区下立即踢下线。
+Agent 独占当前连接身份，地鼠组件仅保存 attack 路由；Entry 地址只在当前进入调用中使用，不长期缓存。每条连接随机生成私有具名地址，每次登录随机生成不可复用 LoginID。Login 验证成功后 Call Online.Bind；绑定成功才开放游戏。Bind 失败/超时不重发绑定，只尝试清理该候选 LoginID 并关闭连接。正常替换后向旧地址 Send Command 101（旧 LoginID），旧 Agent 核对身份后尽力 Leave/Unbind 再退出；普通断线执行相同清理。进程骤停、清理超时或推送失败可能留下旧目录/成员，后续登录和进入覆盖；不承诺 Online 绑定已替换时旧在途操作被撤销，也不承诺网络分区下立即踢下线。
 
 未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。地鼠快照使用 Command 100，余额校正使用 Command 102，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
 
-Online 不可用时，新登录不能完成绑定，接入关闭该连接。已进入游戏的连接仍按当前路由执行 Hit/Snapshot/Leave/Operation 并接收推送，不逐次查询 Online；重新登录或 Enter 仍需目录可用。Online 重启后不自动重建绑定。
+Online 不可用时，新登录不能完成绑定，接入关闭该连接。已进入游戏的连接仍按当前路由执行 Hit/Snapshot/Leave 并接收推送，不逐次查询 Online；重新登录或 Enter 仍需目录可用。Online 重启后不自动重建绑定。
 
-多个 access 共用上述协议；客户端通过连接 URL 选择接入。跨接入登录仍返回同一 UserID，使用新的 LoginID 和 Agent 地址；重新 Enter 获取当前快照/余额后，可以用 Operation 查询自己的原 HitID，不重新生成命中或奖励。CLI 目前不自动重连。
+多个 access 共用上述协议；客户端通过连接 URL 选择接入。跨接入登录仍返回同一 UserID，使用新的 LoginID 和 Agent 地址；重新 Enter 获取当前快照和余额基线，不重新生成命中或奖励。CLI 目前不自动重连，也不逐锤轮询入账。回执由服务端处理，仅余额有差异时推送校正；验收/管理工具可以按已知操作或批次集中核查结算内部查询。
 
 仅 `mole.target_unavailable`（Domain 类别）转换为 HitResponse.rejection=target_unavailable，表示该次目标检查已拒绝且尚未记账；客户端可以输出 miss、刷新快照后用新 ActionID 操作新目标，不累计命中或修改余额。CLI 每次成功命中前的争抢预算为 max(15 秒, --timeout-ms)，明确拒绝不延长该预算。
 
@@ -90,7 +90,6 @@ mole 已实现下述节点内接口；settlement 已实现通用银子结算接�
 | --- | --- | --- |
 | mole / 1 ResolveEntry | UserID uint64、LoginID/AccessNode/AgentName string；返回固定进入地址 mole-entry，不验证身份、不分配座位 | entry_name string，调用方不自行拼接名称 |
 | entry_name / 1 Enter | 同上；核对 Online、复用本地账，缓存缺失直接查询 Settlement，再请求目录预留、Join | attack_id/name、seat int64、members/targets/hits 列表、server_ms int64、silver 余额视图 |
-| entry_name / 3 GetOperation | UserID uint64、HitID string；地址通过 ResolveEntry 获取 | 只读查询 Settlement 原操作；缺失返回 nil，不与提交共用等待队列 |
 | AttackName / 2 Hit | UserID uint64、LoginID/ActionID string、SpawnSeq uint64、洞位 int64（0～8） | hit_id/action_id/status/debit/credit/spawn_seq/hole；正常 status=accepted，附 balance/available int64、revision uint64 |
 | AttackName / 3 Snapshot | UserID uint64、LoginID string | 目标、成员、座位、服务端时间和本人命中记录；不包含权威钱包余额 |
 | AttackName / 4 Leave | UserID uint64、LoginID string | bool；释放匹配成员，不取消已接纳的记账操作 |
@@ -104,17 +103,19 @@ mole 已实现下述节点内接口；settlement 已实现通用银子结算接�
 
 AttackName / 1 Join、10 Timer、11 BalanceCorrection，以及 mole / 10 Departed、11 BalanceCorrection、12 Reserve、13 DiscardGroup、14 Health 均为内部协调入口，客户端不得直接调用。Join/Departed 带成员实例标识，隔离同 LoginID 离开再进入后的旧清理。Accounting / 10 Hit 接收本地不可变 hitEvent 和 retry bool，返回 memoryHitResult 值快照；事件只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule，不含登录/连接地址。11 Timer、12 ForgetBalance、13 Settled（batchReceipt）、14 Pause，以及 Submission / 1 Batch、10 Timer 也只用于本地协作，引用字段传独立快照。
 
+Entry 的原 CommandID=3 已停用且不复用；不存在客户端经 Entry 查询原 HitID 的旁路。
+
 正常链路：AttackService 校验并固定扣返 → 本地 Call Accounting 完成内存预检查/接纳 → 立即返回 accepted 和余额，同时完成目标。Accounting 跨组归批并 Send Submission，后者独立等待远端持久结算。accepted 不是 committed，正常客户端不需要等待第二个奖励结果。
 
 推送到 AccessNode + AgentName 使用独立命令：100 为快照，102 为余额校正，参数均为 LoginID string、payload map[string]any。Access 的 CommandHandlers 直接绑定 handleSnapshotPush / handleBalanceCorrectionPush，不再传 kind 子指令；余额校正是绝对余额视图。仅在回执导致显示余额不一致时校正，不重复发奖励，不复活目标；按当前 UserID 路由/成员发送，Agent 须核对当前 LoginID。重复响应/推送按 revision 收敛，不能每收到一次再加减；修订号只在当前节点缓存生命周期内有效，重新进入以新快照建立基线。
 
-稳定 Domain 错误：mole.invalid_request、mole.stale_login、mole.conflict、mole.busy、mole.target_unavailable、mole.online_unavailable、mole.accounting_unavailable、mole.insufficient_silver、mole.operation_unknown。已知内存拒绝由原 Hit Call 返回，目标仍有效时可释放占用。Call 超时不代表未执行，不能撤销扣返或生成新操作；沿用原 ActionID/HitID 重试。重试缓存缺失返回 operation_unknown，只能查询原操作，不能重新接纳扣款。
+稳定 Domain 错误：mole.invalid_request、mole.stale_login、mole.conflict、mole.busy、mole.target_unavailable、mole.online_unavailable、mole.accounting_unavailable、mole.insufficient_silver、mole.operation_unknown。已知内存拒绝由原 Hit Call 返回，目标仍有效时可释放占用。Call 超时不代表未执行，不能撤销扣返或生成新操作；沿用原 ActionID/HitID 重试。重试缓存缺失返回 operation_unknown，停止重发并由受控工具核查原操作；客户端可重登/重入刷新余额，不能换 ID 重新扣款。
 
 ActionID 在当前 LoginID 内不复用；相同内容在有界请求记录保留期间返回原结果，改内容拒绝，不重新抽奖。HitID=随机组实例 + 服务端候选序号，全局不复用；不能仅由 SpawnSeq 生成。OperationID 沿用 HitID。LoginID 仅保留在请求键和成员表，AccessNode/AgentName 只在成员表；它们都不属于银子操作身份。组内 Timer 与命中共用串行 owner，服务端检查目标实例及截止时间。
 
 显示余额 = 确认余额 + 所有待确认扣返的净变化；可用额 = 确认余额 − 所有待确认 Debit（最少为零）。待确认返还可显示但不可消费。同 HitID 不重复占用；重连保留待扣，热点不足不逐锤远程查询。回执更新较新确认版本，同时移除对应终局操作，再计算剩余内存变化；超时保留，旧结果不覆盖新确认版本。该预检查不取代 settlement 最终合法性校验。
 
-mole 不访问 SQL。尚未保存到业务 Redis 的内存事件可因崩溃丢失；已保存批次重启后按原身份和内容恢复结算、统计，再开放进入。余额和原操作仍可向 settlement 查询。UI 先展示内存结果，后续采用余额校正，不产生反向财务操作。
+mole 不访问 SQL。尚未保存到业务 Redis 的内存事件可因崩溃丢失；已保存批次重启后按原身份和内容恢复结算、统计，再开放进入。Enter 缓存缺失时仍向 settlement 查询余额，原操作查询只供受控验收/管理工具使用。UI 先展示内存结果，后续采用余额校正，不产生反向财务操作。
 
 Mole 使用一个 Entry；调用方仍使用 ResolveEntry 返回的地址。慢进入会使后续进入排队，目录和已有房间独立处理。唯一提交流程保持一个在途批次和全局最多 4,096 项待确认额度。Submission 原 2/3 查询入口移除且不复用；临时错误原 ID 退避重试，确定性错误保留批次、暂停 Accounting 新记账；State 可用于定位故障，不是财务成功证明。PoolSnapshot 在恢复完成后直接返回唯一确认统计，未就绪时报不可用。
 
@@ -156,7 +157,7 @@ settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量�
 
 ## landlord 三人斗地主
 
-客户端仍只连接 MAC access；使用独立消息，所有响应/推送各有独立 Protobuf 类型。`--game landlord` 的 TS CLI 随机入桌，自动准备、叫抢和简单出牌，最终查询同一 OperationID；不改变默认地鼠演示。
+客户端仍只连接 MAC access；使用独立消息，所有响应/推送各有独立 Protobuf 类型。`--game landlord` 的 TS CLI 随机入桌，自动准备、叫抢和简单出牌，收到终态快照后直接使用结算结果并离开，不追加查账；不改变默认地鼠演示。
 
 | 请求 / 响应编号 | 请求内容 | 结果 |
 | --- | --- | --- |
@@ -165,7 +166,7 @@ settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量�
 | 1121 / 1122 Play | turn uint64、cards int64 列表；空表示不出 | 当前本人快照 |
 | 1131 / 1132 Snapshot | 空 | 当前本人快照 |
 | 1141 / 1142 Leave | 空 | 成功离开；进行中保留牌位、断开推送并由超时动作继续 |
-| 1151 / 1152 Operation | operation_id string | found/status/reason；仅当前登录用户参与的原操作可见 |
+| 1151 / 1152 Operation（停用） | 保留旧定义及编号，不复用 | Access 不再注册；查账仅供受控验收或管理工具使用内部接口 |
 | 1171 / 1172 Call | turn uint64、yes bool | 仅 calling 阶段当前操作者可叫/不叫 |
 | 1181 / 1182 Rob | turn uint64、yes bool | 仅 robbing 阶段当前操作者可抢/不抢 |
 | 1161 Push | 服务端主动推送 | 当前桌的本人快照，Agent 核对 LoginID 和桌地址 |
@@ -178,4 +179,6 @@ settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量�
 
 底分固定 10，初次叫地主不翻倍，每次抢地主及合法炸弹/王炸翻倍；不做明牌、个人加倍、春天、底牌特殊倍率或手续费。准备检查钱包存在且至少 20 银子只是准入预判，不冻结资金；最终结算可能因倍率或其他业务扣款被整体拒绝。局末一次 SettleGroup，分类 game_win_loss，结果原子覆盖三名玩家；settlement 快照给本人 debit/credit、operation_id 和 status=pending/committed/rejected。只有终局回执才携带有效的 balance/version，pending 中的默认零值不代表确认余额。
 
-每桌先将完整请求写入自己游戏的 Redis Hash（默认 gsrdemo:landlord:pending），同 ID 不同内容拒绝覆盖；取得回执并删除待记录后才发布本桌财务终局。重启只重提已保存的原请求，不恢复进行中的手牌；超时不换 ID、不重算金额。该节点没有 SQL，也没有全局串行结算队列；GSR Call/Send 的超时和接纳语义沿用现有边界。
+正常局末不主动广播 finished + pending；确定胜负后直接结算，取得有效回执后向三位玩家各推送一次最终结果。异常时内部保留 pending，主动 Snapshot 仍可读到未确认状态。每桌在确定胜负的当前回调中固定请求，先写入本游戏 Redis Hash（默认 gsrdemo:landlord:pending），保存成功后直接 Call settlement-write / 7；同 ID 不同内容拒绝覆盖。Redis 仅保存待确认请求供故障恢复，不缓存成功流水，也不承担多桌合批或削峰。有效 committed/rejected 回执立即更新本桌结果并推送三人快照，再删除 Redis 待记录；删除失败不回退终态，后续 Tick 只重试删除，不重复调用结算服。三人全部离开后，仍由本桌完成清理再退出；明确拒绝同样清理。
+
+结算服中断时，已保存请求保持 pending，由本桌按原 ID、原内容间隔重试；地主节点重启只重提 Redis 已保存的原请求，不恢复进行中的手牌。SQL 已提交但回执未知或清理未完成时，重启重提由 Settlement 幂等返回原结果，再清理记录。尚未保存到 Redis 的结果不保证崩溃恢复；Redis 数据丢失不在承诺内。该节点没有 SQL，也没有全局串行结算队列；GSR Call/Send 的超时和接纳语义沿用现有边界。

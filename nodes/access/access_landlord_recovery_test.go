@@ -153,7 +153,14 @@ func playAccessLandlordRound(t *testing.T, gates []string, players []accessDemoP
 func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, players []accessDemoPlayer, db *sql.DB,
 	ids *[]string, landlord, settlement accessNodeProcess, redisAddress string) {
 	t.Helper()
-	for _, alreadyCommitted := range []bool{false, true} {
+	for _, scenario := range []struct {
+		name                              string
+		restartLandlord, alreadyCommitted bool
+	}{
+		{"结算节点中断后恢复", false, false},
+		{"地主节点重启补交", true, false},
+		{"已入账未确认后地主重启", true, true},
+	} {
 		before := map[uint64]struct {
 			amount  int64
 			version uint64
@@ -190,12 +197,14 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", operationID).Scan(&count); err != nil || count != 0 {
 			t.Fatal("settlement down but operation was stored", err)
 		}
-		if err := landlord.process.Kill(); err != nil {
-			t.Fatal(err)
+		if scenario.restartLandlord {
+			if err := landlord.process.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			waitAccessProcessListenerClosed(t, landlord.address)
 		}
-		waitAccessProcessListenerClosed(t, landlord.address)
 		settlement.process = startAccessProcess(t, settlement.binary, []string{"-config", settlement.config}, settlement.address)
-		if alreadyCommitted {
+		if scenario.alreadyCommitted {
 			changes := []any{}
 			for _, c := range saved.Changes {
 				changes = append(changes, map[string]any{"user_id": c.UserID, "reason": "game_win_loss", "debit": c.Debit, "credit": c.Credit})
@@ -206,26 +215,11 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 				"detail": map[string]any{"rule": "landlord-demo-v1", "base": int64(10), "multiplier": saved.Multiplier, "landlord_user_id": saved.Changes[saved.Landlord].UserID, "winner_user_id": saved.Changes[saved.Winner].UserID},
 			})
 		}
-		landlord.process = startAccessProcess(t, landlord.binary, []string{"-config", landlord.config}, landlord.address)
-		for _, client := range clients {
-			deadline = time.Now().Add(5 * time.Second)
-			found := false
-			for time.Now().Before(deadline) {
-				var receipt demopb.LandlordOperationResponse
-				accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_OPERATION, &demopb.LandlordOperationRequest{OperationId: operationID}, &receipt)
-				if receipt.Found {
-					if receipt.Status != "committed" {
-						t.Fatalf("recovery rejected: %v", &receipt)
-					}
-					found = true
-					break
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
-			if !found {
-				t.Fatal("saved landlord result not recovered")
-			}
+		if scenario.restartLandlord {
+			landlord.process = startAccessProcess(t, landlord.binary, []string{"-config", landlord.config}, landlord.address)
 		}
+		// 受控验收集中查 SQL，客户端不通过公开协议逐人查账。
+		accessWaitCommitted(t, ctx, db, operationID)
 		deadline = time.Now().Add(5 * time.Second)
 		for len(landlordRedis(t, ctx, redisAddress, "HGET", accessRedisKey, operationID)) > 0 {
 			if time.Now().After(deadline) {
@@ -248,8 +242,11 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 			t.Fatal("recovered group operation not unique", err)
 		}
 		for _, client := range clients {
+			if !scenario.restartLandlord {
+				accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_LEAVE, &demopb.LandlordLeaveRequest{}, &demopb.LandlordLeaveResponse{})
+			}
 			_ = client.Close()
 		}
-		t.Logf("斗地主恢复：已保存三人局末结果，SQL 预先提交=%v；节点重启后原 ID 唯一入账，余额/版本各变化一次，Redis pending 清除", alreadyCommitted)
+		t.Logf("斗地主恢复：%s；原 ID 唯一入账，余额/版本各变化一次，Redis pending 清除", scenario.name)
 	}
 }

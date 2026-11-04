@@ -87,10 +87,9 @@ func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddr
 	if !corrected {
 		t.Fatal("最终拒绝后未收到当前连接的余额校正")
 	}
-	var operation demopb.OperationResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: hit.Hit.HitId}, &operation)
-	if !operation.Found || operation.Status != "rejected" || operation.Reason != "insufficient_silver" {
-		t.Fatalf("未取得最终拒绝: %v", &operation)
+	var rejected string
+	if err := db.QueryRowContext(ctx, "SELECT status FROM settlement_operations WHERE operation_id = ?", hit.Hit.HitId).Scan(&rejected); err != nil || rejected != "rejected" {
+		t.Fatalf("验收未取得最终拒绝: status=%s err=%v", rejected, err)
 	}
 	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", player.id).
 		Scan(&amount, &version); err != nil || amount != 0 || version != drainedVersion {
@@ -185,7 +184,7 @@ func verifyAccessMemoryRejectionIsLocal(t *testing.T, ctx context.Context, gateA
 		t.Fatalf("失败请求占住目标或影响同组玩家: %v", &hit)
 	}
 	*operationIDs = append(*operationIDs, hit.Hit.HitId)
-	accessWaitCommitted(t, healthy, hit.Hit.HitId)
+	accessWaitCommitted(t, ctx, db, hit.Hit.HitId)
 	var amount int64
 	var version uint64
 	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", peer.id).

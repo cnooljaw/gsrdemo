@@ -11,6 +11,14 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// TestMoleEntryDoesNotExposeOperationQuery 保护旧 Entry 查询命令明确拒绝，内部结算查询不再从进入入口转发。
+func TestMoleEntryDoesNotExposeOperationQuery(t *testing.T) {
+	routes, _ := prepareMoleCluster(t, newSettlementFixture())
+	if _, err := moleRPC(t, routes, "mole", moleEntryName, 3, uint64(1), "old-hit"); !errors.Is(err, runtime.ErrUnknownCommand) {
+		t.Fatalf("旧账务查询命令仍可调用: %v", err)
+	}
+}
+
 // delayedAttackFixture 只延迟第一次 Join，实际状态变化仍由真实 AttackService 完成。
 type delayedAttackFixture struct {
 	attack  *attackService

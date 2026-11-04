@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,24 +93,55 @@ func accessNextSnapshot(t *testing.T, client *accessClient, attackName string) *
 	return nil
 }
 
-func accessWaitCommitted(t *testing.T, client *accessClient, hitID string) {
+// accessWaitCommitted 由验收程序集中核对本次操作，不经过玩家协议；查询仅用于有界的测试收尾。
+func accessWaitCommitted(t *testing.T, ctx context.Context, db *sql.DB, hitIDs ...string) {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		var operation demopb.OperationResponse
-		accessProcessResponse(t, client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: hitID}, &operation)
-		if operation.HitId != hitID {
-			t.Fatalf("查询返回其它 HitID: %v", &operation)
+	wait, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	args := make([]any, 0, len(hitIDs))
+	unique := make(map[string]bool, len(hitIDs))
+	for _, id := range hitIDs {
+		if !unique[id] {
+			unique[id] = true
+			args = append(args, id)
 		}
-		if operation.Found {
-			if operation.Status != "committed" {
-				t.Fatalf("命中未入账: %v", &operation)
+	}
+	if len(args) == 0 {
+		t.Fatal("验收必须指定本次操作 ID")
+	}
+	query := "SELECT operation_id, status FROM settlement_operations WHERE operation_id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + ")"
+	for {
+		rows, err := db.QueryContext(wait, query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := 0
+		for rows.Next() {
+			var id, status string
+			if err := rows.Scan(&id, &status); err != nil {
+				_ = rows.Close()
+				t.Fatal(err)
 			}
+			if !unique[id] || status != "committed" {
+				_ = rows.Close()
+				t.Fatalf("命中未入账: id=%s status=%s", id, status)
+			}
+			found++
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found == len(args) {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-wait.Done():
+			t.Fatalf("本次操作未在期限内全部入账: ids=%v: %v", hitIDs, wait.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-	t.Fatal("原 HitID 未在期限内入账")
 }
 
 func accessHitTarget(t *testing.T, client *accessClient, snapshot *demopb.Snapshot, actionID string) *demopb.Hit {
@@ -190,8 +222,7 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 		t.Fatalf("旧 LoginID 清理了新绑定: %v", removed)
 	}
 	accessNextSnapshot(t, current, snapshot.AttackName)
-	accessWaitCommitted(t, current, hit.HitId)
-	accessWaitCommitted(t, current, hit.HitId)
+	accessWaitCommitted(t, ctx, db, hit.HitId)
 
 	// 客户端直接断开，再从第一接入登录；不增加自动重连或未知命中重试逻辑。
 	_ = current.Close()
@@ -204,7 +235,7 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 		t.Fatalf("重连绑定错误: %v", rebuilt)
 	}
 	accessNextSnapshot(t, reconnected, snapshot.AttackName)
-	accessWaitCommitted(t, reconnected, hit.HitId)
+	accessWaitCommitted(t, ctx, db, hit.HitId)
 	var amount int64
 	var version uint64
 	if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", player.id).Scan(&amount, &version); err != nil {
@@ -215,14 +246,14 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 		t.Fatal(err)
 	}
 	if count != 1 || version != 5 || amount != initial-hit.Debit+hit.Credit {
-		t.Fatalf("跨接入查询重复扣款或丢账: count=%d amount=%d version=%d hit=%v", count, amount, version, hit)
+		t.Fatalf("跨接入重复扣款或丢账: count=%d amount=%d version=%d hit=%v", count, amount, version, hit)
 	}
 	var leave demopb.LeaveResponse
 	accessProcessResponse(t, reconnected, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
 	if !leave.Left {
 		t.Fatal("重连后无法正常离开")
 	}
-	t.Logf("同账号 access-01 → access-02 → access-01：旧连接关闭、迟到解绑被拒、新接入收到推送；原 HitID 三次查询仅一笔入账，余额 %d、版本 %d", amount, version)
+	t.Logf("同账号 access-01 → access-02 → access-01：旧连接关闭、迟到解绑被拒、新接入收到推送；验收核对原 HitID 仅一笔入账，余额 %d、版本 %d", amount, version)
 	return hit.HitId
 }
 
@@ -261,7 +292,7 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 	accessProcessResponse(t, peer, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
 	healthyHit := accessHitTarget(t, peer, fresh.Snapshot, "after-other-access-crash")
 	*operationIDs = append(*operationIDs, healthyHit.HitId)
-	accessWaitCommitted(t, peer, healthyHit.HitId)
+	accessWaitCommitted(t, ctx, db, healthyHit.HitId)
 
 	recovered, snapshot := accessLoginAndEnter(t, gates[1], &players[0])
 	if snapshot.AttackName != originalAttack || snapshot.Seat != originalSeat {
@@ -284,18 +315,15 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 		t.Fatalf("骤停后重入重复占座: %v", snapshot)
 	}
 	accessNextSnapshot(t, recovered, snapshot.AttackName)
-	accessWaitCommitted(t, recovered, crashHit.HitId)
-	accessWaitCommitted(t, recovered, oldHitID)
+	accessWaitCommitted(t, ctx, db, crashHit.HitId, oldHitID)
 
-	// 恢复账号在原 Mole 组真正再敲一锤，验证新 LoginID 已可操作，而不止能查询旧账。
+	// 恢复账号在原 Mole 组真正再敲一锤，验证新 LoginID 已可操作。
 	accessProcessResponse(t, recovered, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
 	recoveredHit := accessHitTarget(t, recovered, fresh.Snapshot, "after-access-reconnect")
 	*operationIDs = append(*operationIDs, recoveredHit.HitId)
-	accessWaitCommitted(t, recovered, recoveredHit.HitId)
-	accessWaitCommitted(t, recovered, crashHit.HitId)
-	accessWaitCommitted(t, recovered, oldHitID)
+	accessWaitCommitted(t, ctx, db, recoveredHit.HitId, crashHit.HitId, oldHitID)
 
-	// HitID 不是查询凭证；两个已登录玩家互查对方的持久结果都应与不存在一致。
+	// 客户端已取消查账入口；即使已登录并持有其他玩家 HitID，也不能触发查询。
 	for _, probe := range []struct {
 		client *accessClient
 		hitID  string
@@ -303,16 +331,13 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 		{recovered, healthyHit.HitId},
 		{peer, crashHit.HitId},
 	} {
-		var hidden demopb.OperationResponse
-		accessProcessResponse(t, probe.client, demopb.MsgId_C2S_OPERATION,
-			&demopb.OperationRequest{HitId: probe.hitID}, &hidden)
-		if hidden.HitId != probe.hitID || hidden.Found || hidden.Status != "" || hidden.Reason != "" {
-			t.Fatalf("暴露了其他用户的账务结果: %v", &hidden)
+		response := accessRequest(t, probe.client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: probe.hitID})
+		if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+			t.Fatalf("旧客户端查账协议未被拒绝: %v", response)
 		}
 	}
-	accessWaitCommitted(t, recovered, recoveredHit.HitId)
-	accessWaitCommitted(t, peer, healthyHit.HitId)
-	t.Log("两个真实客户端互查对方已入账的 HitID 均返回未找到且不携带状态/原因，各自原记录仍可正常查询")
+	accessWaitCommitted(t, ctx, db, recoveredHit.HitId, healthyHit.HitId)
+	t.Log("客户端旧查账编号被拒绝，验收程序集中核对本次操作")
 
 	for index, hits := range [][]*demopb.Hit{{crashHit, recoveredHit}, {healthyHit}} {
 		var amount int64
@@ -343,5 +368,5 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 			t.Fatal("骤停后存活接入无法正常离开")
 		}
 	}
-	t.Log("SIGKILL access-01：已有内存命中继续入账，access-02 原连接继续命中/入账；受影响账号重新登录后在原组和座位再次命中并入账，旧 HitID 重查无重复扣款")
+	t.Log("SIGKILL access-01：已有内存命中继续入账，access-02 原连接继续命中/入账；受影响账号重新登录后在原组和座位再次命中并入账，验收核对旧 HitID 无重复扣款")
 }

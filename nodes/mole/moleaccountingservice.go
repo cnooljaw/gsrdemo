@@ -265,7 +265,7 @@ func (service *moleAccountingService) accept(event hitEvent, retry bool) (memory
 			return previous.Result, nil
 		}
 	}
-	// 丢回复后的重试不能在缓存缺失时重新扣款，需按原 HitID 查询 settlement。
+	// 丢回复后的重试不能在缓存缺失时重新扣款；原 HitID 留给受控验收或管理工具核查。
 	if retry {
 		return memoryHitResult{}, errMoleOperationUnknown
 	}

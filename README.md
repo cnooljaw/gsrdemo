@@ -154,11 +154,11 @@ printf '%s\n' "$demo_password" | node typeclient/dist/index.js \
 unset demo_password
 ```
 
-同账号可以从另一接入重新登录，服务端会替换旧连接；随后重新 Enter 获取快照和余额。CLI 不自动重连，跨接入替换、断线后重新登录和原 HitID 查询由下方自动验收覆盖。
+同账号可以从另一接入重新登录，服务端会替换旧连接；随后重新 Enter 获取快照和余额。CLI 不自动重连，跨接入替换、断线后重新登录及原 HitID 唯一入账由下方自动验收覆盖。
 
-输出顺序为 `login → enter → action → hit → settlement`，完成指定锤数后输出 `leave` 并退出。`hit` 是即时内存结果，`settlement` 才是最终入账；期间还会收到 `snapshot` 和有差异时的 `balance_correction` 推送。
+输出顺序为 `login → enter → action → hit`，完成指定锤数后输出 `leave` 并退出。`hit` 是即时内存结果；CLI 不逐锤查询或等待财务入账，不再输出地鼠 `settlement` 事件。结算回执由服务端处理，有差异时主动推送 `balance_correction`，期间仍会收到 `snapshot`。CLI 退出不代表待确认操作已持久化。
 
-同组玩家共享目标，同一目标只有一个玩家能命中。目标被抢走或过期时，CLI 输出 `miss`，刷新快照后继续寻找目标；`--hits` 只统计成功命中。每次等待/争抢预算默认 15 秒（`--timeout-ms` 更大时按该值，各次 RPC 另有超时）。超时、断线或其他错误仍停止，不自动重发结果未知的命中；保留输出中的 ActionID / HitID 供复查。
+同组玩家共享目标，同一目标只有一个玩家能命中。目标被抢走或过期时，CLI 输出 `miss`，刷新快照后继续寻找目标；`--hits` 只统计成功命中。每次等待/争抢预算默认 15 秒（`--timeout-ms` 更大时按该值，各次 RPC 另有超时）。超时、断线或其他错误仍停止，不自动重发结果未知的命中；保留输出中的 ActionID / HitID 供受控验收或管理核查；客户端不提供逐锤账务查询。
 
 斗地主同样使用三个不同账号，在终端 A/B/C 分别将下面命令中的 `demo1` 改成 `demo1`、`demo2`、`demo3`。先启动 landlord 节点，再启动三个客户端：
 
@@ -170,11 +170,11 @@ unset demo_password
 
 默认仍连接 access-01；需要跨接入时，在终端 B 的 node 命令后添加 `--url ws://127.0.0.1:7889/ws`。客户端自动随机入桌、准备、叫抢地主、出牌/不出，等待整局结算后离开。叫抢各等待 10 秒，出牌 15 秒；三人都不叫最多重发两次。演示机器人使用简单单张策略，服务端仍校验全部普通牌型。
 
-斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `landlord_enter → landlord_bid → landlord_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID。重启可恢复已保存的局末结果，不恢复进行中的手牌。
+斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `landlord_enter → landlord_bid → landlord_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID，客户端直接使用该回执，不再追加查询账务。局末不先广播 pending；每桌先保存待结算请求到 Redis，再直接调用结算服，收到有效回执后向三人各推送一次最终结果，随后删除待记录，清理失败单独重试。Redis 只保留待处理请求，不积累成功流水；结算服恢复或地主节点重启后，已保存请求按原 ID 补交，避免重复入账。不恢复进行中的手牌。
 
 ### 7. 停止演示
 
-先让客户端完成并看到 `settlement`，再在各服务终端按 Ctrl-C，顺序为 **两个 access → mole / landlord → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中或局末结果不保证崩溃恢复。
+地鼠 CLI 的 `leave` 只表示玩法退出；停服前由受控验收或管理员集中确认本次操作已入账，斗地主等待 `landlord_settlement`。然后在各服务终端按 Ctrl-C，顺序为 **两个 access → mole / landlord → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中或局末结果不保证崩溃恢复。
 
 ## 开发与验证
 
@@ -194,7 +194,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
   -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
 ```
 
-用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正与查询身份隔离，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、三人唯一结算及已保存结果的重启恢复。完整验收清单及边界见 [设计文档第 3.4 节](docs/DESIGN.md)。
+用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正与旧客户端查账入口拒绝，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、终态后不重复查账、三人唯一结算、结算服中断重试及已保存结果的地主节点重启恢复。地鼠验收程序在客户端结束后按本次操作 ID 集中核对 SQL 账务与钱包，不经玩家协议轮询。完整验收清单及边界见 [设计文档第 3.4 节](docs/DESIGN.md)。
 
 ## 源码与文档
 
@@ -203,4 +203,5 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)、[Mole 调用结算](nodes/mole/molesubmissionservice.go)。
 - 节点间 Send 与客户端推送：见 [AttackService](nodes/mole/attackservice.go) 和 [地鼠接入组件](nodes/access/gameagent/mole.go)。
 - [业务协议](docs/PROTOCOL.md)、[设计与恢复边界](docs/DESIGN.md)、[Go 代码规范](docs/GO-CODE-STYLE.md)、[工作规则](AGENTS.md)。
+- [GSR 游戏业务教程（21 页 HTML）](docs/gsr-game-business.html)：在浏览器中离线打开，支持分步讲解、讲者备注、打印 PDF 和新游戏开发清单。
 - 容量测试另见 [Online](docs/DESIGN.md#6-online-容量估算与待测计划)、[结算负载](docs/DESIGN.md#95-结算层负载基线)、[大数据历史压测](docs/DESIGN.md#97-大数据历史压测)，不属于运行 Demo 的必需步骤。

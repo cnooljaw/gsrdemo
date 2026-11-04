@@ -80,20 +80,41 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	}
 	if changed {
 		service.settlement.prepare(service.game)
-		service.broadcast(self)
+		if !service.settlement.pending() {
+			service.broadcast(self)
+		}
 	}
+	service.advanceSettlement(self)
+	if service.settlement.result != nil && !service.settlement.pending() && !service.settlement.cleanupPending {
+		if !service.recovery {
+			for _, player := range service.game.Players {
+				if player.UserID != 0 {
+					return nil
+				}
+			}
+		}
+		self.Exit()
+		return nil
+	}
+	return nil
+}
+
+// advanceSettlement 先发布有效回执，再清理恢复记录；清理失败只重试 HDel。
+func (service *attackService) advanceSettlement(self gsr.ServiceContext) {
 	if service.settlement.pending() {
 		if err := service.settlement.settle(self); err != nil {
 			_ = self.Logger().Error("斗地主待结算保留原操作", "operation_id", service.settlement.result.ID, "error", err.Error())
-			return nil
+			return
 		}
-		if service.recovery {
-			self.Exit()
-			return nil
+		if !service.recovery {
+			service.broadcast(self)
 		}
-		service.broadcast(self)
 	}
-	return nil
+	if service.settlement.cleanupPending {
+		if err := service.settlement.cleanup(); err != nil {
+			_ = self.Logger().Error("斗地主结算已确认，待重试清理 Redis", "operation_id", service.settlement.result.ID, "error", err.Error())
+		}
+	}
 }
 
 func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, login, node, agent, membership string) (map[string]any, error) {
@@ -171,6 +192,9 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 		return false, err
 	}
 	if service.game.remove(seat) {
+		if service.settlement.cleanupPending {
+			return true, nil
+		}
 		self.Exit()
 		return true, nil
 	}
@@ -229,7 +253,10 @@ func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, lo
 		return nil, err
 	}
 	service.settlement.prepare(service.game)
-	service.broadcast(self)
+	if !service.settlement.pending() {
+		service.broadcast(self)
+	}
+	service.advanceSettlement(self)
 	return service.view(uid), nil
 }
 

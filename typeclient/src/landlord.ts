@@ -5,7 +5,7 @@ import {
   LandlordEnterRequestSchema, LandlordReadyRequestSchema, LandlordPlayRequestSchema,
   LandlordSnapshotRequestSchema, LandlordLeaveRequestSchema, LandlordEnterResponseSchema, LandlordReadyResponseSchema, LandlordPlayResponseSchema,
   LandlordSnapshotResponseSchema, LandlordLeaveResponseSchema, LandlordCallRequestSchema, LandlordCallResponseSchema, LandlordRobRequestSchema, LandlordRobResponseSchema,
-  LandlordOperationRequestSchema, LandlordOperationResponseSchema, MsgId,
+  MsgId,
 } from "./gen/demo/v1/game_pb.js";
 
 type Printer = (event: string, value: unknown) => void;
@@ -57,11 +57,6 @@ export async function runLandlord(client: DemoClient, print: Printer, timeout: n
       if (!receipt || !receipt.operationId) throw new Error("missing round settlement");
       print("landlord_settlement", receipt);
       if (receipt.status !== "committed") throw new Error(`landlord settlement rejected: ${receipt.reason}`);
-      const operation = await client.request(MsgId.C2S_LANDLORD_OPERATION,
-        toBinary(LandlordOperationRequestSchema, create(LandlordOperationRequestSchema, { operationId: receipt.operationId })),
-        MsgId.S2C_LANDLORD_OPERATION, LandlordOperationResponseSchema);
-      if (!operation.found || operation.status !== "committed") throw new Error("round operation not confirmed");
-      print("landlord_operation", operation);
       settled = true;
       break;
     }

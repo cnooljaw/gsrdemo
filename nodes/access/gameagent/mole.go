@@ -13,7 +13,6 @@ import (
 // Mole 处理本游戏接入协议，只持有路由，由所属 Agent 串行调用。
 type Mole struct {
 	deps       Dependencies
-	entryName  cluster.ServiceName
 	attackName cluster.ServiceName
 }
 
@@ -37,7 +36,6 @@ const (
 	moleHitCommand                   runtime.CommandID = 2
 	moleSnapshotCommand              runtime.CommandID = 3
 	moleLeaveCommand                 runtime.CommandID = 4
-	moleOperationCommand             runtime.CommandID = 3
 	moleSnapshotPushCommand          runtime.CommandID = 100
 	moleBalanceCorrectionPushCommand runtime.CommandID = 102
 )
@@ -60,8 +58,7 @@ func (mole *Mole) onEnter(self gsr.CommandContext, reply protocol.Context, _ *de
 	if !ok || entry == "" {
 		return ErrInvalidBackendReply
 	}
-	mole.entryName = cluster.ServiceName(entry)
-	value, err = mole.deps.Call(self, "mole", mole.entryName, moleEnterCommand, args...)
+	value, err = mole.deps.Call(self, "mole", cluster.ServiceName(entry), moleEnterCommand, args...)
 	if err != nil {
 		return err
 	}
@@ -99,7 +96,7 @@ func (mole *Mole) onHit(self gsr.CommandContext, reply protocol.Context, request
 	if err := mole.requireGame(); err != nil {
 		return err
 	}
-	// 不换 ActionID、不自动重试；未知结果由客户端按原身份查询/重试。
+	// 不换 ActionID、不自动重试；未知结果停止操作，重入刷新余额，原操作留给受控工具核查。
 	value, err := mole.deps.Call(self, "mole", mole.attackName, moleHitCommand, identity.UserID, identity.LoginID,
 		request.GetActionId(), request.GetSpawnSeq(), request.GetHole())
 	if errors.Is(err, errMoleTargetUnavailable) {
@@ -156,34 +153,6 @@ func (mole *Mole) onLeave(self gsr.CommandContext, reply protocol.Context, _ *de
 	return reply.Response(uint32(demopb.MsgId_S2C_LEAVE), &demopb.LeaveResponse{Left: left})
 }
 
-func (mole *Mole) onOperation(self gsr.CommandContext, reply protocol.Context, request *demopb.OperationRequest) error {
-	identity := mole.deps.Identity()
-	if err := identity.RequireLogin(); err != nil {
-		return err
-	}
-	if mole.entryName == "" {
-		return ErrEnterRequired
-	}
-	value, err := mole.deps.Call(self, "mole", mole.entryName, moleOperationCommand, identity.UserID, request.GetHitId())
-	if err != nil {
-		return err
-	}
-	response := &demopb.OperationResponse{HitId: request.GetHitId(), Found: value != nil}
-	if value != nil {
-		fields, ok := value.(map[string]any)
-		if !ok || fields["operation_id"] != request.GetHitId() {
-			return ErrInvalidBackendReply
-		}
-		status, statusOK := fields["status"].(string)
-		reason, reasonOK := fields["reason"].(string)
-		if !statusOK || !reasonOK || (status != "committed" && status != "rejected") {
-			return ErrInvalidBackendReply
-		}
-		response.Status, response.Reason = status, reason
-	}
-	return reply.Response(uint32(demopb.MsgId_S2C_OPERATION), response)
-}
-
 func (mole *Mole) handleSnapshotPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
 	identity := mole.deps.Identity()
 	if identity.UserID == 0 || loginID != identity.LoginID || mole.attackName == "" {
@@ -215,11 +184,10 @@ func (mole *Mole) handleBalanceCorrectionPush(_ gsr.CommandContext, loginID stri
 // ProtocolHandlers 返回本游戏的客户端协议入口。
 func (mole *Mole) ProtocolHandlers() map[uint32]any {
 	return map[uint32]any{
-		uint32(demopb.MsgId_C2S_ENTER):     mole.onEnter,
-		uint32(demopb.MsgId_C2S_HIT):       mole.onHit,
-		uint32(demopb.MsgId_C2S_SNAPSHOT):  mole.onSnapshot,
-		uint32(demopb.MsgId_C2S_LEAVE):     mole.onLeave,
-		uint32(demopb.MsgId_C2S_OPERATION): mole.onOperation,
+		uint32(demopb.MsgId_C2S_ENTER):    mole.onEnter,
+		uint32(demopb.MsgId_C2S_HIT):      mole.onHit,
+		uint32(demopb.MsgId_C2S_SNAPSHOT): mole.onSnapshot,
+		uint32(demopb.MsgId_C2S_LEAVE):    mole.onLeave,
 	}
 }
 
@@ -233,7 +201,7 @@ func (mole *Mole) CommandHandlers() map[runtime.CommandID]any {
 
 // Disconnect 尽力离开并清空路由；失败由所属 Agent 记录，组件不关闭连接。
 func (mole *Mole) Disconnect(self gsr.ServiceContext) error {
-	defer func() { mole.entryName, mole.attackName = "", "" }()
+	defer func() { mole.attackName = "" }()
 	if mole.attackName == "" {
 		return nil
 	}

@@ -12,6 +12,22 @@ import (
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
+// TestMoleDoesNotRegisterOperationQuery 保护客户端旧 HitID 查询编号不再接线，不转发逐锤账务查询。
+func TestMoleDoesNotRegisterOperationQuery(t *testing.T) {
+	mole := NewMole(Dependencies{})
+	if _, exists := mole.ProtocolHandlers()[uint32(demopb.MsgId_C2S_OPERATION)]; exists {
+		t.Fatal("地鼠仍注册客户端逐锤账务查询")
+	}
+}
+
+// TestLandlordDoesNotRegisterOperationQuery 保护斗地主客户端不再注册重复查账入口，终局快照就是结算结果。
+func TestLandlordDoesNotRegisterOperationQuery(t *testing.T) {
+	landlord := NewLandlord(Dependencies{})
+	if _, exists := landlord.ProtocolHandlers()[uint32(demopb.MsgId_C2S_LANDLORD_OPERATION)]; exists {
+		t.Fatal("斗地主仍注册客户端重复查账")
+	}
+}
+
 // TestAgentRequiresLoginBeforeGame 保护未登录连接不能调用任何游戏入口，不触发下游请求。
 func TestAgentRequiresLoginBeforeGame(t *testing.T) {
 	deps := Dependencies{Identity: func() Identity { return Identity{} }, AllowEnter: func(string) error { return ErrLoginRequired }}
@@ -21,7 +37,6 @@ func TestAgentRequiresLoginBeforeGame(t *testing.T) {
 		func() error { return mole.onHit(nil, protocol.Context{}, &demopb.HitRequest{}) },
 		func() error { return mole.onSnapshot(nil, protocol.Context{}, &demopb.SnapshotRequest{}) },
 		func() error { return mole.onLeave(nil, protocol.Context{}, &demopb.LeaveRequest{}) },
-		func() error { return mole.onOperation(nil, protocol.Context{}, &demopb.OperationRequest{}) },
 		func() error { return landlord.onEnter(nil, protocol.Context{}, &demopb.LandlordEnterRequest{}) },
 		func() error { return landlord.onReady(nil, protocol.Context{}, &demopb.LandlordReadyRequest{}) },
 		func() error { return landlord.onCall(nil, protocol.Context{}, &demopb.LandlordCallRequest{}) },
@@ -31,9 +46,6 @@ func TestAgentRequiresLoginBeforeGame(t *testing.T) {
 			return landlord.onSnapshot(nil, protocol.Context{}, &demopb.LandlordSnapshotRequest{})
 		},
 		func() error { return landlord.onLeave(nil, protocol.Context{}, &demopb.LandlordLeaveRequest{}) },
-		func() error {
-			return landlord.onOperation(nil, protocol.Context{}, &demopb.LandlordOperationRequest{})
-		},
 	}
 	for index, call := range calls {
 		if err := call(); !errors.Is(err, ErrLoginRequired) {
@@ -106,7 +118,7 @@ func TestGameDisconnectClearsRouteOnFailure(t *testing.T) {
 		return nil, runtime.ErrCallTimeout
 	}}
 	mole, landlord := NewMole(deps), NewLandlord(deps)
-	mole.entryName, mole.attackName, landlord.room = "entry", "attack", "room"
+	mole.attackName, landlord.room = "attack", "room"
 	for _, game := range []Component{mole, landlord} {
 		if !game.Entered() {
 			t.Fatal("缺少测试路由")
@@ -121,43 +133,7 @@ func TestGameDisconnectClearsRouteOnFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if mole.entryName != "" || calls != 2 {
-		t.Fatalf("entry=%s calls=%d", mole.entryName, calls)
-	}
-}
-
-// TestLandlordOperationUsesCurrentIdentity 保护结算查询只使用当前登录用户和原操作身份，并原样返回下游未知结果。
-func TestLandlordOperationUsesCurrentIdentity(t *testing.T) {
-	current := Identity{}
-	calls := 0
-	landlord := NewLandlord(Dependencies{
-		Identity:       func() Identity { return current },
-		SettlementNode: "settlement-02",
-		Call: func(_ gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
-			if node != "settlement-02" || name != "settlement-read" || command != 3 {
-				t.Fatalf("未使用配置中的公开结算地址: %s %s %d", node, name, command)
-			}
-			userID, operationID := args[0].(uint64), args[1].(string)
-			calls++
-			if userID != current.UserID || operationID != "round-original" {
-				t.Fatalf("使用过期身份或改变操作: %d %s", userID, operationID)
-			}
-			return nil, runtime.ErrCallTimeout
-		},
-	})
-	query := func() error {
-		return landlord.onOperation(nil, protocol.Context{}, &demopb.LandlordOperationRequest{OperationId: "round-original"})
-	}
-	if err := query(); !errors.Is(err, ErrLoginRequired) {
-		t.Fatal(err)
-	}
-	for _, userID := range []uint64{7, 9} {
-		current = Identity{UserID: userID}
-		if err := query(); !errors.Is(err, runtime.ErrCallTimeout) {
-			t.Fatal(err)
-		}
-	}
 	if calls != 2 {
-		t.Fatalf("查询被自动重试或未登录时仍调用下游: %d", calls)
+		t.Fatalf("清理失败后再次调用了下游: calls=%d", calls)
 	}
 }

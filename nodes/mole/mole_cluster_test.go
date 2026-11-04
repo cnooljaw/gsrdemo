@@ -680,7 +680,7 @@ func TestMoleRestartReloadsSettlementState(t *testing.T) {
 	if reconnected["silver"].(map[string]any)["balance"] != want {
 		t.Fatal("restart did not reload settlement balance")
 	}
-	value, err := moleRPC(t, routes, "mole", moleEntryName, moleOperationCommand, uint64(1), hit["hit_id"])
+	value, err := moleRPC(t, routes, "settlement", "settlement", settlementOperationCommand, uint64(1), hit["hit_id"])
 	if err != nil || value == nil || value.(map[string]any)["status"] != "committed" {
 		t.Fatalf("durable operation was not queryable: %v %v", value, err)
 	}

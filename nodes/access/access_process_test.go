@@ -349,7 +349,8 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 	seenHits := map[string]bool{}
 	for index := range players {
 		player := &players[index]
-		hitCount, receiptCount := 0, 0
+		hitCount := 0
+		playerHitIDs := []string{}
 		var debit, credit int64
 		playerGroup := ""
 		for _, line := range bytes.Split(player.output.Bytes(), []byte{'\n'}) {
@@ -399,6 +400,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 					t.Fatalf("invalid/duplicate hit: %s", event.Value)
 				}
 				seenHits[value.Hit.ID] = true
+				playerHitIDs = append(playerHitIDs, value.Hit.ID)
 				operationIDs = append(operationIDs, value.Hit.ID)
 				debitValue, err := strconv.ParseInt(value.Hit.Debit, 10, 64)
 				if err != nil {
@@ -412,25 +414,20 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 				credit += creditValue
 				hitCount++
 			case "settlement":
-				var value struct {
-					Status string `json:"status"`
-				}
-				if err := json.Unmarshal(event.Value, &value); err != nil || value.Status != "committed" {
-					t.Fatalf("receipt: %s %v", event.Value, err)
-				}
-				receiptCount++
+				t.Fatal("地鼠 CLI 不应再逐锤查询或输出入账回执")
 			}
 		}
 		if clientErrors[index] != nil {
 			t.Errorf("client %d: %v %s", index+1, clientErrors[index], player.output.Bytes())
 		}
-		if hitCount != 3 || receiptCount != 3 {
-			t.Errorf("client %d incomplete: hits=%d receipts=%d %s", index+1, hitCount, receiptCount, player.output.Bytes())
+		if hitCount != 3 {
+			t.Fatalf("client %d incomplete: hits=%d %s", index+1, hitCount, player.output.Bytes())
 		}
 		if playerGroup == "" || (group != "" && group != playerGroup) {
 			t.Errorf("clients did not share a group: %q %q", group, playerGroup)
 		}
 		group = playerGroup
+		accessWaitCommitted(t, ctx, settlementDB, playerHitIDs...)
 		var amount int64
 		var version uint64
 		if err := settlementDB.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", player.id).Scan(&amount, &version); err != nil {
@@ -439,7 +436,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 		if amount != 10000-debit+credit || version != 4 {
 			t.Errorf("client %d wallet amount=%d version=%d debit=%d credit=%d", index+1, amount, version, debit, credit)
 		}
-		t.Logf("客户端 %d：%d 命中 / %d 入账，扣 %d 返 %d，余额 %d，版本 %d", index+1, hitCount, receiptCount, debit, credit, amount, version)
+		t.Logf("客户端 %d：%d 命中 / %d 入账，扣 %d 返 %d，余额 %d，版本 %d", index+1, hitCount, len(playerHitIDs), debit, credit, amount, version)
 	}
 	if playerCount == 3 && !sawThreeMembers {
 		t.Error("no snapshot showed all three members")

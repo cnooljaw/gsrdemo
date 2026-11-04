@@ -130,31 +130,6 @@ func (landlord *Landlord) onLeave(self gsr.CommandContext, reply protocol.Contex
 	return reply.Response(uint32(demopb.MsgId_S2C_LANDLORD_LEAVE), &demopb.LandlordLeaveResponse{})
 }
 
-func (landlord *Landlord) onOperation(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordOperationRequest) error {
-	identity := landlord.deps.Identity()
-	if err := identity.RequireLogin(); err != nil {
-		return err
-	}
-	value, err := landlord.deps.Call(self, landlord.deps.SettlementNode, "settlement-read", 3, identity.UserID, request.OperationId)
-	if err != nil {
-		return err
-	}
-	response := &demopb.LandlordOperationResponse{OperationId: request.OperationId, Found: value != nil}
-	if value != nil {
-		fields, ok := value.(map[string]any)
-		if !ok || fields["operation_id"] != request.OperationId {
-			return ErrInvalidBackendReply
-		}
-		status, statusOK := fields["status"].(string)
-		reason, reasonOK := fields["reason"].(string)
-		if !statusOK || !reasonOK || (status != "committed" && status != "rejected") {
-			return ErrInvalidBackendReply
-		}
-		response.Status, response.Reason = status, reason
-	}
-	return reply.Response(uint32(demopb.MsgId_S2C_LANDLORD_OPERATION), response)
-}
-
 func landlordSnapshot(value any) (*demopb.LandlordSnapshot, error) {
 	snapshot := &demopb.LandlordSnapshot{}
 	if err := clientMessage(value, snapshot); err != nil {
@@ -210,14 +185,13 @@ func (landlord *Landlord) onRob(self gsr.CommandContext, reply protocol.Context,
 // ProtocolHandlers 返回本游戏的客户端协议入口。
 func (landlord *Landlord) ProtocolHandlers() map[uint32]any {
 	return map[uint32]any{
-		uint32(demopb.MsgId_C2S_LANDLORD_ENTER):     landlord.onEnter,
-		uint32(demopb.MsgId_C2S_LANDLORD_READY):     landlord.onReady,
-		uint32(demopb.MsgId_C2S_LANDLORD_CALL):      landlord.onCall,
-		uint32(demopb.MsgId_C2S_LANDLORD_ROB):       landlord.onRob,
-		uint32(demopb.MsgId_C2S_LANDLORD_PLAY):      landlord.onPlay,
-		uint32(demopb.MsgId_C2S_LANDLORD_SNAPSHOT):  landlord.onSnapshot,
-		uint32(demopb.MsgId_C2S_LANDLORD_LEAVE):     landlord.onLeave,
-		uint32(demopb.MsgId_C2S_LANDLORD_OPERATION): landlord.onOperation,
+		uint32(demopb.MsgId_C2S_LANDLORD_ENTER):    landlord.onEnter,
+		uint32(demopb.MsgId_C2S_LANDLORD_READY):    landlord.onReady,
+		uint32(demopb.MsgId_C2S_LANDLORD_CALL):     landlord.onCall,
+		uint32(demopb.MsgId_C2S_LANDLORD_ROB):      landlord.onRob,
+		uint32(demopb.MsgId_C2S_LANDLORD_PLAY):     landlord.onPlay,
+		uint32(demopb.MsgId_C2S_LANDLORD_SNAPSHOT): landlord.onSnapshot,
+		uint32(demopb.MsgId_C2S_LANDLORD_LEAVE):    landlord.onLeave,
 	}
 }
 

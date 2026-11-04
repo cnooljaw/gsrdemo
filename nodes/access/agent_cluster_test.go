@@ -76,7 +76,7 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 		return map[string]any{"entry_name": "entry"}, nil
 	case "entry":
 		if command == 3 {
-			return map[string]any{"operation_id": args[1], "status": "committed", "reason": ""}, nil
+			return nil, runtime.ErrUnknownCommand
 		}
 		snapshot := fixtureSnapshot()
 		snapshot["silver"] = map[string]any{"balance": int64(1000), "available": int64(1000), "revision": uint64(1)}
@@ -410,6 +410,31 @@ func TestAccessOnlineFailureDoesNotOpenGame(t *testing.T) {
 	}
 }
 
+// TestAccessRejectsLegacyMoleOperation 保护旧查账编号在真实客户端入口被拒绝，已登录连接也不能触发 Entry 查询。
+func TestAccessRejectsLegacyMoleOperation(t *testing.T) {
+	address, _, hits := startAccessBusiness(t)
+	client := dialAccess(t, address)
+	accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN,
+		&demopb.LoginRequest{Username: "alice", Password: "password"}, &demopb.LoginResponse{})
+	accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &demopb.EnterResponse{})
+	response := accessRequest(t, client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: "old-hit"})
+	if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || len(hits) != 0 {
+		t.Fatalf("旧查账入口未关闭: response=%v hits=%d", response, len(hits))
+	}
+}
+
+// TestAccessRejectsLegacyLandlordOperation 保护已登录客户端不能经旧斗地主查账编号访问结算服。
+func TestAccessRejectsLegacyLandlordOperation(t *testing.T) {
+	address, _, _ := startAccessBusiness(t)
+	client := dialAccess(t, address)
+	accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN,
+		&demopb.LoginRequest{Username: "alice", Password: "password"}, &demopb.LoginResponse{})
+	response := accessRequest(t, client, demopb.MsgId_C2S_LANDLORD_OPERATION, &demopb.LandlordOperationRequest{OperationId: "old-round"})
+	if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+		t.Fatalf("斗地主旧查账入口未关闭: response=%v", response)
+	}
+}
+
 // TestAccessOnlyKnownTargetRefusalCanContinue 保护只有明确的目标失效才返回可继续响应，超时、繁忙和错误类别不被当成未扣款。
 func TestAccessOnlyKnownTargetRefusalCanContinue(t *testing.T) {
 	gateAddress, _, hits := startAccessBusiness(t)
@@ -436,12 +461,12 @@ func TestAccessOnlyKnownTargetRefusalCanContinue(t *testing.T) {
 	}
 }
 
-// TestAccessCLITargetRefusalAndUnknownResult 保护实际 CLI 在目标失效后换目标继续，而超时/繁忙时只发一次命中并停止。
+// TestAccessCLITargetRefusalAndUnknownResult 保护实际 CLI 不查账也能连续命中，目标失效后换目标，未知结果只发一次后停止。
 func TestAccessCLITargetRefusalAndUnknownResult(t *testing.T) {
 	if os.Getenv("GSRDEMO_ACCESS_PROCESSES") != "1" {
 		t.Skip("build typeclient and set GSRDEMO_ACCESS_PROCESSES=1")
 	}
-	for _, scenario := range []string{"target-first", "timeout-first", "busy-first"} {
+	for _, scenario := range []string{"accepted", "target-first", "timeout-first", "busy-first"} {
 		t.Run(scenario, func(t *testing.T) {
 			gateAddress, _, hits := startAccessBusiness(t, scenario)
 			clientPath, err := filepath.Abs("../../typeclient/dist/index.js")
@@ -450,17 +475,27 @@ func TestAccessCLITargetRefusalAndUnknownResult(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			command := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", "alice", "--hits", "1")
+			command := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", "alice", "--hits", "2")
 			command.Stdin = strings.NewReader("password\n")
 			output, runErr := command.CombinedOutput()
-			if scenario != "target-first" {
+			if scenario == "timeout-first" || scenario == "busy-first" {
 				if runErr == nil || strings.Contains(string(output), `"event":"miss"`) || len(hits) != 1 {
 					t.Fatalf("未知结果不能继续: %v %s hits=%d", runErr, output, len(hits))
 				}
 				return
 			}
-			if runErr != nil || !strings.Contains(string(output), `"event":"miss"`) || !strings.Contains(string(output), `"event":"settlement"`) || len(hits) != 2 {
-				t.Fatalf("目标拒绝后未继续: %v %s hits=%d", runErr, output, len(hits))
+			expectedHits := 2
+			if scenario == "target-first" {
+				expectedHits++
+			}
+			if runErr != nil || !strings.Contains(string(output), `"event":"leave"`) || strings.Contains(string(output), `"event":"settlement"`) || len(hits) != expectedHits {
+				t.Fatalf("CLI 未独立于账务查询完成命中: %v %s hits=%d", runErr, output, len(hits))
+			}
+			if scenario == "accepted" {
+				return
+			}
+			if !strings.Contains(string(output), `"event":"miss"`) {
+				t.Fatal("未记录目标失效", string(output))
 			}
 			first, second := <-hits, <-hits
 			if first[2] == second[2] || first[3] != uint64(9) || second[3] != uint64(10) {

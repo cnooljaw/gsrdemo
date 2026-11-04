@@ -41,14 +41,6 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		hit := memory.Hit
 		*operationIDs = append(*operationIDs, hit.HitId)
 		verifyAccessHitReplay(t, client, hit)
-		response := accessRequest(t, client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: hit.HitId})
-		if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
-			t.Fatalf("结算不可用时不能把查询当成入账结果: %v", response)
-		}
-		var failure commonv1.ErrorResponse
-		if err := proto.Unmarshal(response.Payload, &failure); err != nil || failure.Code != commonv1.ErrorCode_ERROR_CODE_INTERNAL {
-			t.Fatalf("结算不可用应明确返回失败: %v %v", &failure, err)
-		}
 		var amount int64
 		var version uint64
 		if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", player.id).
@@ -130,15 +122,14 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 			if confirmed.Pool.Hits != prepared.Pool.Hits+1 || confirmed.Pool.Debit != prepared.Pool.Debit+hit.Debit || confirmed.Pool.Credit != prepared.Pool.Credit+hit.Credit {
 				t.Fatalf("Mole 恢复后统计重复或丢失: before=%+v after=%+v", prepared.Pool, confirmed.Pool)
 			}
-			// 房间不持久化；仍用同一账号重新登录/进入，再查询旧 HitID。
+			// 房间不持久化；用同一账号重新登录/进入，原账由验收程序核对。
 			client, _ = accessLoginAndEnter(t, gateAddress, player)
 			var origin string
 			if err := db.QueryRowContext(ctx, "SELECT origin_batch FROM settlement_operations WHERE operation_id = ?", hit.HitId).Scan(&origin); err != nil || origin != prepared.Pending.ID {
 				t.Fatalf("恢复更换了源批次: origin=%s err=%v", origin, err)
 			}
 		}
-		accessWaitCommitted(t, client, hit.HitId)
-		accessWaitCommitted(t, client, hit.HitId)
+		accessWaitCommitted(t, ctx, db, hit.HitId)
 		if err := db.QueryRowContext(ctx, "SELECT amount, version FROM silver_balances WHERE user_id = ?", player.id).
 			Scan(&amount, &version); err != nil {
 			t.Fatal(err)
