@@ -11,12 +11,14 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file demo/v1/game.proto.
  */
 export const file_demo_v1_game: GenFile = /*@__PURE__*/
-  fileDesc("ChJkZW1vL3YxL2dhbWUucHJvdG8SB2RlbW8udjEiMgoMTG9naW5SZXF1ZXN0EhAKCHVzZXJuYW1lGAEgASgJEhAKCHBhc3N3b3JkGAIgASgJIiAKDUxvZ2luUmVzcG9uc2USDwoHdXNlcl9pZBgBIAEoBCIOCgxFbnRlclJlcXVlc3QiVgoNRW50ZXJSZXNwb25zZRIjCghzbmFwc2hvdBgBIAEoCzIRLmRlbW8udjEuU25hcHNob3QSIAoGc2lsdmVyGAIgASgLMhAuZGVtby52MS5CYWxhbmNlIkAKCkhpdFJlcXVlc3QSEQoJYWN0aW9uX2lkGAEgASgJEhEKCXNwYXduX3NlcRgCIAEoBBIMCgRob2xlGAMgASgDIl0KC0hpdFJlc3BvbnNlEhkKA2hpdBgBIAEoCzIMLmRlbW8udjEuSGl0EiAKBnNpbHZlchgCIAEoCzIQLmRlbW8udjEuQmFsYW5jZRIRCglyZWplY3Rpb24YAyABKAkiEQoPU25hcHNob3RSZXF1ZXN0IjcKEFNuYXBzaG90UmVzcG9uc2USIwoIc25hcHNob3QYASABKAsyES5kZW1vLnYxLlNuYXBzaG90Ig4KDExlYXZlUmVxdWVzdCIdCg1MZWF2ZVJlc3BvbnNlEgwKBGxlZnQYASABKAgiIgoQT3BlcmF0aW9uUmVxdWVzdBIOCgZoaXRfaWQYASABKAkiUgoRT3BlcmF0aW9uUmVzcG9uc2USDQoFZm91bmQYASABKAgSDgoGaGl0X2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRIOCgZyZWFzb24YBCABKAkiMwoMU25hcHNob3RQdXNoEiMKCHNuYXBzaG90GAEgASgLMhEuZGVtby52MS5TbmFwc2hvdCIvCgtCYWxhbmNlUHVzaBIgCgZzaWx2ZXIYASABKAsyEC5kZW1vLnYxLkJhbGFuY2UicgoHQmFsYW5jZRIPCgdiYWxhbmNlGAEgASgDEisKCWNvbmZpcm1lZBgCIAEoCzIYLmRlbW8udjEuQ29uZmlybWVkU2lsdmVyEhEKCWF2YWlsYWJsZRgDIAEoAxIQCghyZXZpc2lvbhgFIAEoBEoECAQQBSIyCg9Db25maXJtZWRTaWx2ZXISDgoGYW1vdW50GAEgASgDEg8KB3ZlcnNpb24YAiABKAQiJwoGTWVtYmVyEg8KB3VzZXJfaWQYASABKAQSDAoEc2VhdBgCIAEoAyJPCgZUYXJnZXQSEQoJc3Bhd25fc2VxGAEgASgEEgwKBGhvbGUYAiABKAMSEwoLZGVhZGxpbmVfbXMYAyABKAMSDwoHY2xhaW1lZBgEIAEoCCJ4CgNIaXQSDgoGaGl0X2lkGAEgASgJEhEKCWFjdGlvbl9pZBgCIAEoCRIOCgZzdGF0dXMYAyABKAkSDQoFZGViaXQYBCABKAMSDgoGY3JlZGl0GAUgASgDEhEKCXNwYXduX3NlcRgGIAEoBBIMCgRob2xlGAcgASgDIqABCghTbmFwc2hvdBITCgthdHRhY2tfbmFtZRgBIAEoCRIRCglzZXJ2ZXJfbXMYAiABKAMSDAoEc2VhdBgDIAEoAxIgCgdtZW1iZXJzGAQgAygLMg8uZGVtby52MS5NZW1iZXISIAoHdGFyZ2V0cxgFIAMoCzIPLmRlbW8udjEuVGFyZ2V0EhoKBGhpdHMYBiADKAsyDC5kZW1vLnYxLkhpdCIWChRMYW5kbG9yZEVudGVyUmVxdWVzdCIWChRMYW5kbG9yZFJlYWR5UmVxdWVzdCIyChNMYW5kbG9yZFBsYXlSZXF1ZXN0EgwKBHR1cm4YASABKAQSDQoFY2FyZHMYAiADKAMiGQoXTGFuZGxvcmRTbmFwc2hvdFJlcXVlc3QiFgoUTGFuZGxvcmRMZWF2ZVJlcXVlc3QiMAoYTGFuZGxvcmRPcGVyYXRpb25SZXF1ZXN0EhQKDG9wZXJhdGlvbl9pZBgBIAEoCSJgChlMYW5kbG9yZE9wZXJhdGlvblJlc3BvbnNlEg0KBWZvdW5kGAEgASgIEhQKDG9wZXJhdGlvbl9pZBgCIAEoCRIOCgZzdGF0dXMYAyABKAkSDgoGcmVhc29uGAQgASgJIkQKFUxhbmRsb3JkRW50ZXJSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCJEChVMYW5kbG9yZFJlYWR5UmVzcG9uc2USKwoIc25hcHNob3QYASABKAsyGS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3QiQwoUTGFuZGxvcmRQbGF5UmVzcG9uc2USKwoIc25hcHNob3QYASABKAsyGS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3QiRwoYTGFuZGxvcmRTbmFwc2hvdFJlc3BvbnNlEisKCHNuYXBzaG90GAEgASgLMhkuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90IkQKFUxhbmRsb3JkTGVhdmVSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCJDChRMYW5kbG9yZENhbGxSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCJCChNMYW5kbG9yZFJvYlJlc3BvbnNlEisKCHNuYXBzaG90GAEgASgLMhkuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90IjsKDExhbmRsb3JkUHVzaBIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCIwChNMYW5kbG9yZENhbGxSZXF1ZXN0EgwKBHR1cm4YASABKAQSCwoDeWVzGAIgASgIIi8KEkxhbmRsb3JkUm9iUmVxdWVzdBIMCgR0dXJuGAEgASgEEgsKA3llcxgCIAEoCCJ6Cg5MYW5kbG9yZFBsYXllchIPCgd1c2VyX2lkGAEgASgEEgwKBHNlYXQYAiABKAMSDQoFcmVhZHkYAyABKAgSEQoJcmVtYWluaW5nGAQgASgDEhMKC2NhbGxfY2hvaWNlGAUgASgDEhIKCnJvYl9jaG9pY2UYBiABKAMiiwEKEkxhbmRsb3JkU2V0dGxlbWVudBIUCgxvcGVyYXRpb25faWQYASABKAkSDgoGc3RhdHVzGAIgASgJEg4KBnJlYXNvbhgDIAEoCRINCgVkZWJpdBgEIAEoAxIOCgZjcmVkaXQYBSABKAMSDwoHYmFsYW5jZRgGIAEoAxIPCgd2ZXJzaW9uGAcgASgEIoEDChBMYW5kbG9yZFNuYXBzaG90EhEKCXJvb21fbmFtZRgBIAEoCRINCgVwaGFzZRgCIAEoCRIMCgRzZWF0GAMgASgDEigKB3BsYXllcnMYBCADKAsyFy5kZW1vLnYxLkxhbmRsb3JkUGxheWVyEgwKBGhhbmQYBSADKAMSDgoGYm90dG9tGAYgAygDEhIKCmxhc3RfY2FyZHMYByADKAMSEQoJbGFzdF9zZWF0GAggASgDEhEKCXR1cm5fc2VhdBgJIAEoAxIMCgR0dXJuGAogASgEEhMKC2RlYWRsaW5lX21zGAsgASgDEhUKDWxhbmRsb3JkX3NlYXQYDCABKAMSEwoLd2lubmVyX3NlYXQYDSABKAMSLwoKc2V0dGxlbWVudBgOIAEoCzIbLmRlbW8udjEuTGFuZGxvcmRTZXR0bGVtZW50EhIKCm11bHRpcGxpZXIYDyABKAMSFgoOY2FuZGlkYXRlX3NlYXQYECABKAMSDwoHcmVkZWFscxgRIAEoAyriDgoFTXNnSWQSFgoSTVNHX0lEX1VOU1BFQ0lGSUVEEAASLwoJQzJTX0xPR0lOEOkHGh+KtRgbChUuZGVtby52MS5Mb2dpblJlcXVlc3QQARgBEjAKCVMyQ19MT0dJThDqBxogirUYHAoWLmRlbW8udjEuTG9naW5SZXNwb25zZRACGAMSLwoJQzJTX0VOVEVSEPMHGh+KtRgbChUuZGVtby52MS5FbnRlclJlcXVlc3QQARgBEjAKCVMyQ19FTlRFUhD0BxogirUYHAoWLmRlbW8udjEuRW50ZXJSZXNwb25zZRACGAMSKwoHQzJTX0hJVBD9BxodirUYGQoTLmRlbW8udjEuSGl0UmVxdWVzdBABGAESLAoHUzJDX0hJVBD+BxoeirUYGgoULmRlbW8udjEuSGl0UmVzcG9uc2UQAhgDEjUKDEMyU19TTkFQU0hPVBCHCBoiirUYHgoYLmRlbW8udjEuU25hcHNob3RSZXF1ZXN0EAEYARI2CgxTMkNfU05BUFNIT1QQiAgaI4q1GB8KGS5kZW1vLnYxLlNuYXBzaG90UmVzcG9uc2UQAhgDEi8KCUMyU19MRUFWRRCRCBofirUYGwoVLmRlbW8udjEuTGVhdmVSZXF1ZXN0EAEYARIwCglTMkNfTEVBVkUQkggaIIq1GBwKFi5kZW1vLnYxLkxlYXZlUmVzcG9uc2UQAhgDEjcKDUMyU19PUEVSQVRJT04QmwgaI4q1GB8KGS5kZW1vLnYxLk9wZXJhdGlvblJlcXVlc3QQARgBEjgKDVMyQ19PUEVSQVRJT04QnAgaJIq1GCAKGi5kZW1vLnYxLk9wZXJhdGlvblJlc3BvbnNlEAIYAxI3ChFTMkNfU05BUFNIT1RfUFVTSBClCBofirUYGwoVLmRlbW8udjEuU25hcHNob3RQdXNoEAIYBBI1ChBTMkNfQkFMQU5DRV9QVVNIEKYIGh6KtRgaChQuZGVtby52MS5CYWxhbmNlUHVzaBACGAQSQAoSQzJTX0xBTkRMT1JEX0VOVEVSEM0IGieKtRgjCh0uZGVtby52MS5MYW5kbG9yZEVudGVyUmVxdWVzdBABGAESQQoSUzJDX0xBTkRMT1JEX0VOVEVSEM4IGiiKtRgkCh4uZGVtby52MS5MYW5kbG9yZEVudGVyUmVzcG9uc2UQAhgDEkAKEkMyU19MQU5ETE9SRF9SRUFEWRDXCBonirUYIwodLmRlbW8udjEuTGFuZGxvcmRSZWFkeVJlcXVlc3QQARgBEkEKElMyQ19MQU5ETE9SRF9SRUFEWRDYCBooirUYJAoeLmRlbW8udjEuTGFuZGxvcmRSZWFkeVJlc3BvbnNlEAIYAxI+ChFDMlNfTEFORExPUkRfUExBWRDhCBomirUYIgocLmRlbW8udjEuTGFuZGxvcmRQbGF5UmVxdWVzdBABGAESPwoRUzJDX0xBTkRMT1JEX1BMQVkQ4ggaJ4q1GCMKHS5kZW1vLnYxLkxhbmRsb3JkUGxheVJlc3BvbnNlEAIYAxJGChVDMlNfTEFORExPUkRfU05BUFNIT1QQ6wgaKoq1GCYKIC5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3RSZXF1ZXN0EAEYARJHChVTMkNfTEFORExPUkRfU05BUFNIT1QQ7AgaK4q1GCcKIS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3RSZXNwb25zZRACGAMSQAoSQzJTX0xBTkRMT1JEX0xFQVZFEPUIGieKtRgjCh0uZGVtby52MS5MYW5kbG9yZExlYXZlUmVxdWVzdBABGAESQQoSUzJDX0xBTkRMT1JEX0xFQVZFEPYIGiiKtRgkCh4uZGVtby52MS5MYW5kbG9yZExlYXZlUmVzcG9uc2UQAhgDEkgKFkMyU19MQU5ETE9SRF9PUEVSQVRJT04Q/wgaK4q1GCcKIS5kZW1vLnYxLkxhbmRsb3JkT3BlcmF0aW9uUmVxdWVzdBABGAESSQoWUzJDX0xBTkRMT1JEX09QRVJBVElPThCACRosirUYKAoiLmRlbW8udjEuTGFuZGxvcmRPcGVyYXRpb25SZXNwb25zZRACGAMSNwoRUzJDX0xBTkRMT1JEX1BVU0gQiQkaH4q1GBsKFS5kZW1vLnYxLkxhbmRsb3JkUHVzaBACGAQSPgoRQzJTX0xBTkRMT1JEX0NBTEwQkwkaJoq1GCIKHC5kZW1vLnYxLkxhbmRsb3JkQ2FsbFJlcXVlc3QQARgBEj8KEVMyQ19MQU5ETE9SRF9DQUxMEJQJGieKtRgjCh0uZGVtby52MS5MYW5kbG9yZENhbGxSZXNwb25zZRACGAMSPAoQQzJTX0xBTkRMT1JEX1JPQhCdCRolirUYIQobLmRlbW8udjEuTGFuZGxvcmRSb2JSZXF1ZXN0EAEYARI9ChBTMkNfTEFORExPUkRfUk9CEJ4JGiaKtRgiChwuZGVtby52MS5MYW5kbG9yZFJvYlJlc3BvbnNlEAIYA0I9WjtnaXRodWIuY29tL2Nub29samF3L2dzcmRlbW8vbm9kZXMvYWNjZXNzL2dlbi9kZW1vL3YxO2RlbW9wYmIGcHJvdG8z", [file_gsr_protocol_v1_options]);
+  fileDesc("ChJkZW1vL3YxL2dhbWUucHJvdG8SB2RlbW8udjEiOQoTUGFzc3dvcmRBdXRoUmVxdWVzdBIQCgh1c2VybmFtZRgBIAEoCRIQCghwYXNzd29yZBgCIAEoCSJUChRQYXNzd29yZEF1dGhSZXNwb25zZRIPCgd1c2VyX2lkGAEgASgEEhQKDGFjY2Vzc190b2tlbhgCIAEoCRIVCg1leHBpcmVzX2F0X21zGAMgASgDIkQKDExvZ2luUmVxdWVzdBIUCgxhY2Nlc3NfdG9rZW4YAyABKAlKBAgBEAJKBAgCEANSCHVzZXJuYW1lUghwYXNzd29yZCIgCg1Mb2dpblJlc3BvbnNlEg8KB3VzZXJfaWQYASABKAQiDgoMRW50ZXJSZXF1ZXN0IlYKDUVudGVyUmVzcG9uc2USIwoIc25hcHNob3QYASABKAsyES5kZW1vLnYxLlNuYXBzaG90EiAKBnNpbHZlchgCIAEoCzIQLmRlbW8udjEuQmFsYW5jZSJACgpIaXRSZXF1ZXN0EhEKCWFjdGlvbl9pZBgBIAEoCRIRCglzcGF3bl9zZXEYAiABKAQSDAoEaG9sZRgDIAEoAyJdCgtIaXRSZXNwb25zZRIZCgNoaXQYASABKAsyDC5kZW1vLnYxLkhpdBIgCgZzaWx2ZXIYAiABKAsyEC5kZW1vLnYxLkJhbGFuY2USEQoJcmVqZWN0aW9uGAMgASgJIhEKD1NuYXBzaG90UmVxdWVzdCI3ChBTbmFwc2hvdFJlc3BvbnNlEiMKCHNuYXBzaG90GAEgASgLMhEuZGVtby52MS5TbmFwc2hvdCIOCgxMZWF2ZVJlcXVlc3QiHQoNTGVhdmVSZXNwb25zZRIMCgRsZWZ0GAEgASgIIiIKEE9wZXJhdGlvblJlcXVlc3QSDgoGaGl0X2lkGAEgASgJIlIKEU9wZXJhdGlvblJlc3BvbnNlEg0KBWZvdW5kGAEgASgIEg4KBmhpdF9pZBgCIAEoCRIOCgZzdGF0dXMYAyABKAkSDgoGcmVhc29uGAQgASgJIjMKDFNuYXBzaG90UHVzaBIjCghzbmFwc2hvdBgBIAEoCzIRLmRlbW8udjEuU25hcHNob3QiLwoLQmFsYW5jZVB1c2gSIAoGc2lsdmVyGAEgASgLMhAuZGVtby52MS5CYWxhbmNlInIKB0JhbGFuY2USDwoHYmFsYW5jZRgBIAEoAxIrCgljb25maXJtZWQYAiABKAsyGC5kZW1vLnYxLkNvbmZpcm1lZFNpbHZlchIRCglhdmFpbGFibGUYAyABKAMSEAoIcmV2aXNpb24YBSABKARKBAgEEAUiMgoPQ29uZmlybWVkU2lsdmVyEg4KBmFtb3VudBgBIAEoAxIPCgd2ZXJzaW9uGAIgASgEIicKBk1lbWJlchIPCgd1c2VyX2lkGAEgASgEEgwKBHNlYXQYAiABKAMiTwoGVGFyZ2V0EhEKCXNwYXduX3NlcRgBIAEoBBIMCgRob2xlGAIgASgDEhMKC2RlYWRsaW5lX21zGAMgASgDEg8KB2NsYWltZWQYBCABKAgieAoDSGl0Eg4KBmhpdF9pZBgBIAEoCRIRCglhY3Rpb25faWQYAiABKAkSDgoGc3RhdHVzGAMgASgJEg0KBWRlYml0GAQgASgDEg4KBmNyZWRpdBgFIAEoAxIRCglzcGF3bl9zZXEYBiABKAQSDAoEaG9sZRgHIAEoAyKgAQoIU25hcHNob3QSEwoLYXR0YWNrX25hbWUYASABKAkSEQoJc2VydmVyX21zGAIgASgDEgwKBHNlYXQYAyABKAMSIAoHbWVtYmVycxgEIAMoCzIPLmRlbW8udjEuTWVtYmVyEiAKB3RhcmdldHMYBSADKAsyDy5kZW1vLnYxLlRhcmdldBIaCgRoaXRzGAYgAygLMgwuZGVtby52MS5IaXQiFgoUTGFuZGxvcmRFbnRlclJlcXVlc3QiFgoUTGFuZGxvcmRSZWFkeVJlcXVlc3QiMgoTTGFuZGxvcmRQbGF5UmVxdWVzdBIMCgR0dXJuGAEgASgEEg0KBWNhcmRzGAIgAygDIhkKF0xhbmRsb3JkU25hcHNob3RSZXF1ZXN0IhYKFExhbmRsb3JkTGVhdmVSZXF1ZXN0IjAKGExhbmRsb3JkT3BlcmF0aW9uUmVxdWVzdBIUCgxvcGVyYXRpb25faWQYASABKAkiYAoZTGFuZGxvcmRPcGVyYXRpb25SZXNwb25zZRINCgVmb3VuZBgBIAEoCBIUCgxvcGVyYXRpb25faWQYAiABKAkSDgoGc3RhdHVzGAMgASgJEg4KBnJlYXNvbhgEIAEoCSJEChVMYW5kbG9yZEVudGVyUmVzcG9uc2USKwoIc25hcHNob3QYASABKAsyGS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3QiRAoVTGFuZGxvcmRSZWFkeVJlc3BvbnNlEisKCHNuYXBzaG90GAEgASgLMhkuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90IkMKFExhbmRsb3JkUGxheVJlc3BvbnNlEisKCHNuYXBzaG90GAEgASgLMhkuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90IkcKGExhbmRsb3JkU25hcHNob3RSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCJEChVMYW5kbG9yZExlYXZlUmVzcG9uc2USKwoIc25hcHNob3QYASABKAsyGS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3QiQwoUTGFuZGxvcmRDYWxsUmVzcG9uc2USKwoIc25hcHNob3QYASABKAsyGS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3QiQgoTTGFuZGxvcmRSb2JSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCI7CgxMYW5kbG9yZFB1c2gSKwoIc25hcHNob3QYASABKAsyGS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3QiMAoTTGFuZGxvcmRDYWxsUmVxdWVzdBIMCgR0dXJuGAEgASgEEgsKA3llcxgCIAEoCCIvChJMYW5kbG9yZFJvYlJlcXVlc3QSDAoEdHVybhgBIAEoBBILCgN5ZXMYAiABKAgiegoOTGFuZGxvcmRQbGF5ZXISDwoHdXNlcl9pZBgBIAEoBBIMCgRzZWF0GAIgASgDEg0KBXJlYWR5GAMgASgIEhEKCXJlbWFpbmluZxgEIAEoAxITCgtjYWxsX2Nob2ljZRgFIAEoAxISCgpyb2JfY2hvaWNlGAYgASgDIosBChJMYW5kbG9yZFNldHRsZW1lbnQSFAoMb3BlcmF0aW9uX2lkGAEgASgJEg4KBnN0YXR1cxgCIAEoCRIOCgZyZWFzb24YAyABKAkSDQoFZGViaXQYBCABKAMSDgoGY3JlZGl0GAUgASgDEg8KB2JhbGFuY2UYBiABKAMSDwoHdmVyc2lvbhgHIAEoBCKBAwoQTGFuZGxvcmRTbmFwc2hvdBIRCglyb29tX25hbWUYASABKAkSDQoFcGhhc2UYAiABKAkSDAoEc2VhdBgDIAEoAxIoCgdwbGF5ZXJzGAQgAygLMhcuZGVtby52MS5MYW5kbG9yZFBsYXllchIMCgRoYW5kGAUgAygDEg4KBmJvdHRvbRgGIAMoAxISCgpsYXN0X2NhcmRzGAcgAygDEhEKCWxhc3Rfc2VhdBgIIAEoAxIRCgl0dXJuX3NlYXQYCSABKAMSDAoEdHVybhgKIAEoBBITCgtkZWFkbGluZV9tcxgLIAEoAxIVCg1sYW5kbG9yZF9zZWF0GAwgASgDEhMKC3dpbm5lcl9zZWF0GA0gASgDEi8KCnNldHRsZW1lbnQYDiABKAsyGy5kZW1vLnYxLkxhbmRsb3JkU2V0dGxlbWVudBISCgptdWx0aXBsaWVyGA8gASgDEhYKDmNhbmRpZGF0ZV9zZWF0GBAgASgDEg8KB3JlZGVhbHMYESABKAMq4w8KBU1zZ0lkEhYKEk1TR19JRF9VTlNQRUNJRklFRBAAEi8KCUMyU19MT0dJThDpBxofirUYGwoVLmRlbW8udjEuTG9naW5SZXF1ZXN0EAEYARIwCglTMkNfTE9HSU4Q6gcaIIq1GBwKFi5kZW1vLnYxLkxvZ2luUmVzcG9uc2UQAhgDEj4KEUMyU19QQVNTV09SRF9BVVRIEOsHGiaKtRgiChwuZGVtby52MS5QYXNzd29yZEF1dGhSZXF1ZXN0EAEYARI/ChFTMkNfUEFTU1dPUkRfQVVUSBDsBxonirUYIwodLmRlbW8udjEuUGFzc3dvcmRBdXRoUmVzcG9uc2UQAhgDEi8KCUMyU19FTlRFUhDzBxofirUYGwoVLmRlbW8udjEuRW50ZXJSZXF1ZXN0EAEYARIwCglTMkNfRU5URVIQ9AcaIIq1GBwKFi5kZW1vLnYxLkVudGVyUmVzcG9uc2UQAhgDEisKB0MyU19ISVQQ/QcaHYq1GBkKEy5kZW1vLnYxLkhpdFJlcXVlc3QQARgBEiwKB1MyQ19ISVQQ/gcaHoq1GBoKFC5kZW1vLnYxLkhpdFJlc3BvbnNlEAIYAxI1CgxDMlNfU05BUFNIT1QQhwgaIoq1GB4KGC5kZW1vLnYxLlNuYXBzaG90UmVxdWVzdBABGAESNgoMUzJDX1NOQVBTSE9UEIgIGiOKtRgfChkuZGVtby52MS5TbmFwc2hvdFJlc3BvbnNlEAIYAxIvCglDMlNfTEVBVkUQkQgaH4q1GBsKFS5kZW1vLnYxLkxlYXZlUmVxdWVzdBABGAESMAoJUzJDX0xFQVZFEJIIGiCKtRgcChYuZGVtby52MS5MZWF2ZVJlc3BvbnNlEAIYAxI3Cg1DMlNfT1BFUkFUSU9OEJsIGiOKtRgfChkuZGVtby52MS5PcGVyYXRpb25SZXF1ZXN0EAEYARI4Cg1TMkNfT1BFUkFUSU9OEJwIGiSKtRggChouZGVtby52MS5PcGVyYXRpb25SZXNwb25zZRACGAMSNwoRUzJDX1NOQVBTSE9UX1BVU0gQpQgaH4q1GBsKFS5kZW1vLnYxLlNuYXBzaG90UHVzaBACGAQSNQoQUzJDX0JBTEFOQ0VfUFVTSBCmCBoeirUYGgoULmRlbW8udjEuQmFsYW5jZVB1c2gQAhgEEkAKEkMyU19MQU5ETE9SRF9FTlRFUhDNCBonirUYIwodLmRlbW8udjEuTGFuZGxvcmRFbnRlclJlcXVlc3QQARgBEkEKElMyQ19MQU5ETE9SRF9FTlRFUhDOCBooirUYJAoeLmRlbW8udjEuTGFuZGxvcmRFbnRlclJlc3BvbnNlEAIYAxJAChJDMlNfTEFORExPUkRfUkVBRFkQ1wgaJ4q1GCMKHS5kZW1vLnYxLkxhbmRsb3JkUmVhZHlSZXF1ZXN0EAEYARJBChJTMkNfTEFORExPUkRfUkVBRFkQ2AgaKIq1GCQKHi5kZW1vLnYxLkxhbmRsb3JkUmVhZHlSZXNwb25zZRACGAMSPgoRQzJTX0xBTkRMT1JEX1BMQVkQ4QgaJoq1GCIKHC5kZW1vLnYxLkxhbmRsb3JkUGxheVJlcXVlc3QQARgBEj8KEVMyQ19MQU5ETE9SRF9QTEFZEOIIGieKtRgjCh0uZGVtby52MS5MYW5kbG9yZFBsYXlSZXNwb25zZRACGAMSRgoVQzJTX0xBTkRMT1JEX1NOQVBTSE9UEOsIGiqKtRgmCiAuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90UmVxdWVzdBABGAESRwoVUzJDX0xBTkRMT1JEX1NOQVBTSE9UEOwIGiuKtRgnCiEuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90UmVzcG9uc2UQAhgDEkAKEkMyU19MQU5ETE9SRF9MRUFWRRD1CBonirUYIwodLmRlbW8udjEuTGFuZGxvcmRMZWF2ZVJlcXVlc3QQARgBEkEKElMyQ19MQU5ETE9SRF9MRUFWRRD2CBooirUYJAoeLmRlbW8udjEuTGFuZGxvcmRMZWF2ZVJlc3BvbnNlEAIYAxJIChZDMlNfTEFORExPUkRfT1BFUkFUSU9OEP8IGiuKtRgnCiEuZGVtby52MS5MYW5kbG9yZE9wZXJhdGlvblJlcXVlc3QQARgBEkkKFlMyQ19MQU5ETE9SRF9PUEVSQVRJT04QgAkaLIq1GCgKIi5kZW1vLnYxLkxhbmRsb3JkT3BlcmF0aW9uUmVzcG9uc2UQAhgDEjcKEVMyQ19MQU5ETE9SRF9QVVNIEIkJGh+KtRgbChUuZGVtby52MS5MYW5kbG9yZFB1c2gQAhgEEj4KEUMyU19MQU5ETE9SRF9DQUxMEJMJGiaKtRgiChwuZGVtby52MS5MYW5kbG9yZENhbGxSZXF1ZXN0EAEYARI/ChFTMkNfTEFORExPUkRfQ0FMTBCUCRonirUYIwodLmRlbW8udjEuTGFuZGxvcmRDYWxsUmVzcG9uc2UQAhgDEjwKEEMyU19MQU5ETE9SRF9ST0IQnQkaJYq1GCEKGy5kZW1vLnYxLkxhbmRsb3JkUm9iUmVxdWVzdBABGAESPQoQUzJDX0xBTkRMT1JEX1JPQhCeCRomirUYIgocLmRlbW8udjEuTGFuZGxvcmRSb2JSZXNwb25zZRACGANCPVo7Z2l0aHViLmNvbS9jbm9vbGphdy9nc3JkZW1vL25vZGVzL2FjY2Vzcy9nZW4vZGVtby92MTtkZW1vcGJiBnByb3RvMw", [file_gsr_protocol_v1_options]);
 
 /**
- * @generated from message demo.v1.LoginRequest
+ * 认证只签发凭据，不建立游戏登录；密码不复用到 Token 登录协议。
+ *
+ * @generated from message demo.v1.PasswordAuthRequest
  */
-export type LoginRequest = Message<"demo.v1.LoginRequest"> & {
+export type PasswordAuthRequest = Message<"demo.v1.PasswordAuthRequest"> & {
   /**
    * @generated from field: string username = 1;
    */
@@ -29,11 +31,55 @@ export type LoginRequest = Message<"demo.v1.LoginRequest"> & {
 };
 
 /**
+ * Describes the message demo.v1.PasswordAuthRequest.
+ * Use `create(PasswordAuthRequestSchema)` to create a new message.
+ */
+export const PasswordAuthRequestSchema: GenMessage<PasswordAuthRequest> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 0);
+
+/**
+ * @generated from message demo.v1.PasswordAuthResponse
+ */
+export type PasswordAuthResponse = Message<"demo.v1.PasswordAuthResponse"> & {
+  /**
+   * @generated from field: uint64 user_id = 1;
+   */
+  userId: bigint;
+
+  /**
+   * @generated from field: string access_token = 2;
+   */
+  accessToken: string;
+
+  /**
+   * @generated from field: int64 expires_at_ms = 3;
+   */
+  expiresAtMs: bigint;
+};
+
+/**
+ * Describes the message demo.v1.PasswordAuthResponse.
+ * Use `create(PasswordAuthResponseSchema)` to create a new message.
+ */
+export const PasswordAuthResponseSchema: GenMessage<PasswordAuthResponse> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 1);
+
+/**
+ * @generated from message demo.v1.LoginRequest
+ */
+export type LoginRequest = Message<"demo.v1.LoginRequest"> & {
+  /**
+   * @generated from field: string access_token = 3;
+   */
+  accessToken: string;
+};
+
+/**
  * Describes the message demo.v1.LoginRequest.
  * Use `create(LoginRequestSchema)` to create a new message.
  */
 export const LoginRequestSchema: GenMessage<LoginRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 0);
+  messageDesc(file_demo_v1_game, 2);
 
 /**
  * @generated from message demo.v1.LoginResponse
@@ -50,7 +96,7 @@ export type LoginResponse = Message<"demo.v1.LoginResponse"> & {
  * Use `create(LoginResponseSchema)` to create a new message.
  */
 export const LoginResponseSchema: GenMessage<LoginResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 1);
+  messageDesc(file_demo_v1_game, 3);
 
 /**
  * @generated from message demo.v1.EnterRequest
@@ -63,7 +109,7 @@ export type EnterRequest = Message<"demo.v1.EnterRequest"> & {
  * Use `create(EnterRequestSchema)` to create a new message.
  */
 export const EnterRequestSchema: GenMessage<EnterRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 2);
+  messageDesc(file_demo_v1_game, 4);
 
 /**
  * @generated from message demo.v1.EnterResponse
@@ -85,7 +131,7 @@ export type EnterResponse = Message<"demo.v1.EnterResponse"> & {
  * Use `create(EnterResponseSchema)` to create a new message.
  */
 export const EnterResponseSchema: GenMessage<EnterResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 3);
+  messageDesc(file_demo_v1_game, 5);
 
 /**
  * @generated from message demo.v1.HitRequest
@@ -112,7 +158,7 @@ export type HitRequest = Message<"demo.v1.HitRequest"> & {
  * Use `create(HitRequestSchema)` to create a new message.
  */
 export const HitRequestSchema: GenMessage<HitRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 4);
+  messageDesc(file_demo_v1_game, 6);
 
 /**
  * @generated from message demo.v1.HitResponse
@@ -141,7 +187,7 @@ export type HitResponse = Message<"demo.v1.HitResponse"> & {
  * Use `create(HitResponseSchema)` to create a new message.
  */
 export const HitResponseSchema: GenMessage<HitResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 5);
+  messageDesc(file_demo_v1_game, 7);
 
 /**
  * @generated from message demo.v1.SnapshotRequest
@@ -154,7 +200,7 @@ export type SnapshotRequest = Message<"demo.v1.SnapshotRequest"> & {
  * Use `create(SnapshotRequestSchema)` to create a new message.
  */
 export const SnapshotRequestSchema: GenMessage<SnapshotRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 6);
+  messageDesc(file_demo_v1_game, 8);
 
 /**
  * @generated from message demo.v1.SnapshotResponse
@@ -171,7 +217,7 @@ export type SnapshotResponse = Message<"demo.v1.SnapshotResponse"> & {
  * Use `create(SnapshotResponseSchema)` to create a new message.
  */
 export const SnapshotResponseSchema: GenMessage<SnapshotResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 7);
+  messageDesc(file_demo_v1_game, 9);
 
 /**
  * @generated from message demo.v1.LeaveRequest
@@ -184,7 +230,7 @@ export type LeaveRequest = Message<"demo.v1.LeaveRequest"> & {
  * Use `create(LeaveRequestSchema)` to create a new message.
  */
 export const LeaveRequestSchema: GenMessage<LeaveRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 8);
+  messageDesc(file_demo_v1_game, 10);
 
 /**
  * @generated from message demo.v1.LeaveResponse
@@ -201,7 +247,7 @@ export type LeaveResponse = Message<"demo.v1.LeaveResponse"> & {
  * Use `create(LeaveResponseSchema)` to create a new message.
  */
 export const LeaveResponseSchema: GenMessage<LeaveResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 9);
+  messageDesc(file_demo_v1_game, 11);
 
 /**
  * @generated from message demo.v1.OperationRequest
@@ -218,7 +264,7 @@ export type OperationRequest = Message<"demo.v1.OperationRequest"> & {
  * Use `create(OperationRequestSchema)` to create a new message.
  */
 export const OperationRequestSchema: GenMessage<OperationRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 10);
+  messageDesc(file_demo_v1_game, 12);
 
 /**
  * @generated from message demo.v1.OperationResponse
@@ -250,7 +296,7 @@ export type OperationResponse = Message<"demo.v1.OperationResponse"> & {
  * Use `create(OperationResponseSchema)` to create a new message.
  */
 export const OperationResponseSchema: GenMessage<OperationResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 11);
+  messageDesc(file_demo_v1_game, 13);
 
 /**
  * @generated from message demo.v1.SnapshotPush
@@ -267,7 +313,7 @@ export type SnapshotPush = Message<"demo.v1.SnapshotPush"> & {
  * Use `create(SnapshotPushSchema)` to create a new message.
  */
 export const SnapshotPushSchema: GenMessage<SnapshotPush> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 12);
+  messageDesc(file_demo_v1_game, 14);
 
 /**
  * @generated from message demo.v1.BalancePush
@@ -284,7 +330,7 @@ export type BalancePush = Message<"demo.v1.BalancePush"> & {
  * Use `create(BalancePushSchema)` to create a new message.
  */
 export const BalancePushSchema: GenMessage<BalancePush> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 13);
+  messageDesc(file_demo_v1_game, 15);
 
 /**
  * 银子和版本使用 64 位整数；TypeScript 端使用 bigint。
@@ -318,7 +364,7 @@ export type Balance = Message<"demo.v1.Balance"> & {
  * Use `create(BalanceSchema)` to create a new message.
  */
 export const BalanceSchema: GenMessage<Balance> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 14);
+  messageDesc(file_demo_v1_game, 16);
 
 /**
  * 确认金额与数据库版本一起出现；即时命中可以不携带此消息。
@@ -342,7 +388,7 @@ export type ConfirmedSilver = Message<"demo.v1.ConfirmedSilver"> & {
  * Use `create(ConfirmedSilverSchema)` to create a new message.
  */
 export const ConfirmedSilverSchema: GenMessage<ConfirmedSilver> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 15);
+  messageDesc(file_demo_v1_game, 17);
 
 /**
  * @generated from message demo.v1.Member
@@ -364,7 +410,7 @@ export type Member = Message<"demo.v1.Member"> & {
  * Use `create(MemberSchema)` to create a new message.
  */
 export const MemberSchema: GenMessage<Member> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 16);
+  messageDesc(file_demo_v1_game, 18);
 
 /**
  * @generated from message demo.v1.Target
@@ -396,7 +442,7 @@ export type Target = Message<"demo.v1.Target"> & {
  * Use `create(TargetSchema)` to create a new message.
  */
 export const TargetSchema: GenMessage<Target> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 17);
+  messageDesc(file_demo_v1_game, 19);
 
 /**
  * @generated from message demo.v1.Hit
@@ -443,7 +489,7 @@ export type Hit = Message<"demo.v1.Hit"> & {
  * Use `create(HitSchema)` to create a new message.
  */
 export const HitSchema: GenMessage<Hit> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 18);
+  messageDesc(file_demo_v1_game, 20);
 
 /**
  * @generated from message demo.v1.Snapshot
@@ -485,7 +531,7 @@ export type Snapshot = Message<"demo.v1.Snapshot"> & {
  * Use `create(SnapshotSchema)` to create a new message.
  */
 export const SnapshotSchema: GenMessage<Snapshot> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 19);
+  messageDesc(file_demo_v1_game, 21);
 
 /**
  * 斗地主使用独立消息，不改变地鼠客户端协议；空出牌列表表示不出。
@@ -500,7 +546,7 @@ export type LandlordEnterRequest = Message<"demo.v1.LandlordEnterRequest"> & {
  * Use `create(LandlordEnterRequestSchema)` to create a new message.
  */
 export const LandlordEnterRequestSchema: GenMessage<LandlordEnterRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 20);
+  messageDesc(file_demo_v1_game, 22);
 
 /**
  * @generated from message demo.v1.LandlordReadyRequest
@@ -513,7 +559,7 @@ export type LandlordReadyRequest = Message<"demo.v1.LandlordReadyRequest"> & {
  * Use `create(LandlordReadyRequestSchema)` to create a new message.
  */
 export const LandlordReadyRequestSchema: GenMessage<LandlordReadyRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 21);
+  messageDesc(file_demo_v1_game, 23);
 
 /**
  * @generated from message demo.v1.LandlordPlayRequest
@@ -535,7 +581,7 @@ export type LandlordPlayRequest = Message<"demo.v1.LandlordPlayRequest"> & {
  * Use `create(LandlordPlayRequestSchema)` to create a new message.
  */
 export const LandlordPlayRequestSchema: GenMessage<LandlordPlayRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 22);
+  messageDesc(file_demo_v1_game, 24);
 
 /**
  * @generated from message demo.v1.LandlordSnapshotRequest
@@ -548,7 +594,7 @@ export type LandlordSnapshotRequest = Message<"demo.v1.LandlordSnapshotRequest">
  * Use `create(LandlordSnapshotRequestSchema)` to create a new message.
  */
 export const LandlordSnapshotRequestSchema: GenMessage<LandlordSnapshotRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 23);
+  messageDesc(file_demo_v1_game, 25);
 
 /**
  * @generated from message demo.v1.LandlordLeaveRequest
@@ -561,7 +607,7 @@ export type LandlordLeaveRequest = Message<"demo.v1.LandlordLeaveRequest"> & {
  * Use `create(LandlordLeaveRequestSchema)` to create a new message.
  */
 export const LandlordLeaveRequestSchema: GenMessage<LandlordLeaveRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 24);
+  messageDesc(file_demo_v1_game, 26);
 
 /**
  * @generated from message demo.v1.LandlordOperationRequest
@@ -578,7 +624,7 @@ export type LandlordOperationRequest = Message<"demo.v1.LandlordOperationRequest
  * Use `create(LandlordOperationRequestSchema)` to create a new message.
  */
 export const LandlordOperationRequestSchema: GenMessage<LandlordOperationRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 25);
+  messageDesc(file_demo_v1_game, 27);
 
 /**
  * @generated from message demo.v1.LandlordOperationResponse
@@ -610,7 +656,7 @@ export type LandlordOperationResponse = Message<"demo.v1.LandlordOperationRespon
  * Use `create(LandlordOperationResponseSchema)` to create a new message.
  */
 export const LandlordOperationResponseSchema: GenMessage<LandlordOperationResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 26);
+  messageDesc(file_demo_v1_game, 28);
 
 /**
  * @generated from message demo.v1.LandlordEnterResponse
@@ -627,7 +673,7 @@ export type LandlordEnterResponse = Message<"demo.v1.LandlordEnterResponse"> & {
  * Use `create(LandlordEnterResponseSchema)` to create a new message.
  */
 export const LandlordEnterResponseSchema: GenMessage<LandlordEnterResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 27);
+  messageDesc(file_demo_v1_game, 29);
 
 /**
  * @generated from message demo.v1.LandlordReadyResponse
@@ -644,7 +690,7 @@ export type LandlordReadyResponse = Message<"demo.v1.LandlordReadyResponse"> & {
  * Use `create(LandlordReadyResponseSchema)` to create a new message.
  */
 export const LandlordReadyResponseSchema: GenMessage<LandlordReadyResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 28);
+  messageDesc(file_demo_v1_game, 30);
 
 /**
  * @generated from message demo.v1.LandlordPlayResponse
@@ -661,7 +707,7 @@ export type LandlordPlayResponse = Message<"demo.v1.LandlordPlayResponse"> & {
  * Use `create(LandlordPlayResponseSchema)` to create a new message.
  */
 export const LandlordPlayResponseSchema: GenMessage<LandlordPlayResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 29);
+  messageDesc(file_demo_v1_game, 31);
 
 /**
  * @generated from message demo.v1.LandlordSnapshotResponse
@@ -678,7 +724,7 @@ export type LandlordSnapshotResponse = Message<"demo.v1.LandlordSnapshotResponse
  * Use `create(LandlordSnapshotResponseSchema)` to create a new message.
  */
 export const LandlordSnapshotResponseSchema: GenMessage<LandlordSnapshotResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 30);
+  messageDesc(file_demo_v1_game, 32);
 
 /**
  * @generated from message demo.v1.LandlordLeaveResponse
@@ -695,7 +741,7 @@ export type LandlordLeaveResponse = Message<"demo.v1.LandlordLeaveResponse"> & {
  * Use `create(LandlordLeaveResponseSchema)` to create a new message.
  */
 export const LandlordLeaveResponseSchema: GenMessage<LandlordLeaveResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 31);
+  messageDesc(file_demo_v1_game, 33);
 
 /**
  * @generated from message demo.v1.LandlordCallResponse
@@ -712,7 +758,7 @@ export type LandlordCallResponse = Message<"demo.v1.LandlordCallResponse"> & {
  * Use `create(LandlordCallResponseSchema)` to create a new message.
  */
 export const LandlordCallResponseSchema: GenMessage<LandlordCallResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 32);
+  messageDesc(file_demo_v1_game, 34);
 
 /**
  * @generated from message demo.v1.LandlordRobResponse
@@ -729,7 +775,7 @@ export type LandlordRobResponse = Message<"demo.v1.LandlordRobResponse"> & {
  * Use `create(LandlordRobResponseSchema)` to create a new message.
  */
 export const LandlordRobResponseSchema: GenMessage<LandlordRobResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 33);
+  messageDesc(file_demo_v1_game, 35);
 
 /**
  * @generated from message demo.v1.LandlordPush
@@ -746,7 +792,7 @@ export type LandlordPush = Message<"demo.v1.LandlordPush"> & {
  * Use `create(LandlordPushSchema)` to create a new message.
  */
 export const LandlordPushSchema: GenMessage<LandlordPush> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 34);
+  messageDesc(file_demo_v1_game, 36);
 
 /**
  * @generated from message demo.v1.LandlordCallRequest
@@ -768,7 +814,7 @@ export type LandlordCallRequest = Message<"demo.v1.LandlordCallRequest"> & {
  * Use `create(LandlordCallRequestSchema)` to create a new message.
  */
 export const LandlordCallRequestSchema: GenMessage<LandlordCallRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 35);
+  messageDesc(file_demo_v1_game, 37);
 
 /**
  * @generated from message demo.v1.LandlordRobRequest
@@ -790,7 +836,7 @@ export type LandlordRobRequest = Message<"demo.v1.LandlordRobRequest"> & {
  * Use `create(LandlordRobRequestSchema)` to create a new message.
  */
 export const LandlordRobRequestSchema: GenMessage<LandlordRobRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 36);
+  messageDesc(file_demo_v1_game, 38);
 
 /**
  * @generated from message demo.v1.LandlordPlayer
@@ -832,7 +878,7 @@ export type LandlordPlayer = Message<"demo.v1.LandlordPlayer"> & {
  * Use `create(LandlordPlayerSchema)` to create a new message.
  */
 export const LandlordPlayerSchema: GenMessage<LandlordPlayer> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 37);
+  messageDesc(file_demo_v1_game, 39);
 
 /**
  * @generated from message demo.v1.LandlordSettlement
@@ -879,7 +925,7 @@ export type LandlordSettlement = Message<"demo.v1.LandlordSettlement"> & {
  * Use `create(LandlordSettlementSchema)` to create a new message.
  */
 export const LandlordSettlementSchema: GenMessage<LandlordSettlement> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 38);
+  messageDesc(file_demo_v1_game, 40);
 
 /**
  * @generated from message demo.v1.LandlordSnapshot
@@ -976,7 +1022,7 @@ export type LandlordSnapshot = Message<"demo.v1.LandlordSnapshot"> & {
  * Use `create(LandlordSnapshotSchema)` to create a new message.
  */
 export const LandlordSnapshotSchema: GenMessage<LandlordSnapshot> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 39);
+  messageDesc(file_demo_v1_game, 41);
 
 /**
  * 客户端业务编号独立于内部 Cluster CommandID。
@@ -998,6 +1044,16 @@ export enum MsgId {
    * @generated from enum value: S2C_LOGIN = 1002;
    */
   S2C_LOGIN = 1002,
+
+  /**
+   * @generated from enum value: C2S_PASSWORD_AUTH = 1003;
+   */
+  C2S_PASSWORD_AUTH = 1003,
+
+  /**
+   * @generated from enum value: S2C_PASSWORD_AUTH = 1004;
+   */
+  S2C_PASSWORD_AUTH = 1004,
 
   /**
    * @generated from enum value: C2S_ENTER = 1011;

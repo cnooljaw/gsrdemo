@@ -18,6 +18,16 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_RESPONSE
   }];
+  C2S_PASSWORD_AUTH = 1003 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.PasswordAuthRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_PASSWORD_AUTH = 1004 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.PasswordAuthResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
   C2S_ENTER = 1011 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.EnterRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
@@ -169,9 +179,20 @@ enum MsgId {
 
 }
 
-message LoginRequest {
+// 认证只签发凭据，不建立游戏登录；密码不复用到 Token 登录协议。
+message PasswordAuthRequest {
   string username = 1;
   string password = 2;
+}
+message PasswordAuthResponse {
+  uint64 user_id = 1;
+  string access_token = 2;
+  int64 expires_at_ms = 3;
+}
+message LoginRequest {
+  reserved 1, 2;
+  reserved "username", "password";
+  string access_token = 3;
 }
 message LoginResponse {
   uint64 user_id = 1;

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,10 +49,21 @@ func (service *observedMain) OnStop(ctx context.Context) error {
 
 func startLogin(t *testing.T, db *sql.DB) string {
 	t.Helper()
+	return startLoginWithStore(t, db, tokenStore{client: startTokenRedis(t), prefix: "test:login"})
+}
+
+func startLoginWithStore(t *testing.T, db *sql.DB, store tokenStore) string {
+	t.Helper()
+	address, _ := startLoginNode(t, db, store)
+	return address
+}
+
+func startLoginNode(t *testing.T, db *sql.DB, store tokenStore) (string, func()) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan string, 1)
 	done := make(chan error, 1)
-	main := &observedMain{service: NewMain("login", db), ready: ready}
+	main := &observedMain{service: NewMain("login", db, store, time.Hour), ready: ready}
 	directory := t.TempDir()
 	go func() {
 		done <- gsr.Run(ctx, gsr.Config{
@@ -59,20 +71,24 @@ func startLogin(t *testing.T, db *sql.DB) string {
 			Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"login": "127.0.0.1:0"}},
 		}, main)
 	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("login shutdown: %v", err)
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("login shutdown: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Error("login shutdown timed out")
 			}
-		case <-time.After(3 * time.Second):
-			t.Error("login shutdown timed out")
-		}
-	})
+		})
+	}
+	t.Cleanup(stop)
 	select {
 	case address := <-ready:
-		return address
+		return address, stop
 	case err := <-done:
 		// 留回结果供 cleanup 统一回收。
 		done <- err
@@ -80,7 +96,7 @@ func startLogin(t *testing.T, db *sql.DB) string {
 	case <-time.After(3 * time.Second):
 		t.Fatal("login startup timed out")
 	}
-	return ""
+	return "", stop
 }
 
 // loginCaller 用普通 Service 身份发起真实 Cluster 请求，不使用 Runtime 注入捷径。
@@ -108,6 +124,11 @@ func (service *loginCaller) OnStop(_ context.Context) error {
 
 func callLogin(t *testing.T, address string, args ...any) (any, error) {
 	t.Helper()
+	return callLoginCommand(t, address, authServiceName, authenticateCommand, args...)
+}
+
+func callLoginCommand(t *testing.T, address, name string, command runtime.CommandID, args ...any) (any, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	var value any
@@ -115,7 +136,7 @@ func callLogin(t *testing.T, address string, args ...any) (any, error) {
 	caller := &loginCaller{cancel: cancel, call: func(self gsr.ServiceContext) {
 		wait, stop := context.WithTimeout(ctx, time.Second)
 		defer stop()
-		value, callErr = self.Cluster().Call(wait, "login", loginServiceName, authenticateCommand, args...)
+		value, callErr = self.Cluster().Call(wait, "login", cluster.ServiceName(name), command, args...)
 	}}
 	if err := gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: t.TempDir()},
@@ -143,7 +164,7 @@ func TestLoginAuthenticatesOverCluster(t *testing.T) {
 			if !errors.Is(err, errInvalidCredentials) {
 				t.Fatalf("wrong password: %v", err)
 			}
-		} else if err != nil || value != uint64(7) {
+		} else if err != nil || !validAuthResult(value, 7) {
 			t.Fatalf("authenticate: value=%v err=%v", value, err)
 		}
 	}
@@ -193,4 +214,14 @@ func TestCreateAccountStoresHash(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func validAuthResult(value any, uid uint64) bool {
+	result, ok := value.(map[string]any)
+	if !ok || result["user_id"] != uid {
+		return false
+	}
+	token, ok := result["access_token"].(string)
+	expires, valid := result["expires_at_ms"].(int64)
+	return ok && validToken(token) && valid && expires > time.Now().UnixMilli()
 }

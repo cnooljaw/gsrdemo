@@ -28,6 +28,9 @@ func TestLoginConfigKeepsDatabasePrivate(t *testing.T) {
 	}{
 		{"valid", "mysql_dsn: 'demo:example@tcp(127.0.0.1:3306)/gsrdemo_login'\n", true},
 		{"missing DSN", "", false},
+		{"invalid Redis", "mysql_dsn: example\nredis_url: invalid\n", false},
+		{"invalid TTL", "mysql_dsn: example\ntoken_ttl_seconds: -1\n", false},
+		{"large TTL", "mysql_dsn: example\ntoken_ttl_seconds: 604801\n", false},
 		{"unknown field", "mysql_dsn: example\nunknown: true\n", false},
 		{"duplicate field", "mysql_dsn: example\nmysql_dsn: example\n", false},
 	} {
@@ -107,7 +110,7 @@ func TestLoginLiveMySQL(t *testing.T) {
 	address := startLogin(t, db)
 	for i := 0; i < 2; i++ {
 		value, err := callLogin(t, address, username, "test-password")
-		if err != nil || value != id {
+		if err != nil || !validAuthResult(value, id) {
 			t.Fatalf("live authenticate: id=%v err=%v", value, err)
 		}
 	}

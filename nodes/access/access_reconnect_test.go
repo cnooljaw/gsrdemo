@@ -59,8 +59,7 @@ func accessLoginAndEnter(t *testing.T, address string, player *accessDemoPlayer)
 	t.Helper()
 	client := dialAccess(t, address)
 	var login demopb.LoginResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN,
-		&demopb.LoginRequest{Username: player.username, Password: player.password}, &login)
+	accessLoginResponse(t, client, player.username, player.password, &login)
 	if login.UserId != player.id {
 		t.Fatalf("跨接入身份变化: got=%d want=%d", login.UserId, player.id)
 	}

@@ -9,8 +9,10 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
+	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
+	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -21,6 +23,7 @@ type agent struct {
 	commandDispatcher  *gsr.Dispatcher
 	session            agentSession
 	games              []gameagent.Component
+	closing            bool
 }
 
 var (
@@ -65,7 +68,17 @@ func (agent *agent) Handle(self gsr.CommandContext, command runtime.CommandID, a
 }
 
 func (agent *agent) HandleClientMessage(self gsr.CommandContext, frame []byte) error {
-	return agent.protocolDispatcher.HandleFrame(self, frame)
+	if agent.closing {
+		return nil
+	}
+	err := agent.protocolDispatcher.HandleFrame(self, frame)
+	if err != nil {
+		var envelope commonv1.Envelope
+		if proto.Unmarshal(frame, &envelope) == nil && (envelope.MsgId == uint32(demopb.MsgId_C2S_LOGIN) || envelope.MsgId == uint32(demopb.MsgId_C2S_PASSWORD_AUTH)) {
+			agent.closeAfterLoginFailure(self)
+		}
+	}
+	return err
 }
 
 func (agent *agent) OnStop(_ context.Context) error {

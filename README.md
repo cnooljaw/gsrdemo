@@ -2,7 +2,7 @@
 
 基于 **GSR v1.0.2** 的多节点打地鼠与三人斗地主示例，使用 TypeScript 命令行客户端演示登录、地鼠命中反馈、斗地主叫抢出牌和银子结算。
 
-调用链：客户端 → access → login / online / mole 或 landlord → settlement → MySQL。Redis 分别保存地鼠批次/统计检查点及斗地主待结算局末结果。
+调用链：客户端 → access → login / online / mole 或 landlord → settlement → MySQL。Redis 保存临时认证 Token、地鼠批次/统计检查点及斗地主待结算局末结果。
 
 ## 运行 Demo
 
@@ -99,7 +99,7 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 
 | 顺序 | 节点与职责 | 启动命令 | 默认地址 |
 | --- | --- | --- | --- |
-| 1 | login：验证账号密码 | `./scripts/dev.sh run login` | Cluster `127.0.0.1:19002` |
+| 1 | login：密码认证 / Token 签发与校验 | `./scripts/dev.sh run login` | Cluster `127.0.0.1:19002` |
 | 2 | online：保存在线位置 | `./scripts/dev.sh run online` | Cluster `127.0.0.1:19003` |
 | 3 | settlement：余额校验和持久记账 | `./scripts/dev.sh run settlement` | Cluster `127.0.0.1:19005` |
 | 4（地鼠） | mole：分组、目标和命中计算 | `./scripts/dev.sh run mole` | Cluster `127.0.0.1:19004` |
@@ -156,7 +156,17 @@ unset demo_password
 
 同账号可以从另一接入重新登录，服务端会替换旧连接；随后重新 Enter 获取快照和余额。CLI 不自动重连，跨接入替换、断线后重新登录及原 HitID 唯一入账由下方自动验收覆盖。
 
-输出顺序为 `login → enter → action → hit`，完成指定锤数后输出 `leave` 并退出。`hit` 是即时内存结果；CLI 不逐锤查询或等待财务入账，不再输出地鼠 `settlement` 事件。结算回执由服务端处理，有差异时主动推送 `balance_correction`，期间仍会收到 `snapshot`。CLI 退出不代表待确认操作已持久化。
+输出顺序为 `authenticated → login → enter → action → hit`，完成指定锤数后输出 `leave` 并退出。`hit` 是即时内存结果；CLI 不逐锤查询或等待财务入账，不再输出地鼠 `settlement` 事件。结算回执由服务端处理，有差异时主动推送 `balance_correction`，期间仍会收到 `snapshot`。CLI 退出不代表待确认操作已持久化。
+
+密码认证仅获取平台 AccessToken；随后 CLI 使用 Token 登录并绑定 Online。Token 默认有效期 24 小时，Redis 保存摘要和到期时间；普通断线不撤销，校验不续期。Token/密码认证失败会返回错误并关闭当前连接。Login 配置支持 redis_url、redis_key、token_ttl_seconds；既有私密配置缺省使用本机 6379、gsrdemo:auth:token 和 86400 秒。
+
+需要复用 Token 时，首次密码运行可在 node 命令末尾加 `--save-token-file .cache/demo1-token.json`。文件以 0600 权限新建，不覆盖已有文件，日志不输出 Token。以后无需 stdin 密码：
+
+```shell
+node typeclient/dist/index.js --token-file .cache/demo1-token.json --hits 3
+```
+
+Token 过期或 Redis 记录丢失后重新密码认证；不要提交凭据文件。认证/Token 变化需要重建并重启 login、access 和 TS 客户端，旧版密码 Login 协议已停用。普通客户端仍只连 access；生产接入使用 WSS，MAC 本身不加密 Token。
 
 同组玩家共享目标，同一目标只有一个玩家能命中。目标被抢走或过期时，CLI 输出 `miss`，刷新快照后继续寻找目标；`--hits` 只统计成功命中。每次等待/争抢预算默认 15 秒（`--timeout-ms` 更大时按该值，各次 RPC 另有超时）。超时、断线或其他错误仍停止，不自动重发结果未知的命中；保留输出中的 ActionID / HitID 供受控验收或管理核查；客户端不提供逐锤账务查询。
 
@@ -170,7 +180,7 @@ unset demo_password
 
 默认仍连接 access-01；需要跨接入时，在终端 B 的 node 命令后添加 `--url ws://127.0.0.1:7889/ws`。客户端自动随机入桌、准备、叫抢地主、出牌/不出，等待整局结算后离开。叫抢各等待 10 秒，出牌 15 秒；三人都不叫最多重发两次。演示机器人使用简单单张策略，服务端仍校验全部普通牌型。
 
-斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `landlord_enter → landlord_bid → landlord_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID，客户端直接使用该回执，不再追加查询账务。局末不先广播 pending；每桌先保存待结算请求到 Redis，再直接调用结算服，收到有效回执后向三人各推送一次最终结果，随后删除待记录，清理失败单独重试。Redis 只保留待处理请求，不积累成功流水；结算服恢复或地主节点重启后，已保存请求按原 ID 补交，避免重复入账。不恢复进行中的手牌。
+斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `authenticated → login → landlord_enter → landlord_bid → landlord_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID，客户端直接使用该回执，不再追加查询账务。局末不先广播 pending；每桌先保存待结算请求到 Redis，再直接调用结算服，收到有效回执后向三人各推送一次最终结果，随后删除待记录，清理失败单独重试。Redis 只保留待处理请求，不积累成功流水；结算服恢复或地主节点重启后，已保存请求按原 ID 补交，避免重复入账。不恢复进行中的手牌。
 
 ### 7. 停止演示
 

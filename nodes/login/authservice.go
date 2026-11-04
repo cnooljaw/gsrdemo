@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	// loginServiceName 是 login 节点内发布的认证 Service 名称。
-	loginServiceName = "login"
-	// authenticateCommand 接收 username、password 两个 string，成功返回 uint64 UserID。
+	// authServiceName 是 login 节点内发布的认证 Service 名称。
+	authServiceName = "auth"
+	// authenticateCommand 接收 username、password 两个 string，成功返回 UserID、AccessToken 和过期时间。
 	authenticateCommand runtime.CommandID = 1
 )
 
@@ -27,36 +27,36 @@ var (
 	errAccountStoreUnavailable = runtime.NewStatusError(runtime.ErrorClassDomain, "login.store_unavailable", "account storage is unavailable")
 )
 
-// loginService 串行验证账号；数据库池由宿主拥有，不保存连接、会话或在线状态。
-type loginService struct {
+// authService 验证密码并签发平台凭据；数据库池由宿主拥有，不保存连接和在线状态。
+type authService struct {
 	db         *sql.DB
 	dispatcher *gsr.Dispatcher
 }
 
-var _ gsr.Service = (*loginService)(nil)
+var _ gsr.Service = (*authService)(nil)
 
-func newLoginService(db *sql.DB) *loginService {
-	service := &loginService{db: db}
+func newAuthService(db *sql.DB) *authService {
+	service := &authService{db: db}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		authenticateCommand: service.handleAuthenticate,
 	})
 	return service
 }
 
-func (service *loginService) OnStart(_ context.Context, _ gsr.ServiceContext) error {
+func (service *authService) OnStart(_ context.Context, _ gsr.ServiceContext) error {
 	if service.db == nil {
 		return errors.New("login requires a database")
 	}
 	return nil
 }
 
-func (service *loginService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
+func (service *authService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *loginService) handleAuthenticate(self gsr.CommandContext, username, password string) (uint64, error) {
+func (service *authService) handleAuthenticate(self gsr.CommandContext, username, password string) (map[string]any, error) {
 	if !validLoginInput(username, password) {
-		return 0, errInvalidLoginInput
+		return nil, errInvalidLoginInput
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 	defer cancel()
@@ -64,23 +64,33 @@ func (service *loginService) handleAuthenticate(self gsr.CommandContext, usernam
 	var storedHash []byte
 	err := service.db.QueryRowContext(ctx, selectAccountSQL, username).Scan(&userID, &storedHash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, errInvalidCredentials
+		return nil, errInvalidCredentials
 	}
 	if err != nil {
 		_ = self.Logger().Error("login database query failed", "error", err)
-		return 0, errAccountStoreUnavailable
+		return nil, errAccountStoreUnavailable
 	}
 	if userID == 0 || len(storedHash) != sha256.Size {
 		_ = self.Logger().Error("invalid stored login account", "user_id", userID)
-		return 0, errAccountStoreUnavailable
+		return nil, errAccountStoreUnavailable
 	}
 	hash := sha256.Sum256([]byte(password))
 	if subtle.ConstantTimeCompare(hash[:], storedHash) != 1 {
-		return 0, errInvalidCredentials
+		return nil, errInvalidCredentials
 	}
-	return userID, nil
+	wait, stop := context.WithTimeout(context.Background(), tokenCallTimeout)
+	defer stop()
+	value, err := self.CallName(wait, tokenServiceName, tokenIssueCommand, userID)
+	if err != nil {
+		return nil, err
+	}
+	result, ok := value.(map[string]any)
+	if !ok {
+		return nil, errTokenStoreUnavailable
+	}
+	return result, nil
 }
 
-func (service *loginService) OnStop(_ context.Context) error {
+func (service *authService) OnStop(_ context.Context) error {
 	return nil
 }

@@ -11,12 +11,14 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/mysqlclient"
 	"github.com/cnooljaw/gsrdemo/common/model"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -27,8 +29,11 @@ func main() {
 }
 
 type loginConfig struct {
-	Node     model.NodeConfig `yaml:",inline"`
-	MySQLDSN string           `yaml:"mysql_dsn"`
+	Node            model.NodeConfig `yaml:",inline"`
+	MySQLDSN        string           `yaml:"mysql_dsn"`
+	RedisURL        string           `yaml:"redis_url"`
+	RedisKey        string           `yaml:"redis_key"`
+	TokenTTLSeconds int64            `yaml:"token_ttl_seconds"`
 }
 
 func loadLoginConfig(path string) (loginConfig, error) {
@@ -46,6 +51,24 @@ func loadLoginConfig(path string) (loginConfig, error) {
 	config.Node = node
 	if strings.TrimSpace(config.MySQLDSN) == "" {
 		return config, errors.New("mysql_dsn is required; use a private local YAML config")
+	}
+	if config.RedisURL == "" {
+		config.RedisURL = "redis://127.0.0.1:6379/0"
+	}
+	if config.RedisKey == "" {
+		config.RedisKey = "gsrdemo:auth:token"
+	}
+	if config.TokenTTLSeconds == 0 {
+		config.TokenTTLSeconds = 86400
+	}
+	if _, err := redis.ParseURL(config.RedisURL); err != nil {
+		return config, errors.New("invalid redis_url")
+	}
+	if strings.TrimSpace(config.RedisKey) != config.RedisKey || config.RedisKey == "" || len(config.RedisKey) > 128 {
+		return config, errors.New("invalid redis_key")
+	}
+	if config.TokenTTLSeconds < 1 || config.TokenTTLSeconds > 604800 {
+		return config, errors.New("token_ttl_seconds must be 1..604800")
 	}
 	return config, nil
 }
@@ -78,6 +101,21 @@ func run() (result error) {
 		return err
 	}
 
+	options, err := redis.ParseURL(config.RedisURL)
+	if err != nil {
+		return errors.New("invalid redis_url")
+	}
+	options.Protocol, options.DisableIdentity, options.ContextTimeoutEnabled = 2, true, true
+	options.MaxRetries = -1
+	options.DialTimeout, options.ReadTimeout, options.WriteTimeout = tokenCallTimeout, tokenCallTimeout, tokenCallTimeout
+	client := redis.NewClient(options)
+	defer func() { result = errors.Join(result, client.Close()) }()
+	wait, stop := context.WithTimeout(ctx, tokenCallTimeout)
+	err = client.Ping(wait).Err()
+	stop()
+	if err != nil {
+		return errTokenStoreUnavailable
+	}
 	nodes := make(map[cluster.NodeID]string, len(config.Node.Nodes))
 	for name, address := range config.Node.Nodes {
 		nodes[cluster.NodeID(name)] = address
@@ -85,7 +123,7 @@ func run() (result error) {
 	return gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: config.Node.LogDirectory},
 		Cluster: gsr.ClusterConfig{Nodes: nodes},
-	}, NewMain(cluster.NodeID(config.Node.Listen), db))
+	}, NewMain(cluster.NodeID(config.Node.Listen), db, tokenStore{client: client, prefix: config.RedisKey}, time.Duration(config.TokenTTLSeconds)*time.Second))
 }
 
 func readPassword(input io.Reader) (string, error) {

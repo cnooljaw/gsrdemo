@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
@@ -11,24 +12,34 @@ import (
 )
 
 type mainService struct {
-	node cluster.NodeID
-	db   *sql.DB
+	node  cluster.NodeID
+	db    *sql.DB
+	store tokenStore
+	ttl   time.Duration
 }
 
 var _ gsr.Service = (*mainService)(nil)
 
 // NewMain 创建只负责节点启动的 MainService。
-func NewMain(node cluster.NodeID, db *sql.DB) gsr.Service {
-	return &mainService{node: node, db: db}
+func NewMain(node cluster.NodeID, db *sql.DB, store tokenStore, ttl time.Duration) gsr.Service {
+	return &mainService{node: node, db: db, store: store, ttl: ttl}
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	id, err := self.CreateService(ctx, newLoginService(service.db))
-	if err != nil {
-		return err
-	}
-	if err := self.Node().RegisterService(loginServiceName, id); err != nil {
-		return err
+	for _, entry := range []struct {
+		name    string
+		service gsr.Service
+	}{
+		{tokenServiceName, newTokenService(service.store, service.ttl)},
+		{authServiceName, newAuthService(service.db)},
+	} {
+		id, err := self.CreateService(ctx, entry.service)
+		if err != nil {
+			return err
+		}
+		if err := self.Node().RegisterService(cluster.ServiceName(entry.name), id); err != nil {
+			return err
+		}
 	}
 	if err := self.Node().OpenCluster(service.node); err != nil {
 		return err

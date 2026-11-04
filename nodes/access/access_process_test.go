@@ -268,7 +268,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 		}
 		body := fmt.Sprintf("instance: %s\nlisten: %s\nnodes_file: nodes.yaml\nlog_directory: %s\n", node, node, strconv.Quote(filepath.Join(directory, "logs-"+node)))
 		if node == "login" {
-			body += "mysql_dsn: " + strconv.Quote(loginDSN) + "\n"
+			body += "mysql_dsn: " + strconv.Quote(loginDSN) + "\nredis_url: redis://" + redisAddress + "/0\nredis_key: gsrdemo:test:auth\n"
 		}
 		if node == "settlement" {
 			body += "mysql_dsn: " + strconv.Quote(settlementDSN) + "\n"

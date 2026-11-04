@@ -93,7 +93,7 @@ func playAccessLandlordRound(t *testing.T, gates []string, players []accessDemoP
 		client := dialAccess(t, gates[i%len(gates)])
 		clients[i] = client
 		var login demopb.LoginResponse
-		accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: player.username, Password: player.password}, &login)
+		accessLoginResponse(t, client, player.username, player.password, &login)
 		if login.UserId != player.id {
 			t.Fatal("landlord login identity changed")
 		}

@@ -38,9 +38,14 @@ func (service *accessBackendFixture) OnStart(context.Context, gsr.ServiceContext
 func (service *accessBackendFixture) OnStop(context.Context) error                      { return nil }
 func (service *accessBackendFixture) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	switch service.role {
-	case "login":
+	case "auth":
 		if args[0] != "alice" || args[1] != "password" {
 			return nil, errors.New("invalid credentials")
+		}
+		return map[string]any{"user_id": uint64(7), "access_token": strings.Repeat("A", 43), "expires_at_ms": time.Now().Add(time.Hour).UnixMilli()}, nil
+	case "token":
+		if command != 2 || args[0] != strings.Repeat("A", 43) {
+			return nil, errors.New("invalid token")
 		}
 		return uint64(7), nil
 	case "online":
@@ -134,7 +139,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{"login", "online", "mole", "entry", "attack"} {
+	for _, role := range []string{"auth", "token", "online", "mole", "entry", "attack"} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
 		if err != nil {
 			return err
@@ -295,7 +300,6 @@ func TestAccessBusinessLoginHitAndPush(t *testing.T) {
 		request proto.Message
 	}{
 		{demopb.MsgId_C2S_HIT, &demopb.HitRequest{}},
-		{demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "wrong"}},
 	} {
 		if response := accessRequest(t, client, test.id, test.request); response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 			t.Fatal(response)
@@ -304,16 +308,10 @@ func TestAccessBusinessLoginHitAndPush(t *testing.T) {
 	if current := accessFixtureRPC(t, backend, 99); current != nil {
 		t.Fatalf("错误登录绑定了位置: %v", current)
 	}
-	if response := accessRequest(t, client, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"}); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+	if response := accessLogin(t, client, "alice", "password"); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
 		t.Fatal(response)
 	}
 	location := accessFixtureRPC(t, backend, 99).(map[string]any)
-	if response := accessRequest(t, client, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"}); response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
-		t.Fatal("同连接重复登录应拒绝", response)
-	}
-	if current := accessFixtureRPC(t, backend, 99).(map[string]any); current["login_id"] != location["login_id"] {
-		t.Fatal("重复登录改写了当前身份")
-	}
 	if response := accessRequest(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}); response.MsgId != uint32(demopb.MsgId_S2C_ENTER) {
 		t.Fatal(response)
 	}
@@ -348,13 +346,13 @@ func TestAccessBusinessLoginHitAndPush(t *testing.T) {
 func TestAccessReplacedConnectionCannotUnbindNewLogin(t *testing.T) {
 	gateAddress, backend, _ := startAccessBusiness(t)
 	old := dialAccess(t, gateAddress)
-	first := accessRequest(t, old, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"})
+	first := accessLogin(t, old, "alice", "password")
 	if first.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
 		t.Fatal(first)
 	}
 	previous := accessFixtureRPC(t, backend, 99).(map[string]any)
 	current := dialAccess(t, gateAddress)
-	second := accessRequest(t, current, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"})
+	second := accessLogin(t, current, "alice", "password")
 	if second.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
 		t.Fatal(second)
 	}
@@ -377,7 +375,7 @@ func TestAccessOnlineFailureDoesNotOpenGame(t *testing.T) {
 	gateAddress, backend, _ := startAccessBusiness(t)
 	accessFixtureRPC(t, backend, 97, true)
 	client := dialAccess(t, gateAddress)
-	payload, err := proto.Marshal(&demopb.LoginRequest{Username: "alice", Password: "password"})
+	payload, err := proto.Marshal(&demopb.LoginRequest{AccessToken: accessAuthenticate(t, client, "alice", "password").AccessToken})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +403,7 @@ func TestAccessOnlineFailureDoesNotOpenGame(t *testing.T) {
 	}
 	accessFixtureRPC(t, backend, 97, false)
 	healthy := dialAccess(t, gateAddress)
-	if response := accessRequest(t, healthy, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"}); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+	if response := accessLogin(t, healthy, "alice", "password"); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
 		t.Fatal("恢复后新连接不能登录", response)
 	}
 }
@@ -414,8 +412,7 @@ func TestAccessOnlineFailureDoesNotOpenGame(t *testing.T) {
 func TestAccessRejectsLegacyMoleOperation(t *testing.T) {
 	address, _, hits := startAccessBusiness(t)
 	client := dialAccess(t, address)
-	accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN,
-		&demopb.LoginRequest{Username: "alice", Password: "password"}, &demopb.LoginResponse{})
+	accessLoginResponse(t, client, "alice", "password", &demopb.LoginResponse{})
 	accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &demopb.EnterResponse{})
 	response := accessRequest(t, client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: "old-hit"})
 	if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || len(hits) != 0 {
@@ -427,8 +424,7 @@ func TestAccessRejectsLegacyMoleOperation(t *testing.T) {
 func TestAccessRejectsLegacyLandlordOperation(t *testing.T) {
 	address, _, _ := startAccessBusiness(t)
 	client := dialAccess(t, address)
-	accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN,
-		&demopb.LoginRequest{Username: "alice", Password: "password"}, &demopb.LoginResponse{})
+	accessLoginResponse(t, client, "alice", "password", &demopb.LoginResponse{})
 	response := accessRequest(t, client, demopb.MsgId_C2S_LANDLORD_OPERATION, &demopb.LandlordOperationRequest{OperationId: "old-round"})
 	if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 		t.Fatalf("斗地主旧查账入口未关闭: response=%v", response)
@@ -439,7 +435,7 @@ func TestAccessRejectsLegacyLandlordOperation(t *testing.T) {
 func TestAccessOnlyKnownTargetRefusalCanContinue(t *testing.T) {
 	gateAddress, _, hits := startAccessBusiness(t)
 	client := dialAccess(t, gateAddress)
-	if response := accessRequest(t, client, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{Username: "alice", Password: "password"}); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+	if response := accessLogin(t, client, "alice", "password"); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
 		t.Fatal(response)
 	}
 	if response := accessRequest(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}); response.MsgId != uint32(demopb.MsgId_S2C_ENTER) {
@@ -476,6 +472,10 @@ func TestAccessCLITargetRefusalAndUnknownResult(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			command := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--username", "alice", "--hits", "2")
+			tokenFile := filepath.Join(t.TempDir(), "token.json")
+			if scenario == "accepted" {
+				command.Args = append(command.Args, "--save-token-file", tokenFile)
+			}
 			command.Stdin = strings.NewReader("password\n")
 			output, runErr := command.CombinedOutput()
 			if scenario == "timeout-first" || scenario == "busy-first" {
@@ -492,6 +492,26 @@ func TestAccessCLITargetRefusalAndUnknownResult(t *testing.T) {
 				t.Fatalf("CLI 未独立于账务查询完成命中: %v %s hits=%d", runErr, output, len(hits))
 			}
 			if scenario == "accepted" {
+				info, err := os.Stat(tokenFile)
+				if err != nil || info.Mode().Perm() != 0600 {
+					t.Fatal("Token 文件权限不正确", err)
+				}
+				if strings.Contains(string(output), strings.Repeat("A", 43)) {
+					t.Fatal("Token 被写入日志")
+				}
+				reuse := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--token-file", tokenFile, "--hits", "2")
+				reused, err := reuse.CombinedOutput()
+				if err != nil || strings.Contains(string(reused), `"event":"authenticated"`) || !strings.Contains(string(reused), `"event":"leave"`) || len(hits) != 4 {
+					t.Fatalf("保存 Token 后未跳过密码认证: err=%v output=%s", err, reused)
+				}
+				if err := os.WriteFile(tokenFile, []byte(strings.Repeat("A", 43)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				broken := exec.CommandContext(ctx, "node", clientPath, "--url", "ws://"+gateAddress+"/ws", "--token-file", tokenFile)
+				failure, err := broken.CombinedOutput()
+				if err == nil || strings.Contains(string(failure), strings.Repeat("A", 8)) || !strings.Contains(string(failure), "cannot read a valid token file") {
+					t.Fatal("损坏凭据文件未安全拒绝或泄露内容")
+				}
 				return
 			}
 			if !strings.Contains(string(output), `"event":"miss"`) {

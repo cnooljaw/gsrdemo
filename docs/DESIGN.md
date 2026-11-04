@@ -2,7 +2,7 @@
 
 ## 1. 目标和当前边界
 
-首个 demo 完成持续运行的多人同组打地鼠：用户名密码登录 → 分组与座位 → 共享地鼠 → 每锤扣银子及返还 → 后台批量入账 → 有差异时主动余额校正。原 ID 账务查询仅用于受控验收/管理。用户始终只连接 access。游戏没有固定局长、满员开局或局末结算；旧的“60 秒一局、命中加 1 分”建议已废弃。首版只使用示例银子，不涉及真钱。
+首个 demo 完成持续运行的多人同组打地鼠：密码认证换 AccessToken → Token 登录并绑定 Online → 分组与座位 → 共享地鼠 → 每锤扣银子及返还 → 后台批量入账 → 有差异时主动余额校正。原 ID 账务查询仅用于受控验收/管理。用户始终只连接 access。游戏没有固定局长、满员开局或局末结算；旧的“60 秒一局、命中加 1 分”建议已废弃。首版只使用示例银子，不涉及真钱。
 
 2026-10-26 收敛：多个 access、先单个 mole、独立 settlement 节点；组命名为 AttackService，mole 内保留业务记账 Service。settlement 以通用银子变化为主线，后续供斗地主复用，不计算地鼠回报。共享池子先用固定概率表实现 99% 的期望返还，仅统计已入账扣除和返还，不做实时余额控奖。mole 方案与节点内首版实现见第 8 节，通用 settlement 实现见第 9 节；当时客户端尚未接入，最新接入状态见第 3 节。
 
@@ -12,7 +12,7 @@
 
 三人斗地主已确认并实施第 10 节最小随机房方案，参考 nbgameserver/gameofhlddz 和 ServerLogic/hlddz；多人分组和共享目标可参考 GoServerActorFsm。参考代码提供知识，不作为兼容目标。
 
-当前已完成 MAC Gate/Agent、用户名密码认证、Online 位置目录、地鼠玩法与业务记账、通用 Settlement/MySQL 持久化，以及 TypeScript CLI 闭环。三个客户端和双 access 已真实联调，接入进程骤停后的局部隔离与跨接入重新登录见第 3 节；未实现的目标不作为已验收能力。
+当前已完成 MAC Gate/Agent、密码认证与 Redis AccessToken 登录、Online 位置目录、地鼠玩法与业务记账、通用 Settlement/MySQL 持久化，以及 TypeScript CLI 闭环。三个客户端和双 access 已真实联调，接入进程骤停后的局部隔离与跨接入重新登录见第 3 节；未实现的目标不作为已验收能力。
 
 每个节点角色一个独立 Go module，源码默认放该项目根目录；common 仅保留实际共享的配置代码；跨节点业务直接使用 GSR Call/Send。没有调用者的通用框架、协议目录和业务包不提前建立。
 
@@ -55,7 +55,7 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 ### 3.2 最小业务接入（2026-10-30 已确认并实施）
 
 - 初版 Agent 只保存 ClientSession、两个具名 Dispatcher、接入 Node/私有 AgentName、当前 UserID/LoginID 和 entry/attack 路由；没有余额缓存、游戏状态、副本钱包或额外状态机。当前按第 3.5 节采用具名组件组合。
-- 客户端登录经 Cluster.Call(login/login/1) 验证，再绑定 Online；每次成功登录使用随机 LoginID，每条连接只成功登录一次。具名 Agent 地址在 OnStart 发布，由 GSR 自动退役清理。绑定失败不开放游戏，不盲目重发 Bind，尽力清理候选身份后退出。
+- 客户端先经 PasswordAuth 认证取 Token，再经 Cluster.Call(login/token/2) 校验 Token 并绑定 Online；每次成功登录使用随机 LoginID，每条连接只成功登录一次。具名 Agent 地址在 OnStart 发布，由 GSR 自动退役清理。绑定失败不开放游戏，不盲目重发 Bind，尽力清理候选身份后退出。
 - Enter 通过 Mole.ResolveEntry 得到地址，再调用进入通道；之后 Hit/Snapshot/Leave 直接到 AttackName。2026-11-04 移除客户端 Operation Handler 和 Entry / 3 的查账转发；1051/1052 的旧定义及编号保留、不复用。所有 Cluster Call 最多 3 秒；不逐锤查询 Online，不自动重试命中，不改 ActionID 或重抽奖励。
 - 普通断线尽力 Leave 和条件 Unbind；OnStop 只关闭连接。重复登录用 Online 返回的旧地址发送 Command 101，旧 Agent 按 LoginID 核对后退出。异常退出/超时可能残留目录或成员；Join 已执行但回执丢失时接入可能尚不知道 AttackName，无法保证当次断线立即释放，后续登录/进入覆盖。没有增加全局撤权或恢复协调器。
 - Command 100 接收地鼠快照，102 接收余额校正，分别由组件的独立 Handler 处理；先核对 LoginID，快照另核对当前组，再经 protocolDispatcher.Push 写回。客户端请求与推送使用 nodes/access/proto/demo/v1/game.proto，内部 Cluster 继续传规范 Go 参数；节点不导入彼此实现。客户端身份/节点/路由均不接受外部指定。
@@ -173,7 +173,9 @@ deps 为每条连接构造，组件持有的是这些能力的函数绑定。Set
 
 2026-10-23 升级 v1.0.2：五个节点的 go.mod/go.sum 已更新，access 迁移为 `SecurityMode: gate.SecurityModeMAC`。统一 check/build 与 access race 通过，覆盖真实 MAC WebSocket、连接隔离、启动失败清理及 login 的 TCP Cluster 认证；五个构建产物均确认依赖正式 v1.0.2。此轮未重跑真实 MySQL 验收。
 
-## 5. login 第一步（已确认）
+## 5. login 认证节点
+
+### 5.1 初版密码验证（历史基线）
 
 - 单个 LoginService 负责用户名密码验证，MySQL `gsrdemo_login.accounts` 保存稳定 UserID、唯一用户名和密码摘要；没有账号缓存、Token、LoginID、在线状态或额外状态机。
 - 按用户确认采用标准库无盐 SHA-256，仅用于示例；不引入 Argon2id。账号由本节点 `-create-user` 管理命令创建，密码从标准输入读取；不增加远程注册接口。
@@ -184,6 +186,18 @@ deps 为每条连接构造，组件持有的是这些能力的函数绑定。Set
 - 本轮不修改 access 或 TypeScript 的业务逻辑，不推进 online；下一节点或客户端登录接入另行确认。
 
 2026-10-14：统一 check（Go test/vet、TS 类型检查）、login race 与 login 构建通过。GSR 的本机 MySQL 凭据已只读复用到本项目私密 YAML；管理员已初始化专用库。`GSRDEMO_MYSQL_INTEGRATION=1 go test -run '^TestLoginLiveMySQL$' -timeout=30s -v` 通过：真实 MySQL 创建账号、拒绝重复覆盖，通过 TCP Cluster 两次认证返回同一 UserID，错误密码/不存在账号均拒绝，测试账号清理成功。此验收不包含 access 客户端登录或跨进程业务联调。
+
+### 5.2 密码认证与 Redis Token（2026-11-04 首期）
+
+- 节点目录与路由名仍为 login，只组装 AuthService（auth）与 TokenService（token），没有三方实现、渠道空接口或额外节点。AuthService 借用宿主 MySQL 池，负责密码验证与完成认证；TokenService 借用宿主 Redis 客户端，负责 Issue/Verify/Revoke。AuthService 单向本地 Call TokenService，不形成反向等待；密码 SQL 不占用 TokenService 的 Mailbox。内部传规范 Go 参数和独立结果快照，不额外做 Protobuf 编解码。
+- 客户端 PasswordAuth(1003/1004) 成功只下发 user_id/access_token/expires_at_ms，不修改 Agent 会话或 Online；随后 Login(1001/1002) 只接受平台 Token，验证后新建 LoginID、绑定 Online，并按原 LoginID 通知旧连接退出。账号创建、稳定 UserID、钱包、游戏和 Online 契约保持原职责。
+- Token 用 32 字节安全随机数、Base64URL 编码；Redis 仅存摘要 key、UserID、到期时间，与 TTL 一起原子写入。默认有效期 24 小时，YAML 可设 1 秒到 7 天。校验不续期，普通断线不撤销；重复认证生成新凭据，旧凭据到期或显式撤销前仍有效。多个有效 Token 与只保留一个在线连接是不同规则。
+- Token 校验只访问 Redis，不依赖账号 SQL，不持有内存凭据缓存。Redis 不可用拒绝新 Token 登录；数据丢失需重新认证。认证节点重建而 Redis 保留时旧 Token 可校验；已登录连接不逐消息访问 Redis，也不因 Token 过期自动中断。受信任内部 Revoke 影响后续登录，不代替踢线。
+- 认证/登录失败先排队返回 ErrorResponse，并把 Agent 标记 closing，不再执行后续客户端业务；仅失败时创建私有 loginFailureCloser，After 200ms 后退出并关闭会话。该 Service 只持有 Gate 的线程安全 ClientSession，不持有借出的 Handler 上下文，也不启动业务 goroutine。Agent 的断线消息仍按当前 LoginID 清理游戏和 Online。错误回包只有有限发送窗口，不声称队列接纳等于客户端收到；CreateService 失败立即退出兜底，不修改只读 GSR。
+- 复用固定 go-redis v9.18.0；标准库不提供 Redis 客户端，依赖版本与仓库其他节点一致。宿主创建/关闭外部客户端，有限 Redis I/O 500ms、无透明重试；账号管理 -create-user 仍只连接 MySQL。Login 私密 YAML 若未加 Redis 字段，使用公开默认地址/key/TTL；自定义 Redis 需显式配置。
+- TS CLI 默认读取 stdin 密码完成两步，日志只输出 authenticated 的 UserID/到期时间和 login 的 UserID；可通过 --save-token-file 显式保存 0600 文件（不覆盖已有文件），后续 --token-file 直接 Token 登录、不读密码。MAC 不提供加密，生产凭据传输使用 WSS。协议和具体错误见 PROTOCOL.md；本轮没有三方账号映射、刷新 Token、自动重连、钱包冻结或输光封顶。
+
+首期实际验证：统一 build/check（全部 Go test/vet、TS 构建与 8 项测试）通过。Login 全量 race 启用真实 MySQL（约 2.7 秒），覆盖账号认证、Token 摘要/TTL/到期/撤销、Redis 故障安全拒绝、关闭旧 Runtime 后保留 Redis 重建校验，以及慢密码 SQL 不阻塞 TokenService。Access 全量 race 启用独立进程/TS/MySQL/临时 AOF Redis（约 34.2 秒），地鼠、斗地主、双接入和结算恢复通过；补充定向 race 验证认证不等于登录、错误回包后关闭、失败连接不影响旧在线用户，以及真实 CLI 新建 0600 Token 文件后跳过密码认证复用。子节点为普通构建，不宣称子进程运行 race。21 页 HTML 教程更新并通过浏览器布局/交互/打印检查；未做认证峰值容量、Redis 数据丢失后的部署恢复或生产 WSS 验收。
 
 ## 6. Online 容量估算与待测计划
 
@@ -584,7 +598,7 @@ nodes/landlord/
 
 AttackService 具名组合 attackGame 与 roundSettlement；游戏对象处理游戏状态变化，不依赖 GSR/Redis/RPC，结算组件持有局末请求、Redis 依赖和确认结果。Service 协调外部权限/余额查询、房间目录与广播，不再跨文件直接修改游戏成员或资金结果。两个组件由本桌 Service 串行调用，不增加 Service、Mailbox、goroutine 或父 Service 指针；进行中牌局与局末账务的恢复边界保持不变。2026-11-03 合并旧 attackservice_* 分类文件，按实际类型组织生产代码与测试，不按每条命令新建文件。
 
-客户端 → Agent → LandlordService 获取预留桌地址 → AttackService 入座。之后准备、叫地主、抢地主、出牌/不出、快照及离开直接 Call AttackService；状态变化 Send 到当前 Agent。客户端查询原结算结果时按当前登录 UserID 限定参与身份。业务 Protobuf 每个消息编号使用独立的 payload 类型，遵守现有 GSR Registry 契约。
+客户端 → Agent → LandlordService 获取预留桌地址 → AttackService 入座。之后准备、叫地主、抢地主、出牌/不出、快照及离开直接 Call AttackService；状态变化 Send 到当前 Agent。客户端使用终态快照，不再追加查账；受控验收按原 OperationID 核对账务。业务 Protobuf 每个消息编号使用独立的 payload 类型，遵守现有 GSR Registry 契约。
 
 ### 10.5 实施与验收顺序
 

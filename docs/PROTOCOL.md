@@ -6,7 +6,8 @@
 
 | 请求 / 响应编号 | 输入 | 成功响应 |
 | --- | --- | --- |
-| 1001 / 1002 Login | username、password | user_id；一条连接成功登录一次，换账号须新建连接 |
+| 1003 / 1004 PasswordAuth | username、password | user_id、access_token、expires_at_ms；只认证，不绑定 Online |
+| 1001 / 1002 Login | access_token（字段 3；旧密码字段 1/2 保留禁用） | user_id；校验 Token 后绑定 Online，一条连接成功登录一次 |
 | 1011 / 1012 Enter | 空 | 地鼠快照、silver 余额基线 |
 | 1021 / 1022 Hit | action_id、spawn_seq、hole | hit（含 accepted/rejected）、silver；目标失效时返回 rejection=target_unavailable 且无 hit/silver；已拒绝重试结果可无 silver，不能显示奖励 |
 | 1031 / 1032 Snapshot | 空 | 当前组快照 |
@@ -17,9 +18,9 @@
 
 `Balance.confirmed` 为确认金额 amount 和数据库版本 version 组成的消息：Enter 和确认校正可携带，普通即时命中可省略；省略不代表零。显示余额按 revision 只采纳新修订，重入以新基线重建。银子、UserID、SpawnSeq、版本和修订号在 TS 中均保持 bigint，不能转 Number 后参与账务显示或判断。
 
-Agent 独占当前连接身份，地鼠组件仅保存 attack 路由；Entry 地址只在当前进入调用中使用，不长期缓存。每条连接随机生成私有具名地址，每次登录随机生成不可复用 LoginID。Login 验证成功后 Call Online.Bind；绑定成功才开放游戏。Bind 失败/超时不重发绑定，只尝试清理该候选 LoginID 并关闭连接。正常替换后向旧地址 Send Command 101（旧 LoginID），旧 Agent 核对身份后尽力 Leave/Unbind 再退出；普通断线执行相同清理。进程骤停、清理超时或推送失败可能留下旧目录/成员，后续登录和进入覆盖；不承诺 Online 绑定已替换时旧在途操作被撤销，也不承诺网络分区下立即踢下线。
+Agent 独占当前连接身份，地鼠组件仅保存 attack 路由；Entry 地址只在当前进入调用中使用，不长期缓存。每条连接随机生成私有具名地址，每次登录随机生成不可复用 LoginID。PasswordAuth 经 login/auth/1 验证密码、向 login/token/1 申请凭据，只返回认证结果；随后 Login 经 login/token/2 校验 Token，成功后 Call Online.Bind，绑定成功才开放游戏。Bind 失败/超时不重发绑定，只尝试清理该候选 LoginID 并关闭连接。正常替换后向旧地址 Send Command 101（旧 LoginID），旧 Agent 核对身份后尽力 Leave/Unbind 再退出；普通断线执行相同清理。进程骤停、清理超时或推送失败可能留下旧目录/成员，后续登录和进入覆盖；不承诺 Online 绑定已替换时旧在途操作被撤销，也不承诺网络分区下立即踢下线。
 
-未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。地鼠快照使用 Command 100，余额校正使用 Command 102，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
+认证或 Login 失败先排队返回框架 ErrorResponse，再封闭这条连接的后续客户端操作，由独立 loginFailureCloser 在 200ms 发送窗口后关闭连接；回包入队不保证网络送达，不承诺慢网络下必收错误。失败的新连接不替换或踢掉已有登录。普通断线与旧连接替换不撤销 Token。未登录请求被拒绝；命中/快照/离开还要求已进入。Agent 不缓存余额，不自动重试命中；原 ActionID 由客户端保留，超时不代表未扣款。地鼠快照使用 Command 100，余额校正使用 Command 102，Agent 核对 LoginID，再经 protocolDispatcher.Push 写回；快照额外核对当前组。所有 Cluster Call 最多等待 3 秒，不持有回调上下文到异步任务。
 
 Online 不可用时，新登录不能完成绑定，接入关闭该连接。已进入游戏的连接仍按当前路由执行 Hit/Snapshot/Leave 并接收推送，不逐次查询 Online；重新登录或 Enter 仍需目录可用。Online 重启后不自动重建绑定。
 
@@ -29,32 +30,26 @@ Online 不可用时，新登录不能完成绑定，接入关闭该连接。已�
 
 其它错误沿用框架 ErrorResponse（9001），目前客户端只收到框架通用错误类别和安全文案，内部 Domain Code 留在服务端；不另加一套客户端错误框架。断线清理和进程停止不是持久结算完成证明。
 
-## login 认证
+## login 认证与 Token
 
-仅供受信任节点经 GSR Cluster 调用；客户端凭据由 access 转发，客户端不直接连接 login。
+节点路由仍为 login。MainService 创建两个独立 Service：auth 访问 MySQL 认证账号，token 只访问 Redis。Auth 等待密码 SQL 时，TokenService 可独立处理已有 Token 的登录校验；两者均不持有 Online 或客户端连接。
 
-| 项目 | 约定 |
-| --- | --- |
-| 目标 | Node `login`，Service `login` |
-| CommandID | `1`（loginservice.go 的 authenticateCommand） |
-| 位置参数 | `username string`、`password string` |
-| 成功结果 | 非零 `uint64` UserID；同账号重复认证返回相同 ID |
+| Service / Command | 参数 | 结果 |
+| --- | --- | --- |
+| auth / 1 PasswordAuth | username string、password string | map：user_id uint64、access_token string、expires_at_ms int64 |
+| token / 1 Issue（受信任内部入口） | user_id uint64 | 同上；随机签发新的平台凭据 |
+| token / 2 Verify | access_token string | user_id uint64 |
+| token / 3 Revoke（受信任内部入口） | access_token string | bool，是否删除；缺失时 false，可重复执行 |
 
-用户名 1..64 字节，仅允许 ASCII 字母、数字、`_`、`-`、`.`，区分大小写，不做 trim 或大小写转换。密码 1..128 字节，按原始字节哈希；管理命令只去掉输入行末的 CR/LF。用户名唯一，不自动注册。
+AuthService 校验用户名/密码格式，按现有 accounts 查询并验证示例密码摘要，然后本地 Call TokenService 签发凭据。账号不存在和密码错误统一返回 login.invalid_credentials；格式错误为 login.invalid_request；SQL 错误为 login.store_unavailable，底层错误不返回客户端。SQL 等待最多 2 秒，内部申请 Token 最多 500ms；Access 的后端 Call 最多 3 秒。不创建远程账号，不自动初始化钱包。示例无盐 SHA-256 约定保持原样。
 
-| Domain 错误码 | 含义 |
-| --- | --- |
-| login.invalid_request | 用户名或密码超出输入边界 |
-| login.invalid_credentials | 账号不存在或密码错误 |
-| login.store_unavailable | 数据库不可用，或账号 ID/哈希数据损坏 |
+Token 为 crypto/rand 生成的 32 字节随机值、43 字符 Base64URL 无补位编码；Redis key=redis_key + ':' + SHA-256(Token) 的十六进制摘要，JSON 只含 user_id、expires_at_ms。SET NX 与 TTL 一起写入，只有写入确认成功才返回 Token；Redis 结果未知不返回凭据，残留项依 TTL 到期。不缓存明文 Token，不查询 SQL，不逐游戏消息校验。Verify 不续期，普通断线不撤销；每次密码认证生成新 Token，已有 Token 保持原有效期，不把单在线连接规则混成单 Token 规则。
 
-调用方用 `errors.Is` 或 Class/Code 判断，不比较 Message。错误类型/参数个数由 GSR Dispatcher 返回 `runtime.invalid_command_arguments`；未知 Command 沿用框架错误。底层 SQL 错误只进入服务端日志，不作为 RPC 文本返回。SQL 等待上限为 2 秒，调用方另设有限 Call 预算。
+redis_url 默认 redis://127.0.0.1:6379/0，redis_key 默认 gsrdemo:auth:token；token_ttl_seconds 默认 86400，允许 1..604800。Redis 记录缺失、到期、已撤销和非法 Token 统一返回 auth.invalid_token；Redis 故障/损坏记录返回 auth.token_store_unavailable，不能降级放行。宿主启动检查 Redis，默认有限 I/O 预算 500ms、禁用透明重试。Revoke 只影响后续 Token 登录，不自动踢掉已经绑定的连接；如业务要强制下线，需要另走当前 LoginID 的连接清理。
 
-认证只读账号，不创建登录会话、Token 或 Online 记录；Call 超时可以重试本次只读验证，不代表登录位置已经绑定。内部直接使用规范参数类型，不增加内部 Protobuf 编解码。
+TokenService 不保存内存凭据副本；认证节点重启后，只要 Redis 记录仍在就可继续校验。Redis 数据丢失或 Token 到期需要重新密码认证；已登录连接不因 Token TTL 到期而自动中断。MAC 提供完整性认证，不加密 Token；生产接入使用 WSS。Token 不写日志，不作为命令行参数；TS CLI 默认只在内存持有，--save-token-file 显式创建 0600 文件且拒绝覆盖，--token-file 直接登录、不读 stdin 密码。
 
-本示例按用户确认采用无盐 SHA-256，账号表保存 32 字节摘要，仅用于示例，不是生产密码存储方案。
-
-命令、Service 名称及错误定义与 LoginService 放在 loginservice.go；access 按本文契约调用，不导入节点实现。
+登录协议字段 1/2 及名称 username/password 保留禁用，只接纳字段 3 access_token；旧二进制不能继续以密码 Login，Go/TS 生成物、Access 与 CLI 需配套更新。当前没有三方认证入口、刷新 Token 或自动重连；微信、苹果和渠道在实际接入时再按独立协议与 Service 添加。
 
 ## online 位置目录
 

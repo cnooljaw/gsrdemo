@@ -111,7 +111,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 func accessExpectLoginRejected(t *testing.T, address string, player *accessDemoPlayer) {
 	t.Helper()
 	client := dialAccess(t, address)
-	payload, err := proto.Marshal(&demopb.LoginRequest{Username: player.username, Password: player.password})
+	payload, err := proto.Marshal(&demopb.LoginRequest{AccessToken: accessAuthenticate(t, client, player.username, player.password).AccessToken})
 	if err != nil {
 		t.Fatal(err)
 	}

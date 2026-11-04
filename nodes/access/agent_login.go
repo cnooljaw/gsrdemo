@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+	"time"
+
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
+	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
@@ -10,20 +14,43 @@ import (
 )
 
 const (
-	loginAuthenticateCommand runtime.CommandID = 1
-	onlineBindCommand        runtime.CommandID = 1
-	onlineUnbindCommand      runtime.CommandID = 3
-	agentReplacedCommand     runtime.CommandID = 101
+	passwordAuthenticateCommand runtime.CommandID = 1
+	tokenVerifyCommand          runtime.CommandID = 2
+	onlineBindCommand           runtime.CommandID = 1
+	onlineUnbindCommand         runtime.CommandID = 3
+	agentReplacedCommand        runtime.CommandID = 101
 )
 
 var errAlreadyLoggedIn = runtime.NewStatusError(runtime.ErrorClassDomain, "access.already_logged_in", "use a new connection to login again")
 
-// onLogin 只接受凭据，身份和连接地址始终由服务端填写。
+// onPasswordAuth 只完成密码认证并返回凭据，不填写会话身份，也不绑定 Online。
+func (agent *agent) onPasswordAuth(self gsr.CommandContext, reply protocol.Context, request *demopb.PasswordAuthRequest) error {
+	if agent.session.userID != 0 {
+		return errAlreadyLoggedIn
+	}
+	value, err := callBackend(self, "login", "auth", passwordAuthenticateCommand, request.GetUsername(), request.GetPassword())
+	if err != nil {
+		return err
+	}
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return gameagent.ErrInvalidBackendReply
+	}
+	uid, uidOK := fields["user_id"].(uint64)
+	token, tokenOK := fields["access_token"].(string)
+	expires, expiresOK := fields["expires_at_ms"].(int64)
+	if !uidOK || uid == 0 || !tokenOK || len(token) != 43 || !expiresOK || expires <= time.Now().UnixMilli() {
+		return gameagent.ErrInvalidBackendReply
+	}
+	return reply.Response(uint32(demopb.MsgId_S2C_PASSWORD_AUTH), &demopb.PasswordAuthResponse{UserId: uid, AccessToken: token, ExpiresAtMs: expires})
+}
+
+// onLogin 只接受平台 Token，身份和连接地址始终由服务端填写。
 func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, request *demopb.LoginRequest) error {
 	if agent.session.userID != 0 {
 		return errAlreadyLoggedIn
 	}
-	value, err := callBackend(self, "login", "login", loginAuthenticateCommand, request.GetUsername(), request.GetPassword())
+	value, err := callBackend(self, "login", "token", tokenVerifyCommand, request.GetAccessToken())
 	if err != nil {
 		return err
 	}
@@ -41,7 +68,6 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 		if cleanupErr := self.Cluster().Send("online", "online", onlineUnbindCommand, userID, loginID); cleanupErr != nil {
 			_ = self.Logger().Error("未确认登录的清理未接纳", "error", cleanupErr.Error())
 		}
-		self.Exit()
 		return err
 	}
 	agent.session.userID, agent.session.loginID = userID, loginID
@@ -49,7 +75,6 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 		old, ok := previous.(map[string]any)
 		if !ok {
 			agent.disconnect(self)
-			self.Exit()
 			return gameagent.ErrInvalidBackendReply
 		}
 		oldNode, nodeOK := old["access_node"].(string)
@@ -57,7 +82,6 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 		oldLogin, loginOK := old["login_id"].(string)
 		if !nodeOK || !nameOK || !loginOK || oldNode == "" || oldName == "" || oldLogin == "" {
 			agent.disconnect(self)
-			self.Exit()
 			return gameagent.ErrInvalidBackendReply
 		}
 		// 不等待旧 Agent；其断线/离开仍按旧 LoginID 有条件清理。
@@ -95,12 +119,45 @@ func (agent *agent) disconnect(self gsr.ServiceContext) {
 
 func (agent *agent) commonProtocolHandlers() map[uint32]any {
 	return map[uint32]any{
-		uint32(demopb.MsgId_C2S_LOGIN): agent.onLogin,
+		uint32(demopb.MsgId_C2S_LOGIN):         agent.onLogin,
+		uint32(demopb.MsgId_C2S_PASSWORD_AUTH): agent.onPasswordAuth,
 	}
 }
 
 func (agent *agent) commonCommandHandlers() map[runtime.CommandID]any {
 	return map[runtime.CommandID]any{
 		agentReplacedCommand: agent.handleReplaced,
+	}
+}
+
+// loginFailureCloser 独立等待错误回包的短发送窗口；Agent 已封闭后续业务，框架连接队列仍由 Gate 独占。
+type loginFailureCloser struct{ client gate.ClientSession }
+
+var _ gsr.Service = (*loginFailureCloser)(nil)
+
+func (closer *loginFailureCloser) OnStart(_ context.Context, self gsr.ServiceContext) error {
+	_, err := self.After(200*time.Millisecond, 1)
+	return err
+}
+
+func (closer *loginFailureCloser) Handle(self gsr.CommandContext, cmd runtime.CommandID, _ ...any) (any, error) {
+	if cmd != 1 || self.Source() != 0 {
+		return nil, runtime.ErrUnknownCommand
+	}
+	self.Exit()
+	return nil, nil
+}
+
+func (closer *loginFailureCloser) OnStop(_ context.Context) error {
+	return closer.client.Close()
+}
+
+func (agent *agent) closeAfterLoginFailure(self gsr.ServiceContext) {
+	agent.closing = true
+	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
+	defer cancel()
+	if _, err := self.CreateService(ctx, &loginFailureCloser{client: agent.client}); err != nil {
+		self.Exit()
+		return
 	}
 }

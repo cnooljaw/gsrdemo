@@ -1,12 +1,13 @@
 import { create, toBinary } from "@bufbuild/protobuf";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { DemoClient } from "./client.js";
 import { runLandlord } from "./landlord.js";
 import {
   EnterRequestSchema, EnterResponseSchema, HitRequestSchema, HitResponseSchema,
   LeaveRequestSchema, LeaveResponseSchema, LoginRequestSchema, LoginResponseSchema,
+  PasswordAuthRequestSchema, PasswordAuthResponseSchema,
   MsgId, SnapshotRequestSchema, SnapshotResponseSchema,
 } from "./gen/demo/v1/game_pb.js";
 
@@ -14,13 +15,15 @@ function print(event: string, value: unknown): void {
   console.log(JSON.stringify({ event, value }, (_, item) => typeof item === "bigint" ? item.toString() : item));
 }
 
-function options(): { url: string; username: string; hits: number; timeout: number; game: string } {
-  const parsed = { url: "ws://127.0.0.1:7888/ws", username: "demo", hits: 1, timeout: 5_000, game: "mole" };
+function options(): { url: string; username: string; hits: number; timeout: number; game: string; tokenFile: string; saveTokenFile: string } {
+  const parsed = { url: "ws://127.0.0.1:7888/ws", username: "demo", hits: 1, timeout: 5_000, game: "mole", tokenFile: "", saveTokenFile: "" };
   const args = process.argv.slice(2);
   for (let index = 0; index < args.length; index += 2) {
     const value = args[index + 1];
     if (!value) throw new Error(`missing value for ${args[index]}`);
     switch (args[index]) {
+      case "--token-file": parsed.tokenFile = value; break;
+      case "--save-token-file": parsed.saveTokenFile = value; break;
       case "--game": parsed.game = value; break;
       case "--url": parsed.url = value; break;
       case "--username": parsed.username = value; break;
@@ -32,19 +35,41 @@ function options(): { url: string; username: string; hits: number; timeout: numb
   if (parsed.game !== "mole" && parsed.game !== "landlord") throw new Error("--game must be mole or landlord");
   if (!Number.isSafeInteger(parsed.hits) || parsed.hits < 1 || parsed.hits > 100) throw new Error("--hits must be 1..100");
   if (!Number.isSafeInteger(parsed.timeout) || parsed.timeout < 1) throw new Error("--timeout-ms must be positive");
+  if (parsed.tokenFile && parsed.saveTokenFile) throw new Error("choose --token-file or --save-token-file");
   return parsed;
 }
 
 async function run(): Promise<void> {
   const config = options();
-  // 管理入口和客户端均从 stdin 读取密码；不把密码放命令行或日志。
-  const password = readFileSync(0, "utf8").replace(/\r?\n$/, "");
-  if (Buffer.byteLength(password) < 1 || Buffer.byteLength(password) > 128) throw new Error("stdin password must contain 1..128 bytes");
   const client = await DemoClient.connect(config.url, config.timeout);
   client.onPush = print;
   try {
+    let token: string;
+    if (config.tokenFile) {
+      let saved: unknown;
+      try {
+        saved = JSON.parse(readFileSync(config.tokenFile, "utf8"));
+      } catch {
+        throw new Error("cannot read a valid token file");
+      }
+      if (!saved || typeof saved !== "object" || !("accessToken" in saved) || typeof saved.accessToken !== "string" || saved.accessToken.length !== 43) throw new Error("invalid token file");
+      token = saved.accessToken;
+    } else {
+      // 密码只用于认证；Token 原文不写日志，也不通过命令行传入。
+      const password = readFileSync(0, "utf8").replace(/\r?\n$/, "");
+      if (Buffer.byteLength(password) < 1 || Buffer.byteLength(password) > 128) throw new Error("stdin password must contain 1..128 bytes");
+      const auth = await client.request(MsgId.C2S_PASSWORD_AUTH,
+        toBinary(PasswordAuthRequestSchema, create(PasswordAuthRequestSchema, { username: config.username, password })),
+        MsgId.S2C_PASSWORD_AUTH, PasswordAuthResponseSchema);
+      if (!auth.userId || auth.accessToken.length !== 43 || auth.expiresAtMs <= BigInt(Date.now())) throw new Error("invalid authentication response");
+      token = auth.accessToken;
+      if (config.saveTokenFile) {
+        writeFileSync(config.saveTokenFile, JSON.stringify({ accessToken: token, expiresAtMs: auth.expiresAtMs.toString() }), { mode: 0o600, flag: "wx" });
+      }
+      print("authenticated", { userId: auth.userId, expiresAtMs: auth.expiresAtMs });
+    }
     const login = await client.request(MsgId.C2S_LOGIN,
-      toBinary(LoginRequestSchema, create(LoginRequestSchema, { username: config.username, password })),
+      toBinary(LoginRequestSchema, create(LoginRequestSchema, { accessToken: token })),
       MsgId.S2C_LOGIN, LoginResponseSchema);
     print("login", login);
     if (config.game === "landlord") {

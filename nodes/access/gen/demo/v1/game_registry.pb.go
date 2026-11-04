@@ -21,6 +21,18 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		NewMessage: func() proto.Message { return &LoginResponse{} },
 	},
 	{
+		ID:         uint32(MsgId_C2S_PASSWORD_AUTH),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &PasswordAuthRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_S2C_PASSWORD_AUTH),
+		Direction:  catalog.ServerToClient,
+		Kind:       catalog.Response,
+		NewMessage: func() proto.Message { return &PasswordAuthResponse{} },
+	},
+	{
 		ID:         uint32(MsgId_C2S_ENTER),
 		Direction:  catalog.ClientToServer,
 		Kind:       catalog.Request,
