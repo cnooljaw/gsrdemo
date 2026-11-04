@@ -11,19 +11,20 @@ import (
 )
 
 type mainService struct {
-	node cluster.NodeID
-	db   *sql.DB
+	node    cluster.NodeID
+	db      *sql.DB
+	workers int
 }
 
 var _ gsr.Service = (*mainService)(nil)
 
 // NewMain 创建只负责节点启动的 MainService。
-func NewMain(node cluster.NodeID, db *sql.DB) gsr.Service {
-	return &mainService{node: node, db: db}
+func NewMain(node cluster.NodeID, db *sql.DB, workers int) gsr.Service {
+	return &mainService{node: node, db: db, workers: workers}
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, child := range []gsr.Service{newSettlementService(service.db), newSettlementQueryService(service.db)} {
+	for _, child := range []gsr.Service{newSettlementService(service.db), newSettlementQueryService(service.db), newSettlementSubmitService(service.db, service.workers)} {
 		if _, err := self.CreateService(ctx, child); err != nil {
 			return err
 		}

@@ -70,6 +70,27 @@ func (service *settlementFixture) OnStop(context.Context) error {
 }
 
 func (service *settlementFixture) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
+	if command == settlementSubmitCommand && len(args) == 3 {
+		request := args[0].(map[string]any)
+		drop := service.loseFirstReply || service.hideReceipts
+		receipt, err := service.handleSubmit(self, request)
+		if drop {
+			return nil, nil
+		}
+		code := ""
+		if err != nil {
+			var status *runtime.StatusError
+			if errors.As(err, &status) {
+				code = string(status.Code)
+			} else {
+				code = "settlement.store_unavailable"
+			}
+		}
+		if receipt == nil {
+			receipt = map[string]any{}
+		}
+		return nil, self.Cluster().Send(cluster.NodeID(args[1].(string)), cluster.ServiceName(args[2].(string)), submissionResultCommand, request["batch_id"], receipt, code)
+	}
 	return service.dispatcher.Handle(self, command, args...)
 }
 
@@ -137,7 +158,7 @@ func (service *settlementFixture) handleSubmit(_ gsr.CommandContext, request map
 	}
 	if service.loseFirstReply {
 		service.loseFirstReply = false
-		// 模拟已经执行且提交，但处理回复慢于 mole 的有限 Call 预算。
+		// 模拟 SQL 已提交但本次回执丢失；异步 Handle 会丢弃这次结果，等待原批次重提。
 		time.Sleep(650 * time.Millisecond)
 	}
 	return receipt, nil
@@ -356,7 +377,7 @@ func (service *moleTestPeer) OnStart(ctx context.Context, self gsr.ServiceContex
 		return err
 	}
 	if service.name == "settlement" {
-		for _, name := range []string{"settlement-write", "settlement-read"} {
+		for _, name := range []string{"settlement-write", "settlement-read", "settlement-submit"} {
 			if err := self.Node().RegisterService(cluster.ServiceName(name), id); err != nil {
 				return err
 			}
@@ -404,16 +425,40 @@ func (service *moleObservedMain) OnStop(ctx context.Context) error {
 	return service.service.OnStop(ctx)
 }
 
+var moleTestAddressBooks sync.Map
+
+func moleTestAddresses(t *testing.T) map[cluster.NodeID]string {
+	t.Helper()
+	if addresses, ok := moleTestAddressBooks.Load(t.Name()); ok {
+		return addresses.(map[cluster.NodeID]string)
+	}
+	addresses := map[cluster.NodeID]string{}
+	for _, name := range []cluster.NodeID{"mole", "settlement", "settlement-02", "online", "access", "access-01", "access-02", "access-03"} {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addresses[name] = listener.Addr().String()
+		_ = listener.Close()
+	}
+	moleTestAddressBooks.Store(t.Name(), addresses)
+	t.Cleanup(func() { moleTestAddressBooks.Delete(t.Name()) })
+	return addresses
+}
+
 func startMoleTestNode(t *testing.T, node string, routes map[cluster.NodeID]string, main gsr.Service) (string, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	observed := &moleObservedMain{service: main, ready: make(chan string, 1)}
 	directory, done := t.TempDir(), make(chan error, 1)
 	copyRoutes := make(map[cluster.NodeID]string)
+	for name, address := range moleTestAddresses(t) {
+		copyRoutes[name] = address
+	}
 	for name, address := range routes {
 		copyRoutes[name] = address
 	}
-	copyRoutes[cluster.NodeID(node)] = "127.0.0.1:0"
+	copyRoutes[cluster.NodeID(node)] = moleTestAddresses(t)[cluster.NodeID(node)]
 	go func() {
 		done <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: directory}, Cluster: gsr.ClusterConfig{Nodes: copyRoutes}}, observed)
 	}()
@@ -524,7 +569,7 @@ func enterMoleTestUser(t *testing.T, routes map[cluster.NodeID]string, userID ui
 	if _, err := moleRPC(t, routes, "online", "online", 1, userID, login, access, "agent"); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(settlementReplyWait + 2*time.Second)
 	for time.Now().Before(deadline) {
 		value, err := callMoleEnter(t, routes, userID, login, access, "agent")
 		if err == nil {
@@ -552,7 +597,7 @@ func testHitTarget(t *testing.T, routes map[cluster.NodeID]string, snapshot map[
 
 func waitMoleOperation(t *testing.T, routes map[cluster.NodeID]string, userID uint64, hitID, want string) {
 	t.Helper()
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(settlementReplyWait + 2*time.Second)
 	for time.Now().Before(deadline) {
 		value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, userID, hitID)
 		if err == nil && value != nil && value.(map[string]any)["status"] == want {
@@ -838,7 +883,7 @@ func TestMoleCorrectionUsesCurrentLogin(t *testing.T) {
 	if _, err := moleRPC(t, routes, "settlement", "settlement", 997, false); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(settlementReplyWait + 2*time.Second)
 	for {
 		select {
 		case message := <-agent.messages:

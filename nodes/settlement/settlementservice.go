@@ -20,9 +20,6 @@ const (
 	settleSingleCommand  runtime.CommandID = 6
 	settleGroupCommand   runtime.CommandID = 7
 	settlementSQLTimeout                   = 2 * time.Second
-	// 两个入口最多接纳 2*(4+1)=10 个排队/执行中的 Call，低于 v1.0.2 单连接的 32 个槽位。
-	// 不以大队列掩盖慢请求，给同连接的其他目标留出接纳机会。
-	settlementMailboxCapacity = 4
 )
 
 var (

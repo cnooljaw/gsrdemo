@@ -77,7 +77,7 @@ var _ gsr.Service = (*landlordSettlementBackend)(nil)
 
 func (*landlordSettlementBackend) OnStart(context.Context, gsr.ServiceContext) error { return nil }
 func (*landlordSettlementBackend) OnStop(context.Context) error                      { return nil }
-func (backend *landlordSettlementBackend) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+func (backend *landlordSettlementBackend) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
 	if cmd != 7 {
 		return nil, runtime.ErrUnknownCommand
 	}
@@ -91,7 +91,8 @@ func (backend *landlordSettlementBackend) Handle(_ gsr.CommandContext, cmd runti
 	for _, change := range request["changes"].([]any) {
 		balances = append(balances, map[string]any{"user_id": change.(map[string]any)["user_id"], "amount": int64(10000), "version": uint64(2)})
 	}
-	return map[string]any{"results": []any{map[string]any{"operation_id": id, "status": backend.status, "reason": ""}}, "balances": balances}, nil
+	receipt := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": backend.status, "reason": ""}}, "balances": balances}
+	return nil, self.Cluster().Send(cluster.NodeID(args[1].(string)), cluster.ServiceName(args[2].(string)), roomSettlementResultCommand, id, receipt, "")
 }
 
 // landlordResultPushRecorder 观察真实 Cluster 推送；只统计局末消息。
@@ -124,7 +125,10 @@ func (recorder *landlordResultPushRecorder) Handle(_ gsr.CommandContext, cmd run
 type landlordSettlementProbe struct{ *attackService }
 
 func (probe *landlordSettlementProbe) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	// 测试 Main 已负责注册桌名，只创建与生产相同的 Pulse。
+	// 测试 Main 已负责注册桌名，回执地址和 Pulse 使用生产组装。
+	if err := probe.registerSettlementReply(self); err != nil {
+		return err
+	}
 	_, err := self.CreateService(ctx, &landlordPulse{target: self.Self()})
 	return err
 }
@@ -155,7 +159,7 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 			journal.client.AddHook(fault)
 			backend := &landlordSettlementBackend{journal: journal, status: status}
 			routes := map[cluster.NodeID]string{}
-			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-write": backend})
+			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-submit": backend})
 			startLandlordTestNode(t, routes, "access", map[string]gsr.Service{"agent": &landlordResultPushRecorder{}})
 			game := testLandlordGame(t)
 			for i := range game.Players {
@@ -186,6 +190,14 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 				}
 			} else {
 				view = landlordTestValue(t, routes, "landlord", game.Name, roomPlayCommand, uid, "login", turn, []any{int64(3)}).(map[string]any)
+			}
+			resultDeadline := time.Now().Add(2 * time.Second)
+			for view["settlement"].(map[string]any)["status"] == "pending" {
+				if time.Now().After(resultDeadline) {
+					t.Fatal("异步结算回执未到达")
+				}
+				time.Sleep(10 * time.Millisecond)
+				view = landlordTestValue(t, routes, "landlord", game.Name, roomSnapshotCommand, uid, "login").(map[string]any)
 			}
 			if receipt := view["settlement"].(map[string]any); receipt["status"] != status || receipt["balance"] != int64(10000) {
 				t.Fatalf("有效回执被 Redis 清理失败掩盖: %v", receipt)

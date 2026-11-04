@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"math/rand/v2"
+	"time"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
+	"github.com/cnooljaw/gsr/runtime"
 )
 
 // roundSettlement 只拥有本桌资金请求和提交进度，由 AttackService 串行调用。
@@ -12,6 +15,9 @@ type roundSettlement struct {
 	node           cluster.NodeID
 	journal        landlordJournal
 	result         *landlordResult
+	replyName      cluster.ServiceName
+	retryAt        time.Time
+	fault          error
 	cleanupPending bool // 终态已确认但 Redis 待记录尚未删除，不影响客户端结果。
 }
 
@@ -114,48 +120,61 @@ func (result *landlordResult) view(uid uint64) map[string]any {
 }
 
 func (round *roundSettlement) settle(self gsr.ServiceContext) error {
-	result := round.result
+	if round.fault != nil || time.Now().Before(round.retryAt) {
+		return nil
+	}
+	// Redis 或本地发送失败也限频；SQL 结果未知时仍保留原请求。
+	round.retryAt = time.Now().Add(time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	err := round.journal.save(ctx, result)
+	err := round.journal.save(ctx, round.result)
 	cancel()
 	if err != nil {
 		return err
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), callTimeout)
-	value, err := self.Cluster().Call(ctx, round.node, "settlement-write", 7, result.wire())
-	cancel()
-	if err != nil {
+	if err := self.Cluster().Send(round.node, "settlement-submit", 7, round.result.wire(), "landlord", string(round.replyName)); err != nil {
 		return err
 	}
-	fields, ok := value.(map[string]any)
-	if !ok {
-		return errLandlordInput
+	round.retryAt = time.Now().Add(5*time.Second + rand.N(500*time.Millisecond))
+	return nil
+}
+
+func (round *roundSettlement) accept(id string, fields map[string]any, code string) (bool, error) {
+	if !round.pending() || round.result.ID != id || round.fault != nil {
+		return false, nil
 	}
+	if code != "" {
+		err := runtime.NewStatusError(runtime.ErrorClassDomain, runtime.ErrorCode(code), "settlement request did not complete")
+		if code != "settlement.busy" && code != "settlement.store_unavailable" {
+			round.fault = err
+		}
+		return false, err
+	}
+	result := round.result
 	results, ok := fields["results"].([]any)
 	if !ok || len(results) != 1 {
-		return errLandlordInput
+		return false, errLandlordInput
 	}
 	item, ok := results[0].(map[string]any)
 	if !ok || item["operation_id"] != result.ID {
-		return errLandlordInput
+		return false, errLandlordInput
 	}
 	status, ok := item["status"].(string)
 	if !ok || (status != "committed" && status != "rejected") {
-		return errLandlordInput
+		return false, errLandlordInput
 	}
 	reason, ok := item["reason"].(string)
 	if !ok {
-		return errLandlordInput
+		return false, errLandlordInput
 	}
 	values, ok := fields["balances"].([]any)
 	if !ok || len(values) != 3 {
-		return errLandlordInput
+		return false, errLandlordInput
 	}
 	balances := map[uint64]landlordBalance{}
 	for _, value := range values {
 		row, ok := value.(map[string]any)
 		if !ok {
-			return errLandlordInput
+			return false, errLandlordInput
 		}
 		uid, uidOK := row["user_id"].(uint64)
 		amount, amountOK := row["amount"].(int64)
@@ -165,16 +184,16 @@ func (round *roundSettlement) settle(self gsr.ServiceContext) error {
 			expected = expected || c.UserID == uid
 		}
 		if !uidOK || !amountOK || !versionOK || amount < 0 || !expected {
-			return errLandlordInput
+			return false, errLandlordInput
 		}
 		if _, duplicate := balances[uid]; duplicate {
-			return errLandlordInput
+			return false, errLandlordInput
 		}
 		balances[uid] = landlordBalance{amount, version}
 	}
 	result.Status, result.Reason, result.Balances = status, reason, balances
 	round.cleanupPending = true
-	return nil
+	return true, nil
 }
 
 func (round *roundSettlement) cleanup() error {

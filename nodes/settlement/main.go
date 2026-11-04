@@ -27,8 +27,11 @@ func main() {
 }
 
 type settlementConfig struct {
-	Node     model.NodeConfig `yaml:",inline"`
-	MySQLDSN string           `yaml:"mysql_dsn"`
+	Node             model.NodeConfig `yaml:",inline"`
+	MySQLDSN         string           `yaml:"mysql_dsn"`
+	Workers          int              `yaml:"worker_count"`
+	MySQLConnections int              `yaml:"mysql_connections"`
+	MailboxCapacity  int              `yaml:"mailbox_capacity"`
 }
 
 func loadSettlementConfig(path string) (settlementConfig, error) {
@@ -50,6 +53,21 @@ func loadSettlementConfig(path string) (settlementConfig, error) {
 	if strings.TrimSpace(config.MySQLDSN) == "" {
 		return config, errors.New("mysql_dsn is required; use a private local YAML config")
 	}
+	if config.MailboxCapacity == 0 {
+		config.MailboxCapacity = 64
+	}
+	if config.MailboxCapacity < 1 || config.MailboxCapacity > 256 {
+		return config, errors.New("mailbox_capacity must be 1..256")
+	}
+	if config.Workers == 0 {
+		config.Workers = defaultSettlementWorkers
+	}
+	if config.MySQLConnections == 0 {
+		config.MySQLConnections = config.Workers + 2
+	}
+	if config.Workers < 1 || config.Workers > 64 || config.MySQLConnections < 2 || config.MySQLConnections > 128 {
+		return config, errors.New("worker_count must be 1..64; mysql_connections must be 2..128")
+	}
 	return config, nil
 }
 
@@ -69,6 +87,8 @@ func run() (result error) {
 	if err != nil {
 		return fmt.Errorf("open settlement database: %w", err)
 	}
+	db.SetMaxOpenConns(config.MySQLConnections)
+	db.SetMaxIdleConns(config.MySQLConnections)
 	defer func() { result = errors.Join(result, db.Close()) }()
 	if *initializeUser != 0 || *silver != -1 {
 		if *initializeUser == 0 || *silver < 0 {
@@ -88,12 +108,12 @@ func run() (result error) {
 	}
 	return gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: config.Node.LogDirectory},
-		Runtime: gsr.RuntimeConfig{MailboxCapacity: settlementMailboxCapacity},
+		Runtime: gsr.RuntimeConfig{MailboxCapacity: config.MailboxCapacity},
 		Cluster: gsr.ClusterConfig{Nodes: nodes},
-	}, NewMain(cluster.NodeID(config.Node.Listen), db))
+	}, NewMain(cluster.NodeID(config.Node.Listen), db, config.Workers))
 }
 
-// openSettlementDatabase 将共享池上限与一个写、一个读 Service 的并发数匹配，仍由宿主统一关闭。
+// openSettlementDatabase 建立宿主拥有的 MySQL 池；运行入口按配置设置并行上限。
 func openSettlementDatabase(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := mysqlclient.Open(ctx, dsn)
 	if err != nil {

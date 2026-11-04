@@ -19,10 +19,11 @@ const (
 	roomBidCommand              runtime.CommandID = 6
 	roomRobCommand              runtime.CommandID = 7
 	roomTickCommand             runtime.CommandID = 10
+	roomSettlementResultCommand runtime.CommandID = 20
 	landlordSnapshotPushCommand runtime.CommandID = 110
 )
 
-// attackService 独占一桌的状态；局末 Redis/Settlement 等待只影响本桌。
+// attackService 独占一桌的状态；结算请求异步提交，回执仍由本桌串行处理。
 type attackService struct {
 	game       attackGame
 	settlement roundSettlement
@@ -39,19 +40,23 @@ func newAttackService(name string, journal landlordJournal, pending *landlordRes
 		recovery:   pending != nil,
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		roomJoinCommand:     service.handleJoin,
-		roomReadyCommand:    service.handleReady,
-		roomPlayCommand:     service.handlePlay,
-		roomBidCommand:      service.handleCallLandlord,
-		roomRobCommand:      service.handleRobLandlord,
-		roomSnapshotCommand: service.handleSnapshot,
-		roomLeaveCommand:    service.handleLeave,
-		roomTickCommand:     service.handleTick,
+		roomJoinCommand:             service.handleJoin,
+		roomReadyCommand:            service.handleReady,
+		roomPlayCommand:             service.handlePlay,
+		roomBidCommand:              service.handleCallLandlord,
+		roomRobCommand:              service.handleRobLandlord,
+		roomSnapshotCommand:         service.handleSnapshot,
+		roomLeaveCommand:            service.handleLeave,
+		roomTickCommand:             service.handleTick,
+		roomSettlementResultCommand: service.handleSettlementResult,
 	})
 	return service
 }
 
 func (service *attackService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	if err := service.registerSettlementReply(self); err != nil {
+		return err
+	}
 	if !service.recovery {
 		if err := self.Node().RegisterService(cluster.ServiceName(service.game.Name), self.Self()); err != nil {
 			return err
@@ -99,15 +104,20 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	return nil
 }
 
-// advanceSettlement 先发布有效回执，再清理恢复记录；清理失败只重试 HDel。
+func (service *attackService) registerSettlementReply(self gsr.ServiceContext) error {
+	name, err := identifier("landlord-settle-")
+	if err != nil {
+		return err
+	}
+	service.settlement.replyName = cluster.ServiceName(name)
+	return self.Node().RegisterService(service.settlement.replyName, self.Self())
+}
+
+// advanceSettlement 只提交未确认请求或清理已确认记录，永不等待远端 SQL。
 func (service *attackService) advanceSettlement(self gsr.ServiceContext) {
 	if service.settlement.pending() {
 		if err := service.settlement.settle(self); err != nil {
 			_ = self.Logger().Error("斗地主待结算保留原操作", "operation_id", service.settlement.result.ID, "error", err.Error())
-			return
-		}
-		if !service.recovery {
-			service.broadcast(self)
 		}
 	}
 	if service.settlement.cleanupPending {
@@ -115,6 +125,22 @@ func (service *attackService) advanceSettlement(self gsr.ServiceContext) {
 			_ = self.Logger().Error("斗地主结算已确认，待重试清理 Redis", "operation_id", service.settlement.result.ID, "error", err.Error())
 		}
 	}
+}
+
+func (service *attackService) handleSettlementResult(self gsr.CommandContext, id string, fields map[string]any, code string) error {
+	accepted, err := service.settlement.accept(id, fields, code)
+	if err != nil {
+		_ = self.Logger().Error("斗地主结算结果未确认，保留原请求", "operation_id", id, "error", err.Error())
+		return err
+	}
+	if !accepted {
+		return nil
+	}
+	if !service.recovery {
+		service.broadcast(self)
+	}
+	service.advanceSettlement(self)
+	return nil
 }
 
 func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, login, node, agent, membership string) (map[string]any, error) {
@@ -276,6 +302,9 @@ func (service *attackService) view(uid uint64) map[string]any {
 }
 
 func (service *attackService) broadcast(self gsr.ServiceContext) {
+	if service.settlement.pending() {
+		return
+	}
 	for _, p := range service.game.Players {
 		if p.UserID == 0 || p.AccessNode == "" {
 			continue

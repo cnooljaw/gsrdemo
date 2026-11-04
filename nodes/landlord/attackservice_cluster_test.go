@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"reflect"
 	"testing"
 	"time"
@@ -78,11 +79,24 @@ func (backend *landlordTestBackend) Handle(_ gsr.CommandContext, cmd runtime.Com
 
 func startLandlordTestNode(t *testing.T, routes map[cluster.NodeID]string, node string, services map[string]gsr.Service) {
 	t.Helper()
+	for _, name := range []cluster.NodeID{"landlord", "settlement", "access"} {
+		if routes[name] != "" {
+			continue
+		}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		routes[name] = listener.Addr().String()
+		_ = listener.Close()
+	}
 	nodes := map[cluster.NodeID]string{}
 	for k, v := range routes {
 		nodes[k] = v
 	}
-	nodes[cluster.NodeID(node)] = "127.0.0.1:0"
+	if nodes[cluster.NodeID(node)] == "" {
+		nodes[cluster.NodeID(node)] = "127.0.0.1:0"
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	ready := make(chan string, 1)

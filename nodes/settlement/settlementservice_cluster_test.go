@@ -16,6 +16,9 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// 小邮箱专门验证受控 Call 的背压；生产入口容量由 YAML 指定。
+const settlementMailboxCapacity = 4
+
 type settlementTestMain struct {
 	db    *sql.DB
 	ready chan string
@@ -24,7 +27,7 @@ type settlementTestMain struct {
 var _ gsr.Service = (*settlementTestMain)(nil)
 
 func (service *settlementTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	if err := NewMain("settlement", service.db).OnStart(ctx, self); err != nil {
+	if err := NewMain("settlement", service.db, defaultSettlementWorkers).OnStart(ctx, self); err != nil {
 		return err
 	}
 	_, port, err := net.SplitHostPort(self.Node().ClusterListenAddress())
@@ -183,5 +186,18 @@ func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 	}
 	if _, err := settlementRPC(t, address, runtime.CommandID(5), "demo"); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatalf("removed Summary command remains callable: %v", err)
+	}
+}
+
+// TestSettlementReadWriteBoundaries 保护只读入口与受控 Call 写入口的命令边界，查询不能写账，写入口不接受查询。
+func TestSettlementReadWriteBoundaries(t *testing.T) {
+	store, _ := mockStore(t)
+	address, _ := startSettlementTestNode(t, store.db)
+	routes := map[cluster.NodeID]string{"settlement": address}
+	if _, err := businessRPC(t, routes, "settlement", "settlement-read", settleBatchCommand, testBatch("bad", testSingle("op", 1, 100, 0))); !errors.Is(err, runtime.ErrUnknownCommand) {
+		t.Fatal(err)
+	}
+	if _, err := businessRPC(t, routes, "settlement", "settlement-write", getBalanceCommand, uint64(1)); !errors.Is(err, runtime.ErrUnknownCommand) {
+		t.Fatal(err)
 	}
 }

@@ -35,12 +35,6 @@ func freeBusinessAddress(t *testing.T) string {
 
 func startBusinessProcess(t *testing.T, node, config, address string) func() {
 	t.Helper()
-	_, stop := startBusinessProcessPID(t, node, config, address)
-	return stop
-}
-
-func startBusinessProcessPID(t *testing.T, node, config, address string) (int, func()) {
-	t.Helper()
 	binary, err := filepath.Abs("../../bin/" + node)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +78,7 @@ func startBusinessProcessPID(t *testing.T, node, config, address string) (int, f
 		connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 		if err == nil {
 			connection.Close()
-			return command.Process.Pid, stop
+			return stop
 		}
 		select {
 		case err := <-done:
@@ -96,7 +90,7 @@ func startBusinessProcessPID(t *testing.T, node, config, address string) (int, f
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("%s listener not ready", node)
-	return command.Process.Pid, stop
+	return stop
 }
 
 // TestSettlementTwoNodesShareWalletLiveMySQL 保护两个独立结算进程共用权威账本，跨节点重提原操作只扣款一次。

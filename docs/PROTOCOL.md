@@ -100,7 +100,7 @@ AttackName / 1 Join、10 Timer、11 BalanceCorrection，以及 mole / 10 Departe
 
 Entry 的原 CommandID=3 已停用且不复用；不存在客户端经 Entry 查询原 HitID 的旁路。
 
-正常链路：AttackService 校验并固定扣返 → 本地 Call Accounting 完成内存预检查/接纳 → 立即返回 accepted 和余额，同时完成目标。Accounting 跨组归批并 Send Submission，后者独立等待远端持久结算。accepted 不是 committed，正常客户端不需要等待第二个奖励结果。
+正常链路：AttackService 校验并固定扣返 → 本地 Call Accounting 完成内存预检查/接纳 → 立即返回 accepted 和余额，同时完成目标。Accounting 跨组归批并 Send Submission，后者保存原批次后异步提交并接收持久结算回执。accepted 不是 committed，正常客户端不需要等待第二个奖励结果。
 
 推送到 AccessNode + AgentName 使用独立命令：100 为快照，102 为余额校正，参数均为 LoginID string、payload map[string]any。Access 的 CommandHandlers 直接绑定 handleSnapshotPush / handleBalanceCorrectionPush，不再传 kind 子指令；余额校正是绝对余额视图。仅在回执导致显示余额不一致时校正，不重复发奖励，不复活目标；按当前 UserID 路由/成员发送，Agent 须核对当前 LoginID。重复响应/推送按 revision 收敛，不能每收到一次再加减；修订号只在当前节点缓存生命周期内有效，重新进入以新快照建立基线。
 
@@ -116,7 +116,11 @@ Mole 使用一个 Entry；调用方仍使用 ResolveEntry 返回的地址。慢�
 
 ### 通用银子结算接口
 
-调用方直接使用有限 `self.Cluster().Call(ctx, settlementNode, serviceName, command, args...)`。settlement_node 来自 Mole/Landlord/Access 配置，默认 settlement；目标必须存在于 configs/nodes.yaml。每个结算节点只有两个固定公开服务：settlement-write 执行命令 1/6/7，settlement-read 执行命令 2/3/4。节点数量按部署扩展，业务显式选择目标，无客户端分片、公共调用包装或服务端中转。只在当前 Service 回调内使用 Cluster；超时仍可能已经执行，调用方保留原业务 ID 查询或重试。
+游戏写入使用 `self.Cluster().Send(settlementNode, "settlement-submit", command, request, replyNode, replyService)`，Command 1/6/7 与原请求字段保持不变。回执地址仅由服务端填写，不进入账务摘要；不能从跨节点 Source 推导回执地址。入口校验后将任务分给多个执行 Service，事务结束后直接 Send 到指定回执 Service 的 Command 20，参数为 `id string, receipt map[string]any, code string`。Batch 的 id 是原 BatchID，Single/Group 是原 OperationID；成功时 code 为空，失败时 receipt 为空 map，code 为稳定错误码，不暴露 SQL 诊断。
+
+Send nil 仅表示本地接纳，没有接收确认。非法参数等业务错误尽力发送错误回执；无法解码、路由不存在或远端邮箱满时可能没有回执。游戏保留原请求，5 秒加 0～500ms 抖动未确认时用原身份重发；有效财务终态只应用一次，已确认后忽略重复与迟到错误。临时 busy/store_unavailable 重试；参数非法、身份冲突、钱包缺失保留记录并暂停自动重试。每个 Service 实例注册私有回执名，重启用新地址补交，不保存旧实例地址。
+
+settlement-read 的 Command 2/3/4 继续有限 Call。settlement-write 的 Command 1/6/7 保留给既有受控管理/验收工具，返回完整事务回执；游戏不再调用。settlement_node 来自配置、必须在 configs/nodes.yaml 中，默认 settlement；所有节点使用同一权威 MySQL。
 
 version 固定 uint64=2，请求/回执字段和下列 CommandID 保持不变。所有结算节点连接同一套权威 MySQL，读入口也查询权威库；所有写入口返回持久事务提交后的回执。金额使用 int64 最小银子单位、非负 Debit/Credit，UserID 为非零 uint64。仅供受信任业务节点调用。
 
@@ -147,7 +151,7 @@ CommandID=5（原 Summary）已移除且不复用，返回 ErrUnknownCommand。
 
 settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量阈值归批；棋牌可立即调用多人接口。mole 的累计统计与最多一个待处理批次保存在单个业务 Redis 检查点，不调用结算汇总。唯一提交地址为 mole-submission；序号只用于本地业务检查点，不传给 Settlement；同一批次的 ID、内容和序号在重试时保持不变。只有 committed 且 origin_batch 等于当前 batch_id 的操作新增统计。Redis 统计和检查点更新成功后才向 Accounting 交付回执。mole 不访问 SQL；尚未保存到 Redis 的内存操作仍可丢失，已保存批次在重启时原样补交。余额、操作幂等索引和完整批次明细归 settlement，冷热归档和短 ID 尚待下一阶段实施。
 
-结算写/读入口只接受各自命令，不再提供内部健康命令 9 或自动重建。每入口 Mailbox=4，满时返回 runtime.mailbox_full；两个入口最多保留 10 个执行/排队 Call。慢写影响该节点写队列，独立读入口和其他结算节点仍可处理。入口 panic 不自动恢复，需人工或外部管理器重启该节点；未知结果仍按原身份处理，不能换 ID 重做。Call 超时不证明事务未执行。
+结算默认 worker_count=8、mysql_connections=10、mailbox_capacity=64；允许范围分别为 1..64、2..128、1..256，缺省连接数为执行数+2。邮箱有界；入口最多尝试每个执行者一次，无法接纳时尽力回 settlement.busy。排队超过 2 秒不启动 SQL，执行中 SQL 预算 2 秒。执行者只持有当前事务，不保存钱包缓存或持久待办，不自动重建；结果未知仍按原身份重提。旧 Call 接口满载返回框架错误，新 Send 路径过载可能只有后续超时，没有远端同步错误。
 
 
 ## landlord 三人斗地主
@@ -174,6 +178,6 @@ settlement 不内置归批 Timer 或游戏状态。地鼠选择每 100ms/数量�
 
 底分固定 10，初次叫地主不翻倍，每次抢地主及合法炸弹/王炸翻倍；不做明牌、个人加倍、春天、底牌特殊倍率或手续费。准备检查钱包存在且至少 20 银子只是准入预判，不冻结资金；最终结算可能因倍率或其他业务扣款被整体拒绝。局末一次 SettleGroup，分类 game_win_loss，结果原子覆盖三名玩家；settlement 快照给本人 debit/credit、operation_id 和 status=pending/committed/rejected。只有终局回执才携带有效的 balance/version，pending 中的默认零值不代表确认余额。
 
-正常局末不主动广播 finished + pending；确定胜负后直接结算，取得有效回执后向三位玩家各推送一次最终结果。异常时内部保留 pending，主动 Snapshot 仍可读到未确认状态。每桌在确定胜负的当前回调中固定请求，先写入本游戏 Redis Hash（默认 gsrdemo:landlord:pending），保存成功后直接 Call settlement-write / 7；同 ID 不同内容拒绝覆盖。Redis 仅保存待确认请求供故障恢复，不缓存成功流水，也不承担多桌合批或削峰。有效 committed/rejected 回执立即更新本桌结果并推送三人快照，再删除 Redis 待记录；删除失败不回退终态，后续 Tick 只重试删除，不重复调用结算服。三人全部离开后，仍由本桌完成清理再退出；明确拒绝同样清理。
+正常局末不主动广播 finished + pending；确定胜负后直接结算，取得有效回执后向三位玩家各推送一次最终结果。等待回执时内部保留 pending，主动 Snapshot 仍可读到未确认状态。每桌在确定胜负的当前回调中固定请求，先写入本游戏 Redis Hash（默认 gsrdemo:landlord:pending），保存成功后 Send settlement-submit / 7，当前 Handler 返回；本桌 Command 20 接收并校验结果；同 ID 不同内容拒绝覆盖。Redis 仅保存待确认请求供故障恢复，不缓存成功流水，也不承担多桌合批或削峰。有效 committed/rejected 回执立即更新本桌结果并推送三人快照，再删除 Redis 待记录；删除失败不回退终态，后续 Tick 只重试删除，不重复调用结算服。三人全部离开后，仍由本桌完成清理再退出；明确拒绝同样清理。
 
 结算服中断时，已保存请求保持 pending，由本桌按原 ID、原内容间隔重试；地主节点重启只重提 Redis 已保存的原请求，不恢复进行中的手牌。SQL 已提交但回执未知或清理未完成时，重启重提由 Settlement 幂等返回原结果，再清理记录。尚未保存到 Redis 的结果不保证崩溃恢复；Redis 数据丢失不在承诺内。该节点没有 SQL，也没有全局串行结算队列；GSR Call/Send 的超时和接纳语义沿用现有边界。

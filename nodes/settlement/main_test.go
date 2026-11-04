@@ -17,7 +17,7 @@ func TestSettlementConfigRequiresPrivateDatabase(t *testing.T) {
 	for _, entry := range []struct {
 		extra string
 		valid bool
-	}{{"mysql_dsn: example\n", true}, {"", false}, {"mysql_dsn: example\nunknown: true\n", false}} {
+	}{{"mysql_dsn: example\n", true}, {"mysql_dsn: example\nworker_count: -1\n", false}, {"mysql_dsn: example\nworker_count: 65\n", false}, {"mysql_dsn: example\nmysql_connections: 1\n", false}, {"mysql_dsn: example\nmailbox_capacity: 257\n", false}, {"", false}, {"mysql_dsn: example\nunknown: true\n", false}} {
 		if err := os.WriteFile(path, []byte(base+entry.extra), 0600); err != nil {
 			t.Fatal(err)
 		}
