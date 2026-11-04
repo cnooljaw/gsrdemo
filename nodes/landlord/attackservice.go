@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	roomJoinCommand             runtime.CommandID = 1
-	roomReadyCommand            runtime.CommandID = 2
-	roomPlayCommand             runtime.CommandID = 3
-	roomSnapshotCommand         runtime.CommandID = 4
-	roomLeaveCommand            runtime.CommandID = 5
-	roomBidCommand              runtime.CommandID = 6
-	roomRobCommand              runtime.CommandID = 7
-	roomTickCommand             runtime.CommandID = 10
-	roomSettlementResultCommand runtime.CommandID = 20
-	landlordSnapshotPushCommand runtime.CommandID = 110
+	roomJoinCommand              runtime.CommandID = 1
+	roomReadyCommand             runtime.CommandID = 2
+	roomPlayCommand              runtime.CommandID = 3
+	roomSnapshotCommand          runtime.CommandID = 4
+	roomLeaveCommand             runtime.CommandID = 5
+	roomBidCommand               runtime.CommandID = 6
+	roomRobCommand               runtime.CommandID = 7
+	roomTickCommand              runtime.CommandID = 10
+	roomSettlementReceiptCommand runtime.CommandID = 20
+	landlordSnapshotPushCommand  runtime.CommandID = 110
 )
 
 // attackService 独占一桌的状态；结算请求异步提交，回执仍由本桌串行处理。
@@ -33,22 +33,22 @@ type attackService struct {
 
 var _ gsr.Service = (*attackService)(nil)
 
-func newAttackService(name string, journal landlordJournal, pending *landlordResult, settlementNode cluster.NodeID) *attackService {
+func newAttackService(name string, journal landlordJournal, pending *landlordOperation, settlementNode cluster.NodeID) *attackService {
 	service := &attackService{
 		game:       newAttackGame(name),
-		settlement: roundSettlement{journal: journal, result: pending, node: settlementNode},
+		settlement: roundSettlement{journal: journal, operation: pending, node: settlementNode},
 		recovery:   pending != nil,
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		roomJoinCommand:             service.handleJoin,
-		roomReadyCommand:            service.handleReady,
-		roomPlayCommand:             service.handlePlay,
-		roomBidCommand:              service.handleCallLandlord,
-		roomRobCommand:              service.handleRobLandlord,
-		roomSnapshotCommand:         service.handleSnapshot,
-		roomLeaveCommand:            service.handleLeave,
-		roomTickCommand:             service.handleTick,
-		roomSettlementResultCommand: service.handleSettlementResult,
+		roomJoinCommand:              service.handleJoin,
+		roomReadyCommand:             service.handleReady,
+		roomPlayCommand:              service.handlePlay,
+		roomBidCommand:               service.handleCallLandlord,
+		roomRobCommand:               service.handleRobLandlord,
+		roomSnapshotCommand:          service.handleSnapshot,
+		roomLeaveCommand:             service.handleLeave,
+		roomTickCommand:              service.handleTick,
+		roomSettlementReceiptCommand: service.handleSettlementReceipt,
 	})
 	return service
 }
@@ -84,13 +84,13 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 		return err
 	}
 	if changed {
-		service.settlement.prepare(service.game)
+		service.settlement.prepareOperation(service.game)
 		if !service.settlement.pending() {
-			service.broadcast(self)
+			service.pushSnapshots(self)
 		}
 	}
-	service.advanceSettlement(self)
-	if service.settlement.result != nil && !service.settlement.pending() && !service.settlement.cleanupPending {
+	service.retrySettlement(self)
+	if service.settlement.operation != nil && !service.settlement.pending() && !service.settlement.cleanupPending {
 		if !service.recovery {
 			for _, player := range service.game.Players {
 				if player.UserID != 0 {
@@ -113,33 +113,39 @@ func (service *attackService) registerSettlementReply(self gsr.ServiceContext) e
 	return self.Node().RegisterService(service.settlement.replyName, self.Self())
 }
 
-// advanceSettlement 只提交未确认请求或清理已确认记录，永不等待远端 SQL。
-func (service *attackService) advanceSettlement(self gsr.ServiceContext) {
+// retrySettlement 由局末和 Pulse 调用；确认前重提原操作，确认后只重试删除待记录。
+func (service *attackService) retrySettlement(self gsr.ServiceContext) {
 	if service.settlement.pending() {
-		if err := service.settlement.settle(self); err != nil {
-			_ = self.Logger().Error("斗地主待结算保留原操作", "operation_id", service.settlement.result.ID, "error", err.Error())
+		if err := service.settlement.submit(self); err != nil {
+			_ = self.Logger().Error("斗地主待结算保留原操作", "operation_id", service.settlement.operation.ID, "error", err.Error())
 		}
+		return
 	}
-	if service.settlement.cleanupPending {
-		if err := service.settlement.cleanup(); err != nil {
-			_ = self.Logger().Error("斗地主结算已确认，待重试清理 Redis", "operation_id", service.settlement.result.ID, "error", err.Error())
-		}
+	service.deletePendingSettlement(self)
+}
+
+func (service *attackService) deletePendingSettlement(self gsr.ServiceContext) {
+	if !service.settlement.cleanupPending {
+		return
+	}
+	if err := service.settlement.deletePending(); err != nil {
+		_ = self.Logger().Error("斗地主结算已确认，待重试清理 Redis", "operation_id", service.settlement.operation.ID, "error", err.Error())
 	}
 }
 
-func (service *attackService) handleSettlementResult(self gsr.CommandContext, id string, fields map[string]any, code string) error {
-	accepted, err := service.settlement.accept(id, fields, code)
+func (service *attackService) handleSettlementReceipt(self gsr.CommandContext, id string, fields map[string]any, code string) error {
+	applied, err := service.settlement.applyReceipt(id, fields, code)
 	if err != nil {
 		_ = self.Logger().Error("斗地主结算结果未确认，保留原请求", "operation_id", id, "error", err.Error())
 		return err
 	}
-	if !accepted {
+	if !applied {
 		return nil
 	}
 	if !service.recovery {
-		service.broadcast(self)
+		service.pushSnapshots(self)
 	}
-	service.advanceSettlement(self)
+	service.deletePendingSettlement(self)
 	return nil
 }
 
@@ -167,8 +173,8 @@ func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, lo
 	if err := service.game.join(uid, login, node, agent, membership); err != nil {
 		return nil, err
 	}
-	service.broadcast(self)
-	return service.view(uid), nil
+	service.pushSnapshots(self)
+	return service.snapshotFor(uid), nil
 }
 
 func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
@@ -200,8 +206,8 @@ func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, l
 		}
 		service.game.deal(deck, rand.IntN(3), time.Now())
 	}
-	service.broadcast(self)
-	return service.view(uid), nil
+	service.pushSnapshots(self)
+	return service.snapshotFor(uid), nil
 }
 
 func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, login string) (bool, error) {
@@ -224,7 +230,7 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 		self.Exit()
 		return true, nil
 	}
-	service.broadcast(self)
+	service.pushSnapshots(self)
 	return true, nil
 }
 
@@ -238,8 +244,8 @@ func (service *attackService) bid(self gsr.CommandContext, uid uint64, login str
 	if err := service.game.applyBid(uid, turn, yes, time.Now()); err != nil {
 		return nil, err
 	}
-	service.broadcast(self)
-	return service.view(uid), nil
+	service.pushSnapshots(self)
+	return service.snapshotFor(uid), nil
 }
 
 func (service *attackService) handleCallLandlord(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (map[string]any, error) {
@@ -278,30 +284,30 @@ func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, lo
 	if err := service.game.play(uid, turn, cards, now); err != nil {
 		return nil, err
 	}
-	service.settlement.prepare(service.game)
+	service.settlement.prepareOperation(service.game)
 	if !service.settlement.pending() {
-		service.broadcast(self)
+		service.pushSnapshots(self)
 	}
-	service.advanceSettlement(self)
-	return service.view(uid), nil
+	service.retrySettlement(self)
+	return service.snapshotFor(uid), nil
 }
 
 func (service *attackService) handleSnapshot(_ gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
 	if _, err := service.game.member(uid, login); err != nil {
 		return nil, err
 	}
-	return service.view(uid), nil
+	return service.snapshotFor(uid), nil
 }
 
-func (service *attackService) view(uid uint64) map[string]any {
+func (service *attackService) snapshotFor(uid uint64) map[string]any {
 	view := service.game.view(uid)
-	if result := service.settlement.view(uid); result != nil {
-		view["settlement"] = result
+	if settlement := service.settlement.snapshotFor(uid); settlement != nil {
+		view["settlement"] = settlement
 	}
 	return view
 }
 
-func (service *attackService) broadcast(self gsr.ServiceContext) {
+func (service *attackService) pushSnapshots(self gsr.ServiceContext) {
 	if service.settlement.pending() {
 		return
 	}
@@ -309,7 +315,7 @@ func (service *attackService) broadcast(self gsr.ServiceContext) {
 		if p.UserID == 0 || p.AccessNode == "" {
 			continue
 		}
-		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), landlordSnapshotPushCommand, p.LoginID, service.view(p.UserID)); err != nil {
+		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), landlordSnapshotPushCommand, p.LoginID, service.snapshotFor(p.UserID)); err != nil {
 			_ = self.Logger().Error("斗地主推送未接纳，客户端可查询快照", "error", err.Error())
 		}
 	}

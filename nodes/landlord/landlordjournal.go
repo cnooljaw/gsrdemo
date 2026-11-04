@@ -15,42 +15,42 @@ type landlordJournal struct {
 	key    string
 }
 
-func (journal landlordJournal) save(ctx context.Context, result *landlordResult) error {
-	if !result.valid() {
-		return errors.New("invalid landlord result")
+func (journal landlordJournal) save(ctx context.Context, operation *landlordOperation) error {
+	if !operation.valid() {
+		return errors.New("invalid landlord operation")
 	}
-	data, err := json.Marshal(result)
+	data, err := json.Marshal(operation)
 	if err != nil {
 		return err
 	}
 	// 重试必须保持原内容；不能覆盖相同 ID 的不同账务。
 	const script = `local old=redis.call('HGET',KEYS[1],ARGV[1]); if old and old~=ARGV[2] then return 0 end; redis.call('HSET',KEYS[1],ARGV[1],ARGV[2]); return 1`
-	value, err := journal.client.Eval(ctx, script, []string{journal.key}, result.ID, string(data)).Int()
+	value, err := journal.client.Eval(ctx, script, []string{journal.key}, operation.ID, string(data)).Int()
 	if err != nil {
 		return err
 	}
 	if value != 1 {
-		return errors.New("landlord result identity conflict")
+		return errors.New("landlord operation identity conflict")
 	}
 	return nil
 }
 
-func (journal landlordJournal) load(ctx context.Context) ([]*landlordResult, error) {
+func (journal landlordJournal) load(ctx context.Context) ([]*landlordOperation, error) {
 	values, err := journal.client.HGetAll(ctx, journal.key).Result()
 	if err != nil {
 		return nil, err
 	}
-	results := make([]*landlordResult, 0, len(values))
+	operations := make([]*landlordOperation, 0, len(values))
 	for id, value := range values {
-		var result landlordResult
-		if err := json.Unmarshal([]byte(value), &result); err != nil {
+		var operation landlordOperation
+		if err := json.Unmarshal([]byte(value), &operation); err != nil {
 			return nil, err
 		}
-		if result.ID != id || !result.valid() {
-			return nil, fmt.Errorf("invalid pending landlord result %s", id)
+		if operation.ID != id || !operation.valid() {
+			return nil, fmt.Errorf("invalid pending landlord operation %s", id)
 		}
-		result.Status = "pending"
-		results = append(results, &result)
+		operation.Status = "pending"
+		operations = append(operations, &operation)
 	}
-	return results, nil
+	return operations, nil
 }

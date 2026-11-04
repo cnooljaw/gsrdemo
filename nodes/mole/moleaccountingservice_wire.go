@@ -47,7 +47,7 @@ func decodeBalance(value any) (silverBalance, error) {
 	return silverBalance{Amount: amount, Version: version}, nil
 }
 
-func decodeReceipt(value any, batch moleBatch) (batchReceipt, error) {
+func decodeBatchReceipt(value any, batch moleBatch) (batchReceipt, error) {
 	receipt := batchReceipt{BatchID: batch.ID, Balances: make(map[uint64]silverBalance)}
 	fields, ok := value.(map[string]any)
 	if !ok || fields["batch_id"] != batch.ID {

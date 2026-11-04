@@ -13,7 +13,7 @@ type mainService struct {
 	node           cluster.NodeID
 	settlementNode cluster.NodeID
 	journal        landlordJournal
-	pending        []*landlordResult
+	pending        []*landlordOperation
 }
 
 var _ gsr.Service = (*mainService)(nil)

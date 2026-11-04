@@ -92,7 +92,7 @@ func (backend *landlordSettlementBackend) Handle(self gsr.CommandContext, cmd ru
 		balances = append(balances, map[string]any{"user_id": change.(map[string]any)["user_id"], "amount": int64(10000), "version": uint64(2)})
 	}
 	receipt := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": backend.status, "reason": ""}}, "balances": balances}
-	return nil, self.Cluster().Send(cluster.NodeID(args[1].(string)), cluster.ServiceName(args[2].(string)), roomSettlementResultCommand, id, receipt, "")
+	return nil, self.Cluster().Send(cluster.NodeID(args[1].(string)), cluster.ServiceName(args[2].(string)), roomSettlementReceiptCommand, id, receipt, "")
 }
 
 // landlordResultPushRecorder 观察真实 Cluster 推送；只统计局末消息。
@@ -135,7 +135,7 @@ func (probe *landlordSettlementProbe) OnStart(ctx context.Context, self gsr.Serv
 
 func (probe *landlordSettlementProbe) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
 	if cmd == 99 {
-		return probe.settlement.view(1), nil
+		return probe.settlement.snapshotFor(1), nil
 	}
 	return probe.attackService.Handle(self, cmd, args...)
 }

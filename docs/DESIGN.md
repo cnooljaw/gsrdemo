@@ -310,6 +310,8 @@ flowchart LR
 
 AttackService 负责消息、成员、Call/Send 与生命周期；attackGame 私有值对象负责目标、请求记录、接纳结果和独立快照，不为对称新增组件。仅本节点使用的命令和 DTO 留在具体 Service 文件中；本地值对象不走远程 ValueCodec，远程契约使用规范 uint64/int64/map/列表，见 PROTOCOL.md。不新增通用 FSM、公共 GameService 或内部 Protobuf。TypeScript 最小接入和 access 双实例已完成；短 ID、日期表和归档仍作为后续阶段。
 
+Submission 的三个动作分别为 `restoreCheckpoint`（启动恢复）、`submitBatch`（保存原批次后 Send）、`completeBatch`（保存确认统计、清除 Redis 待批次后通知 Accounting）。`handleSettlementReceipt` 校验并保存回执后直接调用 `completeBatch`；Pulse 只选择需要重试的动作，不再经通用 `advance` 隐式分流。Accounting 的同名回执入口应用确认余额与操作状态，有差异才推送 `balanceSnapshot`。Redis 方法分别命名为 `savePendingBatch`、`completeBatch`，通知失败仍保留内存回执重试。
+
 ### 8.6 当前验证与边界
 
 规则和节点用例覆盖目标实例/时间窗口、同目标争抢、请求重复/冲突、完整 Debit 预检查、待确认返还不可消费、批次/载荷上限、总积压额度和回执释放容量。
@@ -440,13 +442,15 @@ nodes/landlord/
   landlordservice.go         # 随机凑桌目录，不处理出牌
   attackservice.go           # 本桌命令入口、外部调用与广播编排
   attackgame.go              # 入座、准备、叫抢、出牌、超时与可见快照
-  roundsettlement.go         # 本桌资金结果、提交与确认
+  roundsettlement.go         # 本桌结算操作、提交与回执应用
   landlordjournal.go         # 本游戏 Redis 待结算记录
   landlordpulse.go           # 仅负责定时唤醒本桌
   cards.go                   # 普通牌型与比较纯函数
 ```
 
 AttackService 具名组合 attackGame 与 roundSettlement；游戏对象处理游戏状态变化，不依赖 GSR/Redis/RPC，结算组件持有局末请求、Redis 依赖、回执地址、重试时间和确认结果。Service 协调外部权限/余额查询、房间目录与广播，不再跨文件直接修改游戏成员或资金结果。两个组件由本桌 Service 串行调用，不增加 Service、Mailbox、goroutine 或父 Service 指针；进行中牌局与局末账务的恢复边界保持不变。2026-11-03 合并旧 attackservice_* 分类文件，按实际类型组织生产代码与测试，不按每条命令新建文件。
+
+本桌用 `operation *landlordOperation` 保存固定请求及后续确认结果。局末 `prepareOperation → submit`，回执入口 `handleSettlementReceipt` 明确依次调用 `applyReceipt → pushSnapshots → deletePendingSettlement`；`snapshotFor` 只组装玩家自己的快照，`pushSnapshots` 才发送。Pulse 的 `retrySettlement` 在确认前重提原操作，确认后只重试删除待记录；回执入口不再经过通用推进函数。Redis JSON 字段、远程命令编号及客户端快照字段保持兼容。
 
 客户端 → Agent → LandlordService 获取预留桌地址 → AttackService 入座。之后准备、叫地主、抢地主、出牌/不出、快照及离开直接 Call AttackService；状态变化 Send 到当前 Agent。客户端使用终态快照，不再追加查账；受控验收按原 OperationID 核对账务。业务 Protobuf 每个消息编号使用独立的 payload 类型，遵守现有 GSR Registry 契约。
 

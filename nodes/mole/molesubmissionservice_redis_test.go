@@ -101,7 +101,7 @@ func TestMoleCheckpointRecoversOriginalBatch(t *testing.T) {
 	store := testMoleCheckpoint(t)
 	ctx := context.Background()
 	batch := moleBatch{ID: "batch-1", Sequence: 1, Events: []hitEvent{exampleHit("hit-1", 1)}}
-	if err := store.prepare(ctx, batch); err != nil {
+	if err := store.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
 	recovered := moleCheckpoint{client: store.client, key: store.key}
@@ -109,17 +109,17 @@ func TestMoleCheckpointRecoversOriginalBatch(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(state.Pending, &batch) {
 		t.Fatalf("recover: %+v %v", state, err)
 	}
-	if err := recovered.prepare(ctx, batch); err != nil {
+	if err := recovered.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
 	different := batch.clone()
 	different.Events[0].Credit++
-	if err := recovered.prepare(ctx, different); err == nil {
+	if err := recovered.savePendingBatch(ctx, different); err == nil {
 		t.Fatal("overwrote original batch")
 	}
 	different = batch.clone()
 	different.ID = "another"
-	if err := recovered.prepare(ctx, different); err == nil {
+	if err := recovered.savePendingBatch(ctx, different); err == nil {
 		t.Fatal("accepted second in-flight batch")
 	}
 }
@@ -134,14 +134,14 @@ func TestMoleCheckpointAppliesOnlyFreshCommittedResults(t *testing.T) {
 		{HitID: "hit-2", Status: "rejected", OriginBatch: batch.ID},
 		{HitID: "hit-3", Status: "committed", OriginBatch: "original"},
 	}}
-	if err := store.prepare(ctx, batch); err != nil {
+	if err := store.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.finish(ctx, batch, receipt)
+	first, err := store.completeBatch(ctx, batch, receipt)
 	if err != nil || first.Pending != nil || first.Sequence != 1 || first.Pool.Hits != 1 || first.Pool.Debit != batch.Events[0].Debit || first.Pool.Credit != batch.Events[0].Credit {
 		t.Fatalf("finish: %+v %v", first, err)
 	}
-	repeated, err := store.finish(ctx, batch, receipt)
+	repeated, err := store.completeBatch(ctx, batch, receipt)
 	if err != nil || !reflect.DeepEqual(first, repeated) {
 		t.Fatalf("duplicate completion: %+v %v", repeated, err)
 	}
@@ -168,10 +168,10 @@ func TestMoleCheckpointFailurePreservesPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	batch := moleBatch{ID: "batch-1", Sequence: 1, Events: []hitEvent{exampleHit("hit-1", 1)}}
-	if err := store.prepare(ctx, batch); err != nil {
+	if err := store.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.finish(ctx, batch, batchReceipt{BatchID: batch.ID, Results: []operationResult{{HitID: "hit-1", Status: "committed", OriginBatch: batch.ID}}}); err == nil {
+	if _, err := store.completeBatch(ctx, batch, batchReceipt{BatchID: batch.ID, Results: []operationResult{{HitID: "hit-1", Status: "committed", OriginBatch: batch.ID}}}); err == nil {
 		t.Fatal("overflow accepted")
 	}
 	loaded, err := store.load(ctx)
@@ -201,7 +201,7 @@ func TestMoleCheckpointCASDoesNotOverwriteAnotherWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	batch := moleBatch{ID: "batch-1", Sequence: 1, Events: []hitEvent{exampleHit("hit-1", 1)}}
-	if err := store.prepare(ctx, batch); err != nil {
+	if err := store.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.replace(ctx, raw, state); err == nil {
@@ -243,24 +243,24 @@ func TestMoleCheckpointLostWriteReply(t *testing.T) {
 	store := testMoleCheckpoint(t)
 	ctx := context.Background()
 	batch := moleBatch{ID: "batch-1", Sequence: 1, Events: []hitEvent{exampleHit("hit-1", 1)}}
-	if err := store.prepare(ctx, batch); err != nil {
+	if err := store.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
 	var lose atomic.Bool
 	lose.Store(true)
 	store.client.AddHook(moleRedisFaultHook{loseReply: &lose})
 	receipt := batchReceipt{BatchID: batch.ID, Results: []operationResult{{HitID: "hit-1", Status: "committed", OriginBatch: batch.ID}}}
-	if _, err := store.finish(ctx, batch, receipt); err == nil {
+	if _, err := store.completeBatch(ctx, batch, receipt); err == nil {
 		t.Fatal("did not inject lost acknowledgement")
 	}
 	state, err := store.load(ctx)
 	if err != nil || state.Pending != nil || state.Sequence != 1 || state.Pool.Hits != 1 {
 		t.Fatalf("committed checkpoint lost: %+v %v", state, err)
 	}
-	if err := store.prepare(ctx, batch); err != nil {
+	if err := store.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
-	again, err := store.finish(ctx, batch, receipt)
+	again, err := store.completeBatch(ctx, batch, receipt)
 	if err != nil || !reflect.DeepEqual(state, again) {
 		t.Fatalf("lost reply applied twice: %+v %v", again, err)
 	}
@@ -277,10 +277,10 @@ func TestMoleCheckpointKeepsIntegerPrecision(t *testing.T) {
 	event := exampleHit("hit-1", 1)
 	event.Credit = hammerReward
 	batch := moleBatch{ID: "batch-1", Sequence: 1, Events: []hitEvent{event}}
-	if err := store.prepare(ctx, batch); err != nil {
+	if err := store.savePendingBatch(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
-	state, err := store.finish(ctx, batch, batchReceipt{BatchID: batch.ID, Results: []operationResult{{HitID: event.HitID, Status: "committed", OriginBatch: batch.ID}}})
+	state, err := store.completeBatch(ctx, batch, batchReceipt{BatchID: batch.ID, Results: []operationResult{{HitID: event.HitID, Status: "committed", OriginBatch: batch.ID}}})
 	want := molePool{Hits: base + 1, Debit: base + hammerCost, Credit: base + hammerReward}
 	if err != nil || state.Pool != want {
 		t.Fatalf("integer precision lost: %+v want %+v error %v", state.Pool, want, err)

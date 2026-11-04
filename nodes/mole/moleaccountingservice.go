@@ -11,23 +11,23 @@ import (
 )
 
 const (
-	moleAccountingName                            = "mole-accounting"
-	accountingLoadCommand       runtime.CommandID = 1
-	accountingStatusCommand     runtime.CommandID = 2
-	accountingSetBalanceCommand runtime.CommandID = 3
-	accountingPoolCommand       runtime.CommandID = 4
-	accountingInitPoolCommand   runtime.CommandID = 5
-	accountingResumeCommand     runtime.CommandID = 6
-	accountingHitCommand        runtime.CommandID = 10
-	accountingTickCommand       runtime.CommandID = 11
-	accountingForgetCommand     runtime.CommandID = 12
-	accountingSettledCommand    runtime.CommandID = 13
-	accountingPauseCommand      runtime.CommandID = 14
-	accountingPeriod                              = 100 * time.Millisecond
-	maxBatchOperations                            = 500
-	maxBatchBytes                                 = 256 * 1024
-	maxPendingHits                                = 4096
-	maxCompletedHits                              = 4096
+	moleAccountingName                                   = "mole-accounting"
+	accountingLoadCommand              runtime.CommandID = 1
+	accountingStatusCommand            runtime.CommandID = 2
+	accountingSetBalanceCommand        runtime.CommandID = 3
+	accountingPoolCommand              runtime.CommandID = 4
+	accountingInitPoolCommand          runtime.CommandID = 5
+	accountingResumeCommand            runtime.CommandID = 6
+	accountingHitCommand               runtime.CommandID = 10
+	accountingTickCommand              runtime.CommandID = 11
+	accountingForgetCommand            runtime.CommandID = 12
+	accountingSettlementReceiptCommand runtime.CommandID = 13
+	accountingPauseCommand             runtime.CommandID = 14
+	accountingPeriod                                     = 100 * time.Millisecond
+	maxBatchOperations                                   = 500
+	maxBatchBytes                                        = 256 * 1024
+	maxPendingHits                                       = 4096
+	maxCompletedHits                                     = 4096
 )
 
 type silverBalance struct {
@@ -122,17 +122,17 @@ func newMoleAccountingService() *moleAccountingService {
 		completed: make(map[string]accountingEntry),
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		accountingLoadCommand:       service.handleLoadBalance,
-		accountingStatusCommand:     service.handleOperationStatus,
-		accountingSetBalanceCommand: service.handleSetBalance,
-		accountingPoolCommand:       service.handlePoolSnapshot,
-		accountingInitPoolCommand:   service.handleInitPool,
-		accountingPauseCommand:      service.handlePause,
-		accountingResumeCommand:     service.handleResumeBalance,
-		accountingHitCommand:        service.handleHit,
-		accountingTickCommand:       service.handleTick,
-		accountingForgetCommand:     service.handleForgetBalance,
-		accountingSettledCommand:    service.handleSettled,
+		accountingLoadCommand:              service.handleLoadBalance,
+		accountingStatusCommand:            service.handleOperationStatus,
+		accountingSetBalanceCommand:        service.handleSetBalance,
+		accountingPoolCommand:              service.handlePoolSnapshot,
+		accountingInitPoolCommand:          service.handleInitPool,
+		accountingPauseCommand:             service.handlePause,
+		accountingResumeCommand:            service.handleResumeBalance,
+		accountingHitCommand:               service.handleHit,
+		accountingTickCommand:              service.handleTick,
+		accountingForgetCommand:            service.handleForgetBalance,
+		accountingSettlementReceiptCommand: service.handleSettlementReceipt,
 	})
 	return service
 }
@@ -170,7 +170,7 @@ func (service *moleAccountingService) handlePoolSnapshot(_ gsr.CommandContext) (
 }
 
 func (service *moleAccountingService) handleLoadBalance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
-	return service.balanceView(userID)
+	return service.balanceSnapshot(userID)
 }
 
 // resumeBalance 进入时复用本地账并取消延迟回收；真正的缓存缺失返回 nil，错误不当作未命中。
@@ -186,7 +186,7 @@ func (service *moleAccountingService) handleResumeBalance(_ gsr.CommandContext, 
 		return nil, nil
 	}
 	account.Departed = false
-	return service.balanceView(userID)
+	return service.balanceSnapshot(userID)
 }
 
 func (service *moleAccountingService) handleSetBalance(_ gsr.CommandContext, userID uint64, value map[string]any) (map[string]any, error) {
@@ -209,7 +209,7 @@ func (service *moleAccountingService) handleSetBalance(_ gsr.CommandContext, use
 		account = service.updateBalance(userID, balance)
 	}
 	account.Departed = false
-	return service.balanceView(userID)
+	return service.balanceSnapshot(userID)
 }
 
 func (service *moleAccountingService) updateBalance(userID uint64, balance silverBalance) *moleAccount {
@@ -243,7 +243,7 @@ func (service *moleAccountingService) balanceAmounts(userID uint64) (int64, int6
 	return amount + delta, max(amount-debit, 0), nil
 }
 
-func (service *moleAccountingService) balanceView(userID uint64) (map[string]any, error) {
+func (service *moleAccountingService) balanceSnapshot(userID uint64) (map[string]any, error) {
 	amount, available, err := service.balanceAmounts(userID)
 	if err != nil {
 		return nil, err
@@ -353,7 +353,7 @@ func (service *moleAccountingService) handleTick(self gsr.CommandContext) error 
 	return err
 }
 
-func (service *moleAccountingService) handleSettled(self gsr.CommandContext, receipt batchReceipt) error {
+func (service *moleAccountingService) handleSettlementReceipt(self gsr.CommandContext, receipt batchReceipt) error {
 	if service.inFlightID == "" || service.inFlightID != receipt.BatchID {
 		return nil
 	}
@@ -364,7 +364,7 @@ func (service *moleAccountingService) handleSettled(self gsr.CommandContext, rec
 	service.applyReceipt(receipt)
 	service.inFlightID = ""
 	for userID := range receipt.Balances {
-		view, err := service.balanceView(userID)
+		view, err := service.balanceSnapshot(userID)
 		if err == nil && view["balance"] != before[userID] {
 			if err := self.SendName(moleServiceName, moleBalanceCommand, userID, view); err != nil {
 				logMoleError(self, "余额校正未接纳，重连可刷新", err)

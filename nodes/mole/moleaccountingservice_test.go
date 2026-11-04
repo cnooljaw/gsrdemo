@@ -183,7 +183,7 @@ func TestSettlementReconcilesProjectionWithoutDoubleSubtracting(t *testing.T) {
 		Balances: map[uint64]silverBalance{7: {Amount: 200, Version: 2}}}
 	service.applyReceipt(receipt)
 	service.applyReceipt(receipt)
-	view, err := service.balanceView(7)
+	view, err := service.balanceSnapshot(7)
 	if err != nil || view["balance"] != int64(100) || view["available"] != int64(100) || service.pool.Hits != 1 {
 		t.Fatalf("double applied result: %v %+v %v", view, service.pool, err)
 	}
@@ -244,7 +244,7 @@ func TestMoleReceiptRequiresEveryOperationAndBalance(t *testing.T) {
 			"results":  []any{map[string]any{"operation_id": "hit-1", "status": "committed", "origin_batch": batch.ID}},
 			"balances": []any{map[string]any{"user_id": uint64(7), "amount": int64(0), "version": uint64(2)}}}
 	}
-	if _, err := decodeReceipt(valid(), batch); err != nil {
+	if _, err := decodeBatchReceipt(valid(), batch); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(map[string]any){
@@ -255,7 +255,7 @@ func TestMoleReceiptRequiresEveryOperationAndBalance(t *testing.T) {
 	} {
 		value := valid()
 		mutate(value)
-		if _, err := decodeReceipt(value, batch); err == nil {
+		if _, err := decodeBatchReceipt(value, batch); err == nil {
 			t.Fatalf("accepted invalid receipt: %v", value)
 		}
 	}
@@ -322,7 +322,7 @@ func TestMoleBalanceQueryCannotRebasePendingHits(t *testing.T) {
 			service.applyReceipt(batchReceipt{BatchID: "batch-1",
 				Results:  []operationResult{{HitID: first.HitID, Status: "committed", OriginBatch: "batch-1"}},
 				Balances: map[uint64]silverBalance{7: queried}})
-			view, err = service.balanceView(7)
+			view, err = service.balanceSnapshot(7)
 			if err != nil || view["balance"] != second.Balance || view["available"] != int64(800)+credit || len(service.pending) != 1 {
 				t.Fatalf("receipt lost later hit: %v %v", view, err)
 			}

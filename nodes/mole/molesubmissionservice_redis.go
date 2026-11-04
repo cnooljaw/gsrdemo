@@ -88,7 +88,7 @@ func (store moleCheckpoint) replace(ctx context.Context, previous string, state 
 	return nil
 }
 
-func (store moleCheckpoint) prepare(ctx context.Context, batch moleBatch) error {
+func (store moleCheckpoint) savePendingBatch(ctx context.Context, batch moleBatch) error {
 	if !validMoleBatch(batch) || batch.Sequence == 0 {
 		return errInvalidMoleInput
 	}
@@ -113,7 +113,7 @@ func (store moleCheckpoint) prepare(ctx context.Context, batch moleBatch) error 
 	return store.replace(ctx, raw, state)
 }
 
-func (store moleCheckpoint) finish(ctx context.Context, batch moleBatch, receipt batchReceipt) (moleCheckpointState, error) {
+func (store moleCheckpoint) completeBatch(ctx context.Context, batch moleBatch, receipt batchReceipt) (moleCheckpointState, error) {
 	state, raw, err := store.read(ctx)
 	if err != nil {
 		return state, err

@@ -89,7 +89,7 @@ func (service *settlementFixture) Handle(self gsr.CommandContext, command runtim
 		if receipt == nil {
 			receipt = map[string]any{}
 		}
-		return nil, self.Cluster().Send(cluster.NodeID(args[1].(string)), cluster.ServiceName(args[2].(string)), submissionResultCommand, request["batch_id"], receipt, code)
+		return nil, self.Cluster().Send(cluster.NodeID(args[1].(string)), cluster.ServiceName(args[2].(string)), submissionReceiptCommand, request["batch_id"], receipt, code)
 	}
 	return service.dispatcher.Handle(self, command, args...)
 }

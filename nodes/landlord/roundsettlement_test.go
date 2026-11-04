@@ -11,12 +11,12 @@ func TestRoundChanges(t *testing.T) {
 		for winner := 0; winner < 3; winner++ {
 			g := testLandlordGame(t)
 			g.Landlord, g.Winner, g.Multiplier = landlord, winner, 8
-			result := resultForGame(*g)
-			if !result.valid() {
+			operation := operationForGame(*g)
+			if !operation.valid() {
 				t.Fatal("合法结果被拒绝")
 			}
 			var total int64
-			for i, c := range result.Changes {
+			for i, c := range operation.Changes {
 				total += c.Credit - c.Debit
 				amount := int64(80)
 				if i == landlord {
@@ -29,8 +29,8 @@ func TestRoundChanges(t *testing.T) {
 			if total != 0 {
 				t.Fatal("银子不守恒")
 			}
-			result.Changes[0].Credit++
-			if result.valid() {
+			operation.Changes[0].Credit++
+			if operation.valid() {
 				t.Fatal("篡改金额被接受")
 			}
 		}
@@ -41,16 +41,16 @@ func TestRoundChanges(t *testing.T) {
 func TestRoundPreparationKeepsOriginalRequest(t *testing.T) {
 	game := testLandlordGame(t)
 	round := roundSettlement{}
-	round.prepare(*game)
-	if round.pending() || round.view(1) != nil {
+	round.prepareOperation(*game)
+	if round.pending() || round.snapshotFor(1) != nil {
 		t.Fatal("进行中的牌局生成了局末账务")
 	}
 	game.Phase, game.Winner = "finished", game.Landlord
-	round.prepare(*game)
-	want := round.result.wire()
+	round.prepareOperation(*game)
+	want := round.operation.wire()
 	game.Name, game.Multiplier, game.Players[0].UserID = "another-table", 8, 100
-	round.prepare(*game)
-	if !round.pending() || !reflect.DeepEqual(want, round.result.wire()) {
+	round.prepareOperation(*game)
+	if !round.pending() || !reflect.DeepEqual(want, round.operation.wire()) {
 		t.Fatal("待提交的原 ID 或资金内容被后续游戏修改覆盖")
 	}
 }
@@ -60,27 +60,39 @@ func TestRoundReceiptAppliesOnce(t *testing.T) {
 	game := testLandlordGame(t)
 	game.Phase, game.Winner = "finished", game.Landlord
 	round := roundSettlement{}
-	round.prepare(*game)
-	id := round.result.ID
+	round.prepareOperation(*game)
+	id := round.operation.ID
 	balances := []any{}
-	for _, change := range round.result.Changes {
+	for _, change := range round.operation.Changes {
 		balances = append(balances, map[string]any{"user_id": change.UserID, "amount": int64(1000), "version": uint64(2)})
 	}
 	fields := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": ""}}, "balances": balances}
-	if accepted, err := round.accept("other-round", fields, ""); accepted || err != nil || !round.pending() {
+	if applied, err := round.applyReceipt("other-round", fields, ""); applied || err != nil || !round.pending() {
 		t.Fatal("其他牌局结果改变了当前账务")
 	}
-	if accepted, err := round.accept(id, fields, "settlement.busy"); accepted || err == nil || round.fault != nil || !round.pending() {
+	if applied, err := round.applyReceipt(id, fields, "settlement.busy"); applied || err == nil || round.fault != nil || !round.pending() {
 		t.Fatal("临时错误被当成终态")
 	}
-	if accepted, err := round.accept(id, map[string]any{}, ""); accepted || err == nil || !round.pending() {
+	if applied, err := round.applyReceipt(id, map[string]any{}, ""); applied || err == nil || !round.pending() {
 		t.Fatal("非法回执改变了账务")
 	}
-	if accepted, err := round.accept(id, fields, ""); !accepted || err != nil || round.pending() || !round.cleanupPending {
-		t.Fatalf("有效回执未确认: %v %v", accepted, err)
+	if applied, err := round.applyReceipt(id, fields, ""); !applied || err != nil || round.pending() || !round.cleanupPending {
+		t.Fatalf("有效回执未确认: %v %v", applied, err)
+	}
+	for _, change := range round.operation.Changes {
+		snapshot := round.snapshotFor(change.UserID)
+		if snapshot["operation_id"] != id || snapshot["status"] != "committed" ||
+			snapshot["debit"] != change.Debit || snapshot["credit"] != change.Credit ||
+			snapshot["balance"] != int64(1000) || snapshot["version"] != uint64(2) {
+			t.Fatalf("玩家结算快照不完整: %v", snapshot)
+		}
+		snapshot["status"], snapshot["balance"] = "pending", int64(0)
+		if round.operation.Status != "committed" || round.operation.Balances[change.UserID].Amount != 1000 {
+			t.Fatal("修改快照影响了本桌确认结果")
+		}
 	}
 	for _, code := range []string{"", "settlement.store_unavailable", "settlement.identity_conflict"} {
-		if accepted, err := round.accept(id, fields, code); accepted || err != nil || round.result.Status != "committed" || round.fault != nil {
+		if applied, err := round.applyReceipt(id, fields, code); applied || err != nil || round.operation.Status != "committed" || round.fault != nil {
 			t.Fatal("重复回执或迟到错误覆盖了终态")
 		}
 	}
