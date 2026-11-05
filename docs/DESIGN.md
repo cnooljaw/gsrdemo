@@ -105,7 +105,7 @@ access、login、online、mole/settlement 内部实现已完成；2026-10-30 已
 
 ### 3.5 多游戏与通用协议的组合（2026-11-03 已实施）
 
-access 将持续接入不同游戏，并提供与游戏无关的通用协议。2026-11-03 按确认方案完成组合重构：agent.go 只组装连接与组件，agentsession.go 保存唯一身份并返回值快照，agent_login.go 承载现有通用登录，gameagent/mole.go / gameagent/landlord.go 分别处理各游戏。文件命名不代替职责边界，通用规则见 [Go 编码规范](GO-CODE-STYLE.md#27-接口struct-与构造)。
+access 将持续接入不同游戏，并提供与游戏无关的通用协议。2026-11-03 按确认方案完成组合重构：agent.go 只组装连接与组件，agentsession.go 保存唯一身份并返回值快照，agent_login.go 承载现有通用登录，gameagent/mole.go / gameagent/landlord.go 分别处理各游戏。文件命名不代替职责边界，通用规则见 [Go 编码规范](GO-CODE-STYLE.md#31-类型依赖与构造)。
 
 | 组成 | 职责与数据归属 |
 | --- | --- |
