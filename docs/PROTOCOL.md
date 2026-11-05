@@ -77,7 +77,7 @@ Domain 错误 `online.invalid_request` 表示字段越界或非法，`online.log
 
 ## mole 与银子结算
 
-mole 已实现下述节点内接口；settlement 已实现通用银子结算接口与 MySQL 适配；真实数据库和独立进程验证按 README 显式启用，不能用默认测试代替。完整职责、可靠性边界和实施顺序见 [DESIGN.md 第 8、9 节](DESIGN.md#8-mole-方案与首版实现)。access 和 TypeScript 已按下述客户端协议接入；内部 Cluster 参数保持原规范类型。
+mole 已实现下述节点内接口；settlement 已实现通用银子结算接口与 MySQL 适配；真实数据库和独立进程验证按 README 显式启用，不能用默认测试代替。职责与恢复边界见 [地鼠设计](DESIGN.md#5-地鼠即时玩法与后台入账)和[结算设计](DESIGN.md#7-settlement并行执行与权威账务)。access 和 TypeScript 已按下述客户端协议接入；内部 Cluster 参数保持原规范类型。
 
 ### mole 调用链
 

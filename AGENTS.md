@@ -13,7 +13,7 @@
 ## 文档入口
 
 - [README.md](README.md)：结构、准备与工程命令。
-- [docs/DESIGN.md](docs/DESIGN.md)：目标、逐节点计划与参考基线。
+- [docs/DESIGN.md](docs/DESIGN.md)：节点职责、调用链、状态与恢复边界、后续工作。
 - [docs/GO-CODE-STYLE.md](docs/GO-CODE-STYLE.md)：Go 编码与评审规则。
 
 代码、测试和文档不一致时先确认预期行为，同步更新契约，不静默选择一份。不按每次讨论新增文档，不创建空目录说明或重复 README。协议有实际需求后在 docs/PROTOCOL.md 集中维护，具体 .proto 用到时再拆分。
@@ -32,7 +32,7 @@
 
 ## GSR 接入约定
 
-依据 v1.0.2 发布说明、开发指南与 ADR 0012/0013；版本基线和入口见 [DESIGN.md](docs/DESIGN.md#4-gsr-与参考边界)。
+依据 v1.0.2 发布说明、开发指南与 ADR 0012/0013；版本基线和入口见 [DESIGN.md](docs/DESIGN.md#21-gsr-与参考边界)。
 
 - 使用 gsr.Run + MainService；节点组装用 self.Node().RegisterService/OpenCluster/CreateGate/OpenHTTP，通信用 self.Cluster().Send/Call，不手工组装 Runtime/ClusterClient。
 - Gate 用 SecurityModeMAC 指定传输认证，业务协议由 Agent 选择；当前沿用 Protobuf protocol 包与 Envelope。

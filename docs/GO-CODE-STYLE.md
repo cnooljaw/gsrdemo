@@ -15,7 +15,7 @@
 | [PROTOCOL.md](PROTOCOL.md) | 消息编号、参数和结果契约 |
 | [README.md](../README.md) | 环境准备与工程命令 |
 
-GSR API 以实际依赖版本为准，参考入口见 [设计文档第 4 节](DESIGN.md#4-gsr-与参考边界)。本文件最初参考 GSR 编码规范 revision `b2a9f16ae78da0bade541eabbb39a9144d5e04d2`，现按本项目需要维护；框架内部的开发规则不直接套用到业务代码。
+GSR API 以实际依赖版本为准，参考入口见 [GSR 与参考边界](DESIGN.md#21-gsr-与参考边界)。本文件最初参考 GSR 编码规范 revision `b2a9f16ae78da0bade541eabbb39a9144d5e04d2`，现按本项目需要维护；框架内部的开发规则不直接套用到业务代码。
 
 ## 2. 书写与命名
 

@@ -206,7 +206,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
   -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
 ```
 
-用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正与旧客户端查账入口拒绝，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、终态后不重复查账、三人唯一结算、结算服中断重试及已保存结果的地主节点重启恢复。地鼠验收程序在客户端结束后按本次操作 ID 集中核对 SQL 账务与钱包，不经玩家协议轮询。完整验收清单及边界见 [设计文档第 3.4 节](docs/DESIGN.md)。
+用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正与旧客户端查账入口拒绝，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、终态后不重复查账、三人唯一结算、结算服中断重试及已保存结果的地主节点重启恢复。地鼠验收程序在客户端结束后按本次操作 ID 集中核对 SQL 账务与钱包，不经玩家协议轮询。测试覆盖入口与恢复边界见 [设计文档](docs/DESIGN.md#9-验证依据与设计取舍)。
 
 ## 源码与文档
 
@@ -216,4 +216,4 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
 - 异步结算与推送：见 [结算入口及执行者](nodes/settlement/settlementsubmitservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/gameagent/mole.go)。
 - [业务协议](docs/PROTOCOL.md)、[设计与恢复边界](docs/DESIGN.md)、[Go 代码规范](docs/GO-CODE-STYLE.md)、[工作规则](AGENTS.md)。
 - [GSR 游戏业务教程（21 页 HTML）](docs/gsr-game-business.html)：在浏览器中离线打开，支持分步讲解、讲者备注、打印 PDF 和新游戏开发清单。
-- 容量测试另见 [Online](docs/DESIGN.md#6-online-容量估算与待测计划)和[异步结算并行对比](docs/DESIGN.md#95-异步并行结算对比)，不属于运行 Demo 的必需步骤。
+- 容量测试入口及适用边界见 [并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)，不属于运行 Demo 的必需步骤。

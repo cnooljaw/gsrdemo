@@ -1,463 +1,304 @@
-# 目标与逐节点计划
+# GSR Demo 系统设计
 
-## 1. 目标和当前边界
+本文描述当前代码已经实现的职责、调用链、数据归属和故障边界，不记录开发过程、提交历史或逐轮测试成绩。未实现及待确认的工作统一放在[最后一节](#10-后续工作)。协议字段见 [PROTOCOL.md](PROTOCOL.md)，运行与验证命令见 [README.md](../README.md)，编码规则见 [GO-CODE-STYLE.md](GO-CODE-STYLE.md)。
 
-首个 demo 完成持续运行的多人同组打地鼠：密码认证换 AccessToken → Token 登录并绑定 Online → 分组与座位 → 共享地鼠 → 每锤扣银子及返还 → 后台批量入账 → 有差异时主动余额校正。原 ID 账务查询仅用于受控验收/管理。用户始终只连接 access。游戏没有固定局长、满员开局或局末结算；旧的“60 秒一局、命中加 1 分”建议已废弃。首版只使用示例银子，不涉及真钱。
+## 1. 系统范围与节点职责
 
-2026-10-26 收敛：多个 access、先单个 mole、独立 settlement 节点；组命名为 AttackService，mole 内保留业务记账 Service。settlement 以通用银子变化为主线，后续供斗地主复用，不计算地鼠回报。共享池子先用固定概率表实现 99% 的期望返还，仅统计已入账扣除和返还，不做实时余额控奖。mole 方案与节点内首版实现见第 8 节，通用 settlement 实现见第 9 节；当时客户端尚未接入，最新接入状态见第 3 节。
+Demo 包含持续运行的多人打地鼠和三人随机房斗地主，使用示例银子。用户只连接 access；账号认证、在线位置、游戏状态和权威账务分别由对应节点管理。
 
-2026-10-27 补充确认：AttackService 本地 Call MoleAccountingService，同步返回内存扣返和余额；独立 MoleSubmissionService 提交批次并接收异步回执，结果不一致时只校正余额。mole 整个节点不处理 SQL，权威银子账务持久化归 settlement，替代此前源端待提交表方案；内存操作与后续 Redis 检查点的恢复边界见第 8 节。最终银子入账合法性仍由 settlement 裁决。
-
-2026-10-24 用户明确：实际同时在线目标约 12,000 人，100,000 人用于系统容量余量，约为实际目标的 8.3 倍。两档分别验证，容量估算不作为已完成验收；Online 的后续测试计划见第 6 节。
-
-三人斗地主已确认并实施第 10 节最小随机房方案，参考 nbgameserver/gameofhlddz 和 ServerLogic/hlddz；多人分组和共享目标可参考 GoServerActorFsm。参考代码提供知识，不作为兼容目标。
-
-当前已完成 MAC Gate/Agent、密码认证与 Redis AccessToken 登录、Online 位置目录、地鼠玩法与业务记账、通用 Settlement/MySQL 持久化，以及 TypeScript CLI 闭环。三个客户端和双 access 已真实联调，接入进程骤停后的局部隔离与跨接入重新登录见第 3 节；未实现的目标不作为已验收能力。
-
-每个节点角色一个独立 Go module，源码默认放该项目根目录；common 仅保留实际共享的配置代码；跨节点业务直接使用 GSR Call/Send。没有调用者的通用框架、协议目录和业务包不提前建立。
-
-## 2. 推进顺序
-
-| 顺序 | 节点 | 先审查并确认的范围 |
+| 节点 | 当前职责 | 主要状态或存储 |
 | --- | --- | --- |
-| 1 | access | Gate/Agent 的职责和生命周期、连接拥有的数据、最少状态、客户端协议准入及 GSR 接入方式 |
-| 2 | login | 最小认证能力、账号来源、输入输出、认证 Service 的职责与调用边界 |
-| 3 | online | 是否需要独立节点，位置数据由谁拥有，哪些协调和状态确有必要 |
-| 4 | mole | AttackService 分组、共享时间线、每锤扣返、业务记账、统计池及批量提交边界 |
-| 5 | settlement | 通用银子变化、余额校验、幂等、批量事务和结果查询，预留斗地主原子结算 |
+| access | MAC WebSocket 接入、每连接 Agent、Token 登录、游戏协议转发与推送 | 当前 UserID/LoginID、连接地址、各游戏路由；无权威钱包或玩法状态 |
+| login | 密码认证、平台 AccessToken 的签发/校验/撤销 | MySQL 账号；Redis Token 摘要、UserID 和过期时间 |
+| online | Bind/Lookup/Unbind 在线位置目录 | 内存 `UserID → LoginID / AccessNode / AgentName` |
+| mole | 分组、共享地鼠、即时内存记账、批量提交及余额校正 | 组状态和余额投影；Redis 源批次与确认统计 |
+| landlord | 凑桌、叫抢出牌、局末三人结算与待请求恢复 | 本桌内存状态；Redis 待结算请求 |
+| settlement | 通用银子变更、事务、幂等和查询 | MySQL 钱包、操作索引、批次明细与回执 |
 
-每次只推进一个节点：
+当前部署模板为两个 access 实例和其余各一个节点。两个游戏共享 settlement，路由显式配置；Online 不保存房间位置，游戏热点操作不逐次经过 Online。节点之间不导入对方实现，按服务名、命令和参数契约通信。
 
-1. 只读核对现有骨架、实际依赖版本和 GSR 文档/示例。
-2. 展示简短方案：职责、数据 owner、最少状态、必要协议与调用链、失败与生命周期边界、修改范围和验证方式。
-3. 用户确认后实现当前节点。common、协议和 TypeScript 只配套加入该节点必需的内容；其他节点的依赖问题先列出，不自动扩展实现。
-4. 展示改动和实际验证，等待用户决定是否提交及推进下一节点。
+## 2. 工程与运行模型
 
-access、login、online、mole/settlement 内部实现已完成；2026-10-30 已确认并实施 access/TS 最小业务接入，见第 3 节。业务状态尽量少，行为相同的状态优先合并；不为调用、重试和存储步骤增加状态。业务契约见 [PROTOCOL.md](PROTOCOL.md)，按使用范围决定是否需要 .proto。
+### 2.1 GSR 与参考边界
 
-打地鼠全流程、三客户端和 access 双实例接入已完成联调，见第 3 节。三人斗地主已进入第 10 节确认范围；第三方登录仍需选择真实提供商并确认方案。
+- 各节点使用独立 Go module，固定 `github.com/cnooljaw/gsr v1.0.2`；源码位于节点根目录。`common` 只保留共享配置能力，`typeclient` 是独立 TypeScript 项目；本地 replace 仅指向本仓库 common。
+- 节点由 `gsr.Run + MainService` 启动。MainService 创建、命名 Service 并打开 Cluster，组装完成后退出；已创建的 Service 和监听继续运行。外部 MySQL/Redis 客户端由宿主创建，Run 返回后关闭。
+- 每份可变状态归一个 Service，普通组件由其 owner 串行调用。独立 Service 提供独立 Mailbox 和等待边界；组件拆分不提供并行能力。业务使用 GSR `Call/Send/After`，不保存回调上下文或启动业务 goroutine。
+- 客户端使用 Protobuf Registry/Envelope，Cluster 使用 GSR 的规范 Go 参数。节点地址集中在 [nodes.yaml](../configs/nodes.yaml)，实例 YAML 通过 `nodes_file` 引用；相对路径基于配置文件目录。
+- GSR 接入依据为 v1.0.2 的[开发指南](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/APPLICATION-DEVELOPMENT.md)、[Cluster 教程](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/CLUSTER-CALL-TUTORIAL.md)及 ADR [0012](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/adr/0012-node-capabilities-and-service-logging.md)、[0013](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/adr/0013-client-protocol-boundaries.md)。
 
-2026-10-30 优先级调整：Demo 先保持简单，下一阶段优先完成 TypeScript 客户端 → access 登录 → Online 绑定 → 进入地鼠 → 即时命中反馈与结算确认的业务闭环，具体接入方案已随后确认并实施，见第 3 节。Login 保持单个认证 Service，多认证入口、小队列背压及实例监督恢复暂缓，仅作为后续优化备忘；其他非必要的隔离扩展也不抢在闭环之前实施。当前 Mole/Settlement 的简化与故障边界以第 8、9 节为准。
+GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只读。斗地主的普通牌型与叫抢流程参考 nbgameserver/gameofhlddz、ServerLogic/hlddz；地鼠分组与时间线参考 GoServerActorFsm。参考实现不构成兼容目标，也不引入 C/Lua 运行依赖；修改边界见 [AGENTS.md](../AGENTS.md)。
 
-2026-11-02 业务优先：暂缓慢客户端真实积压及持续负载验收，先推进未完成业务。打地鼠闭环已完成；已确认下一节点为三人斗地主，具体范围与实施结果见第 10 节。第三方登录尚未选择真实提供商；结算短 ID、日表和冷热归档保持第 9.8 节的后续存储改造计划。
+### 2.2 身份与操作标识
 
-## 3. access 接入
-
-### 3.1 初始连接基础（历史基线）
-
-- MainService 通过 self.Node().OpenCluster/CreateGate 组装 Cluster 和独立 GateService；每条连接由 Gate 创建一个 Agent。采用 SecurityModeMAC，本机仍使用 WS；先完成 33 字节 X25519 握手，上行使用 seq/Envelope/MAC，下行使用 Envelope，不接受 Plain 降级。监听地址及连接数、帧大小、出站队列上限放在 access 的私有 YAML 配置中，握手等待沿用 GSR 默认 5 秒。
-- Gate 拥有连接和 I/O；Agent 只持有 ClientSession 与具名协议 Dispatcher，不接触 socket 或连接表，不持有业务状态，也不增加状态机。
-- 调用链为客户端 → Gate → Agent.HandleClientMessage → protocol.Dispatcher。只使用 GSR 通用目录和空业务 Handler 表，错误处理沿用框架规则；没有本项目的协议编号、.proto、生成工具或跨节点业务调用。
-- Gate 的断线通知进入 Agent.Handle，Agent 调用 self.Exit 后立即返回；OnStop 调用幂等的 ClientSession.Close。MainService 完成组装后退出，Gate 和 Agent 继续由 Runtime 管理；进程停机由 gsr.Run 收尾。任一步启动失败都向宿主返回错误。
-- 修改范围是 access 的入口、MainService、根目录 agent.go 和相关测试/配置；common 仅拆出已有的 YAML 读取和宿主配置解析，角色私有字段留在节点中。其他节点和 TypeScript 保持骨架。
-- 验证配置边界、断线清理、真实 MAC 握手与递增序号的消息往返、未握手客户端拒绝、单连接故障隔离、停机关闭连接/监听，以及 Gate 启动失败后的 Cluster 释放；对 access 运行 race。密码学和完整攻击向量沿用 GSR 的验证，不在业务项目复制整套测试。
-
-### 3.2 最小业务接入（2026-10-30 已确认并实施）
-
-- 初版 Agent 只保存 ClientSession、两个具名 Dispatcher、接入 Node/私有 AgentName、当前 UserID/LoginID 和 entry/attack 路由；没有余额缓存、游戏状态、副本钱包或额外状态机。当前按第 3.5 节采用具名组件组合。
-- 客户端先经 PasswordAuth 认证取 Token，再经 Cluster.Call(login/token/2) 校验 Token 并绑定 Online；每次成功登录使用随机 LoginID，每条连接只成功登录一次。具名 Agent 地址在 OnStart 发布，由 GSR 自动退役清理。绑定失败不开放游戏，不盲目重发 Bind，尽力清理候选身份后退出。
-- Enter 通过 Mole.ResolveEntry 得到地址，再调用进入通道；之后 Hit/Snapshot/Leave 直接到 AttackName。2026-11-04 移除客户端 Operation Handler 和 Entry / 3 的查账转发；1051/1052 的旧定义及编号保留、不复用。所有 Cluster Call 最多 3 秒；不逐锤查询 Online，不自动重试命中，不改 ActionID 或重抽奖励。
-- 普通断线尽力 Leave 和条件 Unbind；OnStop 只关闭连接。重复登录用 Online 返回的旧地址发送 Command 101，旧 Agent 按 LoginID 核对后退出。异常退出/超时可能残留目录或成员；Join 已执行但回执丢失时接入可能尚不知道 AttackName，无法保证当次断线立即释放，后续登录/进入覆盖。没有增加全局撤权或恢复协调器。
-- Command 100 接收地鼠快照，102 接收余额校正，分别由组件的独立 Handler 处理；先核对 LoginID，快照另核对当前组，再经 protocolDispatcher.Push 写回。客户端请求与推送使用 nodes/access/proto/demo/v1/game.proto，内部 Cluster 继续传规范 Go 参数；节点不导入彼此实现。客户端身份/节点/路由均不接受外部指定。
-- 协议生成器使用发布 GSR v1.0.2 的 schema/目录插件、protobuf Go v1.36.1；TS 使用与该示例一致的 protobuf/protoc-gen-es 2.15.0、Buf 1.73.0、Node 类型 22.20.3。标准库不提供 Protobuf；WebSocket、X25519/MAC 和 CLI I/O 使用 Node 内建功能。Go/TS 生成产物入库，生成操作合并进 scripts/dev.sh generate access，仅写本仓库。
-- TS CLI 从 stdin 读取密码，完成 MAC 握手、登录、进入、选目标、命中即时显示并继续玩法、离开；一次演示 1～100 锤。地鼠 CLI 不轮询或等待财务终局，回执由服务端消化、有差异时推送余额校正；退出不保证入账，验收程序在玩法结束后按已知操作 ID 集中核对数据库。64 位值保持 bigint，显示余额采用绝对值及 revision 收敛，缺省确认余额/版本不覆盖已知值，重入以新快照重建基线。超时保留 ActionID 日志并停止，不自动重发；没有自动重连或图形 UI。
-- 未修改 Login/Online/Mole/Settlement 的业务实现、表结构或配置；账号与钱包仍走显式管理入口。多 access 部署随后在第 3.4 节实施，其它节点恢复后的重新绑定另行确认；不扩展 Login 隔离或通用监督机制。
-
-本轮验证：新增默认用例通过真实 MAC WebSocket + Cluster TCP 验证错误密码不绑定、Online 绑定失败关闭连接、同连接重复登录拒绝、未登录禁止操作、服务端身份转发、原 ActionID 不改写、拒绝重试无伪造余额、旧 LoginID 推送被忽略、旧连接退出不误删新绑定。TS 单测覆盖固定 MAC 向量、64 位精度、推送/响应交错、旧修订与确认版本、超时迟到和关闭等待。五个独立节点进程 + TS CLI + MySQL + 临时 AOF Redis 已完成 3 次命中/3 次入账：本次扣 300、返 198、初始 10000 → 余额 9898、版本 4；样本数据和进程均由用例独占并清理。统一 check（Go test/vet、TS 编译）通过，TS 检查入口现包含 7 项单测；access 最终全量 race（启用五节点真实 MySQL/TS 用例）和 vet 通过，全部节点与 TS 构建通过。该结果不作为容量或入账延迟目标验收。
-
-2026-11-04 客户端查账收敛：地鼠客户端收到 accepted 即继续下一次玩法，不调用 C2S_OPERATION，也不等待财务终局。access 移除该 Handler 及游戏组件的 Entry 地址缓存，Mole Entry 移除 CommandID=3；旧编号及生成类型保留、不复用。Accounting 收到回执后直接更新确认余额与待扣，有差异通过 102/1062 推送绝对余额校正。Settlement 内部 GetOperation/GetBatch 保留供受控核查；真实闭环测试在客户端完成后按本次已知 ID 集中核对 SQL，不把逐客户端轮询作为入账前置步骤。本段记录地鼠收敛；斗地主后续调整见第 10.3 节。下列历史采样不作为本轮重新验收的结果。
-
-2026-11-04 本轮验证：统一 check/build 通过；Access 全量 race 启用真实 MySQL、临时 Redis、独立节点及 TS 客户端通过（约 33 秒），Mole 全量 race 通过（约 17.7 秒）。验收由测试程序按已知操作 ID 集中核对 SQL，覆盖连续命中、旧查账入口拒绝、余额校正、双接入重连和已保存批次原 ID 恢复。子节点使用普通构建；未重跑容量或持续负载。
-
-### 3.3 三客户端演示（2026-10-30 已确认）
-
-只在 access 将 Domain 错误 mole.target_unavailable 映射为 HitResponse.rejection=target_unavailable，无 HitID、奖励或余额；该错误由 Mole 在接纳记账前返回。CLI 对此输出 miss、刷新快照、稍作随机间隔后继续选目标，只有成功命中才计入 --hits；每次成功前等待/争抢最多 max(15 秒, --timeout-ms)，拒绝不重置预算。超时、断线、繁忙及其它错误仍停止并保留原 ActionID，不将未知结果当成未扣款，不增加通用重试器、Service 或权威状态。
-
-真实五节点 + MySQL/AOF Redis 验证：三个不同账号的独立 CLI 同时运行，进入同一个组，快照出现三名成员；各完成 3 次命中/3 次入账，共 9 个唯一 HitID，逐人余额与版本（均为 4）一致。该次自然并发未出现目标失效，不把它视为拒绝分支验证。额外确定性用例运行真实 CLI，通过 TCP 测试替身返回一次目标失效后成功：只输出一次 miss，刷新到新目标、使用新 ActionID 后入账；超时和繁忙各仅发一次命中后退出。默认接入用例另保护错误类别不匹配时不转换为明确拒绝。统一 check（全部 Go test/vet、TS 7 项单测）及 access 全量 race（启用单/三客户端真实进程、真实 MySQL 和 CLI 失败边界用例）通过。未修改其它节点业务或表结构，保留原账号/钱包初始化流程。
-
-### 3.4 双 access 与故障验收（2026-11-02）
-
-两个 access 共用二进制与 Agent/LoginID/Online 协议，不增加 Service 或业务状态。配置文件、instance、listen 统一按 access-01、access-02、access-03 编号；listen 必须为正整数编号（不足两位补零），且有对应地址表项，不保留 access 别名。每实例使用独立端口和日志目录，路由集中在 configs/nodes.yaml：access-01 为 Cluster 19001 / WS 7888，access-02 为 19006 / 7889。推送仍按 GSR v1.0.2 的 Node + AgentName 定位连接。
-
-真实进程验收由 access 包的 TestAccessClientProcessesLiveMySQL、TestAccessThreeClientsLiveMySQL 和 TestAccessTwoNodesReconnectLiveMySQL 承载；单/三客户端使用五节点，双接入使用六节点。用例创建并清理自己的随机账号、钱包、账务和临时 AOF always Redis，只回收自己启动的进程，不使用 demo1～3。
-
-本次阶段收尾：重新 build 全部节点和 TS 客户端，统一 check（全部 Go test/vet、TS 编译及 7 项单测）通过；启用 GSRDEMO_ACCESS_PROCESSES=1 的 access 全量 race 通过，耗时约 29.1 秒，包含真实 MySQL、Redis 和客户端进程链路。运行命令见 README 的开发与验证部分。
-
-| 场景 | 已验证行为 |
+| 标识 | 含义与作用域 |
 | --- | --- |
-| 三个 TS CLI 并发 | 不同账号跨两个 access 进入同组，各完成 3 次命中和入账，共 9 个唯一 HitID；逐人余额、版本一致。错误密码不能进入游戏。 |
-| 同账号跨接入重登 | access-01 → access-02 → access-01，UserID 不变、LoginID 更新、旧连接关闭；旧身份迟到解绑返回 false，新接入收到快照；验收核对原 HitID 仅一笔入账。 |
-| access-01 骤停 | 收到内存命中后 SIGKILL，Online 暂留旧位置；另一玩家在 access-02 原连接继续命中并入账。受影响账号重新登录 access-02，回到原组和座位，实际再次命中并入账；骤停前后账务各一笔。 |
-| 旧客户端查询关闭 | 1051/1052 仅保留定义，access 不接线；已登录玩家的旧查询请求也明确拒绝。Settlement 内部仍限定参与用户可查询，由其原有用例保护。 |
-| Online 中断及重启 | 中断时拒绝新绑定并关闭该连接，已进入的游戏继续快照、命中和离开；按原配置重启后目录为空，显式重新登录建立新绑定，旧 LoginID 不能删除它，重新进入可继续推送和唯一入账。 |
-| 单 Agent 推送失败 | 同一 Runtime 的两个真实 Agent，向其中一个 ClientSession 注入队列满/连接关闭错误，该 Agent 的 Call 返回 runtime.handler_failed，另一 Agent 仍收到正确余额和修订号；旧 LoginID 不触发写回。 |
-| Settlement 中断 | hit 仍即时返回 accepted，验收直接核对 SQL 余额/版本不变且无该 HitID；重启后不重发 hit，原 ID 自动补齐一次，无重复扣款。 |
-| 待确认时退出重进 | Settlement 仍停止时主动 Leave，退出后不能读取组快照；重新 Enter 保留待确认扣返、可用余额、确认版本和修订号。退出不取消已接纳账务，恢复后仍只入账一次。 |
-| Mole 恢复已保存批次 | 确认原 HitID/扣返已写入 Redis 后强停 Mole，再恢复节点；SQL 的 origin_batch 与原批次一致、操作仅一条，Redis 序号推进、清除 pending，命中和扣返统计仅累计一次。 |
-| SQL 已入账但 Mole 未确认 | Mole 停止期间经真实 Settlement 接口提交 Redis 原批次，先核对 SQL 已提交而 Redis 仍为原 pending、统计未变，再启动 Mole；原批次/HitID 不变，钱包版本及业务统计均只增加一次。 |
-| 同请求重提及冲突 | 同一连接、LoginID、组和缓存有效期内重提相同 ActionID/目标/洞位，HitID、奖励和余额视图不变；改目标或洞位报错，原请求仍返回原结果。 |
-| 缓存预判与最终拒绝 | 通过 Settlement 模拟其他业务扣空钱包，Mole 仍按缓存即时返回内存奖励；最终 insufficient_silver，当前客户端收到较新修订号的余额零值及确认版本。拒绝记录唯一、不增加钱包版本、不计奖池。 |
-| 零余额拒绝局限于本人 | 校正后再敲击被内存拒绝，快照中为 rejected 且目标未占用，该 HitID 无账务；同组有余额玩家能命中同一个目标实例并入账。 |
+| UserID | MySQL 账号的稳定身份；与钱包主键对应 |
+| AccessToken | 认证后签发的平台凭据，用于建立登录，不代表某条在线连接 |
+| LoginID | 每次成功登录生成的随机身份，用于隔离旧连接、旧操作和迟到解绑 |
+| AccessNode + AgentName | 跨节点推送地址；不使用临时 ServiceID 作为远程业务地址 |
+| Membership | 游戏成员实例，隔离离开后重进的迟到清理 |
+| ActionID / Turn | 地鼠客户端请求身份 / 斗地主轮次，用于检查重复或迟到操作 |
+| OperationID / BatchID | 财务原子操作身份 / 结算请求批次身份，重试不得改 ID 或内容 |
 
-测试保留等待响应期间交错到达的推送，避免漏掉早于响应的余额校正。Redis 检查点通过 redis-cli 只读验收，不新增 Go 依赖；持久化事件字段 HitID 与客户端字段 hit_id 不混用。SQL 已提交未确认场景由真实接口构造，不注入网络丢包或手工改账。
+## 3. 接入、认证与登录
 
-边界：CLI 不自动重连，Online 不自动重建全量目录；未保存的内存命中、原房间及存储丢失不承诺恢复。上述故障测试仅扩展 access 测试，未修改其他节点业务或表结构。单 Agent 故障注入不等于真实慢客户端压测；持续业务负载、出站积压、Redis/MySQL 同时故障及容量/入账延迟目标仍待验收。access 的 race 检查覆盖测试进程，子节点使用普通构建，不宣称全部子进程通过 race。
+### 3.1 连接与协议入口
 
-### 3.5 多游戏与通用协议的组合（2026-11-03 已实施）
+[access MainService](../nodes/access/main_service.go) 打开 Cluster 并创建 `SecurityModeMAC` Gate。Gate 拥有连接和 I/O，每条连接创建一个 [Agent](../nodes/access/agent.go)。当前模板监听本机 WS；MAC 提供传输认证，不提供加密。
 
-access 将持续接入不同游戏，并提供与游戏无关的通用协议。2026-11-03 按确认方案完成组合重构：agent.go 只组装连接与组件，agentsession.go 保存唯一身份并返回值快照，agent_login.go 承载现有通用登录，gameagent/mole.go / gameagent/landlord.go 分别处理各游戏。文件命名不代替职责边界，通用规则见 [Go 编码规范](GO-CODE-STYLE.md#31-类型依赖与构造)。
+一条连接使用一个 protocolDispatcher 和一个 commandDispatcher：客户端帧进入 `HandleClientMessage`，内部命令进入显式 `Handle`。Agent 只保存会话身份、连接能力和组件路由，不保存手牌、地鼠目标或权威余额。连接与出站队列上限由 access YAML 配置。
 
-| 组成 | 职责与数据归属 |
+客户端协议集中在 [game.proto](../nodes/access/proto/demo/v1/game.proto)，由现有 `generate access` 入口生成 Go/TS 产物。客户端 MsgID 和内部 CommandID 是两个编号空间；注册与冲突检查见[编码规范](GO-CODE-STYLE.md#33-消息注册与分发)。
+
+### 3.2 密码认证与 Token 登录
+
+认证和登录是两个独立步骤：
+
+1. `PasswordAuth`：Agent 调用 `login/auth`。AuthService 查询 MySQL 账号、验证密码，再本地 Call TokenService 签发凭据，返回 UserID、AccessToken、过期时间；此时不填写 Agent 登录身份，也不绑定 Online。
+2. `Login`：Agent 调用 `login/token` 校验平台 Token，生成新 LoginID，向 Online 绑定服务端填写的连接地址。成功后保存会话身份；若替换了旧位置，Send 通知旧 Agent 按原 LoginID 退出。
+
+[AuthService](../nodes/login/authservice.go) 和 [TokenService](../nodes/login/tokenservice.go) 使用独立 Mailbox，调用方向仅为 Auth → Token，密码 SQL 等待不会占用 TokenService。账号由 `-create-user` 管理入口显式创建；当前示例使用无盐 SHA-256 密码摘要。
+
+[Token 存储](../nodes/login/token_redis.go) 使用 32 字节安全随机数并作 Base64URL 编码。Redis key 包含 Token 的 SHA-256 摘要，value 只保存 UserID 和过期时间，记录与 TTL 原子写入；不保存明文 Token 或内存凭据副本。默认有效期 24 小时，可配置 1 秒至 7 天；校验不续期。
+
+重复认证可以产生多个有效 Token。普通断线不撤销 Token；显式 Revoke 只影响后续登录，不代替踢线。已登录连接不逐消息访问 Redis，也不会在 Token 过期时自动退出。Redis 不可用时拒绝新认证凭据或新 Token 登录；Redis 数据丢失后需要重新认证。
+
+### 3.3 失败、替换与断线
+
+- 一条连接只允许成功登录一次。客户端的 UserID、LoginID 和后端路由由服务端决定，游戏入口要求已经登录。
+- 认证或登录失败时，协议层尝试排队返回错误，Agent 标记 `closing`，停止处理后续客户端业务；私有 `loginFailureCloser` 使用 GSR `After(200ms)` 留出发送窗口，随后关闭会话。创建该 Service 失败时 Agent 立即退出；发送窗口不保证客户端已经收到错误。
+- Bind 失败或超时不开放游戏，不自动重发 Bind；按候选 LoginID 尽力清理。普通断线依次调用游戏组件 Disconnect，再条件 Unbind，清空身份；OnStop 关闭连接。
+- 进程骤停不能执行清理，Online 或游戏目录可能暂留旧位置，由后续显式登录/进入覆盖。旧 LoginID 的替换通知、操作和解绑不能作用于新登录。
+
+实现入口：[agent_login.go](../nodes/access/agent_login.go)、[agentSession](../nodes/access/agentsession.go)。
+
+### 3.4 多游戏组合与客户端行为
+
+Agent 通过唯一 `games` 清单组装 [Mole](../nodes/access/gameagent/mole.go) 和 [Landlord](../nodes/access/gameagent/landlord.go) 组件。组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。
+
+组件通过 [Dependencies](../nodes/access/gameagent/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主快照 110；101 用于旧登录替换，不使用 kind 字符串二次分发。
+
+TypeScript CLI 完成密码认证再 Token 登录，也可显式保存 0600 Token 文件，后续直接 Token 登录。银子和身份使用 bigint；地鼠按绝对余额与 revision 接受更新。只有明确的 `target_unavailable` 拒绝会触发重新选目标；超时、繁忙、断线等未知结果停止操作并保留 ActionID，不自动重发命中。地鼠客户端收到 accepted 即继续玩法，斗地主等待终态快照；两者都不追加逐笔查账。
+
+## 4. Online 位置目录
+
+单个 [OnlineService](../nodes/online/onlineservice.go) 独占内存 map，只保存当前 UserID 对应的 LoginID、AccessNode 和 AgentName，不访问数据库或同步调用其他节点。
+
+- **Bind**：新 LoginID 替换当前位置并返回旧位置；当前 LoginID 的相同地址重复提交返回 nil，不把自身作为待踢连接；相同 LoginID 的不同地址报冲突。
+- **Lookup**：返回当前独立位置快照，无记录返回 nil。
+- **Unbind**：只有 LoginID 匹配才删除，旧连接迟到清理返回 false。
+
+Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启目录为空，需要显式重新登录建立绑定；已进入游戏的命中和出牌直接访问房间，不依赖持续 Lookup。
+
+## 5. 地鼠：即时玩法与后台入账
+
+### 5.1 规则与状态归属
+
+一个组最多 3 人、9 个洞，有人即可玩、空位可补、随时退出，没有固定局长。每秒生成一个目标，有效 2 秒；每锤扣 100，返 0 或 198 的概率各为 50%，规则版本 `demo-99-v1`，期望返还为 99%。目标是否可命中以服务端截止时间为准，Timer 迟到不延长有效期。
+
+| Service | 独占状态与职责 |
 | --- | --- |
-| Agent | 连接生命周期、唯一的 UserID/LoginID 与自身地址、统一协议入口和组件组装；协调游戏进入互斥及断线清理。 |
-| 通用协议处理 | 按实际职责处理登录等跨游戏能力，不依赖某个游戏的房间路由；新增账号或钱包查询等协议时再增加相应处理，不预建空组件或万能 commonAgent。少量内聚的连接/登录逻辑可以留在 Agent。 |
-| gameagent.Mole、gameagent.Landlord 等游戏组件 | 各自持有游戏路由，处理本游戏请求、响应和推送，不持有权威玩法状态或钱包。统一实现 gameagent.Component，根 Agent 只保存 games 清单。Agent 专指每连接的 GSR Service，Component 表示其内部游戏接入组件。 |
+| MoleService（`mole`） | 用户到组的路由、成员实例及组人数；预留分组、条件清理和转发余额校正 |
+| MoleEntryService（`mole-entry`） | 协调 Online 检查、余额初始化及 Join；无权威房间或钱包状态 |
+| AttackService（每组一个） | 成员、座位、连接路由、目标时间线和有限请求记录；调用私有 attackGame 处理规则 |
+| MoleAccountingService（`mole-accounting`） | 确认余额/版本、待确认扣返、显示修订号、归批缓冲及一个在途批次；只做内存记账 |
+| MoleSubmissionService（`mole-submission`） | Redis 检查点、原批次及回执；持久化、提交、恢复与重试，不访问 SQL |
 
-接线与扩展：
+组装见 [MainService](../nodes/mole/main_service.go)，规则见 [attackGame](../nodes/mole/attackgame.go) 和 [molePool](../nodes/mole/molepool.go)。统计池累计唯一已入账的锤数、扣除、返还与净留存，不计等待或拒绝操作，不影响概率，也不是可支出钱包。
 
-- 每条连接仍只有一个 Agent、一个 protocolDispatcher 和一个 commandDispatcher，共用现有 Protobuf Registry/Envelope。GSR v1.0.2 的 Dispatcher 接收绑定函数，普通组件的方法可以直接注册，无需组件实现 gsr.Service。
-- 通用协议独立注册；各游戏提供 Name、ProtocolHandlers、CommandHandlers、Entered、Disconnect 五个方法。根 Agent 从同一份 games 清单收集注册表、判断进入互斥和执行断线清理。空白游戏名、重复游戏名、重复消息/命令 ID，以及占用 Gate 断线命令，均在组装时拒绝，不静默覆盖。
-- 客户端 MsgID 在整个 access 协议目录内唯一，内部 CommandID 在 Agent 的命令表内唯一；两者是不同编号空间。新协议按通用/游戏归属组织和分配编号，不能因组件不同而复用同一目录内的 ID。客户端现有编号和 payload 类型保持兼容，本轮不拆分 .proto 或修改生成流程。
-- 游戏推送直接按 CommandID 绑定具体方法：地鼠快照 100、余额校正 102，斗地主快照 110；101 继续用于旧登录替换。推送参数为 LoginID 和快照/余额 map，不传 kind 字符串二次分发。地鼠内部推送签名已调整，access 与 mole 需配套构建、重启，不保留旧 kind 入口。
-- Agent 是登录身份的唯一写入处。组件每次回调通过 Dependencies.Identity 取得当前 Identity 值快照，不各自缓存一份 UserID/LoginID；一次注入身份读取、进入准入、有界 Call 和客户端 Push 四种能力，以及只读的 SettlementNode 配置，不保存父 Agent、self 或 Node 上下文。登录和已进入游戏的准入规则集中定义，由需要的入口调用；通用协议不因用户正在某游戏而被要求先进入该游戏。
-- 保留同一连接不能同时进入两种游戏的规则，进入互斥由 Agent 协调；各游戏负责自己的离开和路由清理，Agent 按清单顺序尽力清理，单个组件返回错误时记录游戏名并继续清理其他组件和解绑 Online，最后清空身份；OnStop 关闭连接。组件不直接关闭连接或退出 Agent，不自动重试结果未知的业务操作。推送仍校验当前登录及游戏路由。
-- 组合不增加并发与故障隔离：组件在同一 Agent 回调中串行执行，远程 Call 必须有限等待；某组件 panic 仍可能终止该连接所属 Agent，不能据此声称游戏组件已独立隔离。不同 Agent 的隔离沿用 GSR 机制，业务错误按当前请求返回。
+### 5.2 进入与即时命中
 
-新增游戏的接入改动只有两类：在 gameagent/ 实现该游戏组件；在 agent.go 的唯一清单追加一项。注册、互斥和清理循环不再逐个增加游戏分支。需要新增协议时，仍须正常维护 .proto、生成代码和客户端，不承诺整个项目只改一个文件。
+进入走低频协调：Agent 向 `mole / 1` 获取进入地址，再调用 Entry。Entry 核对 Online 当前绑定，优先复用 Accounting 的余额缓存；仅缓存缺失才查询 `settlement-read` 初始化。错误不视为缓存缺失，有待确认操作时普通余额查询不能改写确认基线。
 
-```go
-deps := gameagent.Dependencies{
-	Identity:       agent.session.snapshot,
-	AllowEnter:     agent.allowEnter,
-	Call:           callBackend,
-	SettlementNode: settlementNode,
-	Push:           agent.push,
-}
+目录优先补足未满组，Join 前保留路由；Join 超时可能已经成功，保留原路由，不能另开组。确认原组已停止后才清理重选。相同用户重进保留组/座位、更新连接；离开清理同时检查 LoginID 和 Membership。
 
-agent.games = []gameagent.Component{
-	gameagent.NewMole(deps),
-	gameagent.NewLandlord(deps),
-}
-```
-
-deps 为每条连接构造，组件持有的是这些能力的函数绑定。SettlementNode 是节点配置中的结算目标；结算只读查询通过有界 Call 访问 settlement-read；客户端逐局查账已停用。Identity 调用时才读取当前 session 并返回值快照，不冻结构造时的身份；Call 的 self 由当前回调临时传入，不保存在依赖中。组件构造仅保存依赖，待 Dispatcher 组装完成后才处理请求或调用 Push。
-
-这是固定组件的显式组装，不新增多层 Dispatcher、动态插件或全局注册机制。Entered 从组件现有路由推导，不另存 activeGame。
-
-复用现有登录、替换、推送、断线、双接入和两游戏闭环用例；补充第三个游戏仅加入清单即可注册与互斥、名称/编号冲突拒绝、清理错误后继续解绑，以及组件读取当前身份的用例。同一类型方法重名由 Go 编译器拒绝，签名/消息类型由 Dispatcher 校验，注册到语义错误的方法仍须通过行为测试发现。
-
-本轮验证：统一 `./scripts/dev.sh check`、`./scripts/dev.sh build` 通过；拆分推送命令后，启用 `GSRDEMO_ACCESS_PROCESSES=1` 的 access/gameagent 全量 race 通过，Access 约 34.1 秒，覆盖真实 MySQL、临时 AOF Redis、双接入重连、三客户端地鼠/斗地主及恢复流程。定向用例验证命令 100/102/110 的直接注册、旧登录/路由过滤和结算差异仅校正当前登录。子节点使用正常构建，不宣称子进程已运行 race。
-
-## 4. GSR 与参考边界
-
-- 节点固定 GSR v1.0.2，tag commit 为 6710a766ca40c06a068e52c52456b39f8b3fe78e；节点仅对本仓库 common 使用本地 replace。
-- 本轮只读源码与文档 revision 同该 tag；公开 API 以实际依赖版本为准。升级依据为 [v1.0.2 发布说明](https://github.com/cnooljaw/gsr/releases/tag/v1.0.2)、[ADR 0012](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/adr/0012-node-capabilities-and-service-logging.md)、[ADR 0013](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/adr/0013-client-protocol-boundaries.md)和业务 AGENTS 模板。
-- 接入参考 [独立业务项目开发指南](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/APPLICATION-DEVELOPMENT.md)；Cluster 调用优先看 [CLUSTER-CALL-TUTORIAL.md](https://github.com/cnooljaw/gsr/blob/v1.0.2/docs/CLUSTER-CALL-TUTORIAL.md)，直接使用框架已有的参数与调用能力。
-- Service、状态所有权、消息快照和资源关闭的工作约束见 [AGENTS.md](../AGENTS.md)，编码规则见 [GO-CODE-STYLE.md](GO-CODE-STYLE.md)。
-- ../gsr、../../skynet_bt/nbgameserver 和 ../GoServerActorFsm 均只读，不在其中生成、安装、格式化或验证。
-
-### v1.0.2 接入知识
-
-- Gate 的 Protocol/ProtocolMAC/ProtocolPlain 及配置字段 Protocol 改名为 SecurityMode/SecurityModeMAC/SecurityModePlain 与 SecurityMode，不提供旧名别名；握手、seq/MAC、TLS、wire 和生命周期不变。
-- 安全模式与业务协议独立，Agent 选择具体 Dispatcher。本项目继续使用 Protobuf `protocol` 包和原 Envelope；新增的 `protocol/sproto` 保留自己的协议与每连接会话，不在此次升级中接入，也不增加统一 Codec。
-- `self.Node()` 借用当前 Run 的唯一节点对象，仅在当前回调内使用。名称发布用 RegisterService，监听用 OpenCluster/OpenHTTP，Gate 创建用 CreateGate，ClusterListenAddress 只用于观测；Node 不提供 Close、业务通信或内部资源 getter。
-- `self.Cluster()` 仅提供来源绑定的 Send/Call。应用配置使用 `gsr.RuntimeConfig` / `gsr.ClusterConfig`；`self.Logger()` 返回只有 Info/Error 的 `ServiceLogger`，共享 Logger 由 Run 关闭。
-- MainService 完成组装后可以 Exit；节点监听和已创建的 Service 继续运行。CreateGate 创建独立 GateService，由 Runtime 管理；CreateService/CreateGate 的 ctx 仅用于启动，不是所创建 Service 的长期生命周期。名称归目标 Service，注册者退出不撤销。
-- MainService 启动失败由 Run 统一收尾；普通 Service 启动失败只清理自身，不自动停止已经创建的其他 Service。消息、Source、wire、ValueCodec 与关闭顺序没有变化。
-- 远程 Handler 使用 `int64` / `uint64` / `float64` / `[]any` / `map[string]any` 等规范参数；Dispatcher 不做隐式类型转换，集合的 nil/空状态不作为远程业务语义。本地 Args 浅拷贝不隔离内部集合，参数和结果仍须独立快照。
-- 节点表 host 为访问地址，OpenCluster 取 port 绑定 `0.0.0.0`，访问限制归部署网络；端口零仅用于动态监听测试，不作为出站路由。本项目集中维护 YAML 节点表，不额外拆分监听配置。
-
-框架升级只更新五个节点的依赖、启动/测试接线及文档，不保留旧入口兼容包装；login 的业务增量单独记录在下节。
-
-2026-10-14 验证：`./scripts/dev.sh check`、`./scripts/dev.sh build` 和 access 的 `go test -race ./... -timeout=2m` 通过，包含真实 WebSocket 接入、停机及启动失败清理。其余节点只验证骨架编译/静态检查，未验收跨节点业务或 MySQL。
-
-2026-10-23 升级 v1.0.2：五个节点的 go.mod/go.sum 已更新，access 迁移为 `SecurityMode: gate.SecurityModeMAC`。统一 check/build 与 access race 通过，覆盖真实 MAC WebSocket、连接隔离、启动失败清理及 login 的 TCP Cluster 认证；五个构建产物均确认依赖正式 v1.0.2。此轮未重跑真实 MySQL 验收。
-
-## 5. login 认证节点
-
-### 5.1 初版密码验证（历史基线）
-
-- 单个 LoginService 负责用户名密码验证，MySQL `gsrdemo_login.accounts` 保存稳定 UserID、唯一用户名和密码摘要；没有账号缓存、Token、LoginID、在线状态或额外状态机。
-- 按用户确认采用标准库无盐 SHA-256，仅用于示例；不引入 Argon2id。账号由本节点 `-create-user` 管理命令创建，密码从标准输入读取；不增加远程注册接口。
-- 宿主通过 GSR mysqlclient.Open 创建原生数据库池，Run 返回后关闭。MainService 创建并命名 LoginService、打开 Cluster 后退出；Service 仅借用数据库池，每次 SQL 最多等待 2 秒。
-- Cluster 命令接收两个 string，返回 uint64；命令、名称及错误定义与 LoginService 放在 loginservice.go，文档契约集中在 PROTOCOL.md。当前 access 按文档契约调用，不为少量常量单独抽共享包。MySQL 驱动沿用 GSR 示例的 v1.10.1；sqlmock v1.5.2 仅用于测试，标准库没有对应模拟驱动。
-- YAML 的 mysql_dsn 为 login 私有字段，公开模板不含凭据；本机凭据保存在被忽略的 login-01.local.yaml。schema.sql 只初始化本项目专用库，不修改 GSR 示例库，节点启动不自动建表。
-- 默认测试使用 SQL mock 和两个真实 Runtime 的 TCP Cluster 链路，覆盖正确/错误凭据、重复认证、非法输入、数据库错误与账号损坏。真实 MySQL 验收显式开启，使用独占测试账号并清理；未运行时不声称数据库验收完成。
-- 本轮不修改 access 或 TypeScript 的业务逻辑，不推进 online；下一节点或客户端登录接入另行确认。
-
-2026-10-14：统一 check（Go test/vet、TS 类型检查）、login race 与 login 构建通过。GSR 的本机 MySQL 凭据已只读复用到本项目私密 YAML；管理员已初始化专用库。`GSRDEMO_MYSQL_INTEGRATION=1 go test -run '^TestLoginLiveMySQL$' -timeout=30s -v` 通过：真实 MySQL 创建账号、拒绝重复覆盖，通过 TCP Cluster 两次认证返回同一 UserID，错误密码/不存在账号均拒绝，测试账号清理成功。此验收不包含 access 客户端登录或跨进程业务联调。
-
-### 5.2 密码认证与 Redis Token（2026-11-04 首期）
-
-- 节点目录与路由名仍为 login，只组装 AuthService（auth）与 TokenService（token），没有三方实现、渠道空接口或额外节点。AuthService 借用宿主 MySQL 池，负责密码验证与完成认证；TokenService 借用宿主 Redis 客户端，负责 Issue/Verify/Revoke。AuthService 单向本地 Call TokenService，不形成反向等待；密码 SQL 不占用 TokenService 的 Mailbox。内部传规范 Go 参数和独立结果快照，不额外做 Protobuf 编解码。
-- 客户端 PasswordAuth(1003/1004) 成功只下发 user_id/access_token/expires_at_ms，不修改 Agent 会话或 Online；随后 Login(1001/1002) 只接受平台 Token，验证后新建 LoginID、绑定 Online，并按原 LoginID 通知旧连接退出。账号创建、稳定 UserID、钱包、游戏和 Online 契约保持原职责。
-- Token 用 32 字节安全随机数、Base64URL 编码；Redis 仅存摘要 key、UserID、到期时间，与 TTL 一起原子写入。默认有效期 24 小时，YAML 可设 1 秒到 7 天。校验不续期，普通断线不撤销；重复认证生成新凭据，旧凭据到期或显式撤销前仍有效。多个有效 Token 与只保留一个在线连接是不同规则。
-- Token 校验只访问 Redis，不依赖账号 SQL，不持有内存凭据缓存。Redis 不可用拒绝新 Token 登录；数据丢失需重新认证。认证节点重建而 Redis 保留时旧 Token 可校验；已登录连接不逐消息访问 Redis，也不因 Token 过期自动中断。受信任内部 Revoke 影响后续登录，不代替踢线。
-- 认证/登录失败先排队返回 ErrorResponse，并把 Agent 标记 closing，不再执行后续客户端业务；仅失败时创建私有 loginFailureCloser，After 200ms 后退出并关闭会话。该 Service 只持有 Gate 的线程安全 ClientSession，不持有借出的 Handler 上下文，也不启动业务 goroutine。Agent 的断线消息仍按当前 LoginID 清理游戏和 Online。错误回包只有有限发送窗口，不声称队列接纳等于客户端收到；CreateService 失败立即退出兜底，不修改只读 GSR。
-- 复用固定 go-redis v9.18.0；标准库不提供 Redis 客户端，依赖版本与仓库其他节点一致。宿主创建/关闭外部客户端，有限 Redis I/O 500ms、无透明重试；账号管理 -create-user 仍只连接 MySQL。Login 私密 YAML 若未加 Redis 字段，使用公开默认地址/key/TTL；自定义 Redis 需显式配置。
-- TS CLI 默认读取 stdin 密码完成两步，日志只输出 authenticated 的 UserID/到期时间和 login 的 UserID；可通过 --save-token-file 显式保存 0600 文件（不覆盖已有文件），后续 --token-file 直接 Token 登录、不读密码。MAC 不提供加密，生产凭据传输使用 WSS。协议和具体错误见 PROTOCOL.md；本轮没有三方账号映射、刷新 Token、自动重连、钱包冻结或输光封顶。
-
-首期实际验证：统一 build/check（全部 Go test/vet、TS 构建与 8 项测试）通过。Login 全量 race 启用真实 MySQL（约 2.7 秒），覆盖账号认证、Token 摘要/TTL/到期/撤销、Redis 故障安全拒绝、关闭旧 Runtime 后保留 Redis 重建校验，以及慢密码 SQL 不阻塞 TokenService。Access 全量 race 启用独立进程/TS/MySQL/临时 AOF Redis（约 34.2 秒），地鼠、斗地主、双接入和结算恢复通过；补充定向 race 验证认证不等于登录、错误回包后关闭、失败连接不影响旧在线用户，以及真实 CLI 新建 0600 Token 文件后跳过密码认证复用。子节点为普通构建，不宣称子进程运行 race。21 页 HTML 教程更新并通过浏览器布局/交互/打印检查；未做认证峰值容量、Redis 数据丢失后的部署恢复或生产 WSS 验收。
-
-## 6. Online 容量估算与待测计划
-
-- 客户端连接、握手与重连由多个 access 承担；Online 保存位置目录，承受节点间 Bind/Lookup/Unbind 等调用压力。游戏操作直接到房间，不逐次查询 Online，也不把客户端心跳转发给 Online。
-- 按单 Online 节点、单 OnlineService 起步，是否分片依据真实业务压测决定。以下是估算与测试目标，不直接代表容量已验收，实际测试证据在本节末尾记录。
-- 常态估算假设平均在线 30 分钟，每次上线/下线各一次目录调用，另按平均每 10 分钟一次房间位置更新预留：`人数 ÷ 1800 × 2 + 人数 ÷ 600`。额外查询另计；房间更新接口尚未实现。
-- 集中重连估算按每人一次 Bind 加一次 Lookup，即 `人数 ÷ 重连秒数 × 2`。这是 Online 的业务 RPC/s，不是客户端连接数；全用 Call 时请求和回复报文数约为其两倍，不等同于 TCP 包数。
-
-| 档位 | 目录记录数 | 常态估算 | 全量用户 60 秒重连 | 全量用户 10 秒重连 |
-| --- | ---: | ---: | ---: | ---: |
-| 实际在线目标 | 12,000 | 约 33 RPC/s | 400 RPC/s | 2,400 RPC/s |
-| 系统容量余量 | 100,000 | 约 278 RPC/s | 约 3,333 RPC/s | 20,000 RPC/s |
-
-Online 实现后，先验证 12,000 条记录下的持续混合调用和上述两档重连峰值；再验证 100,000 条记录、1,000 RPC/s 持续负载，以及约 3,333～5,000 RPC/s 的重连峰值。100,000 人十秒重连的 20,000 RPC/s 作为边界探索，不预先承诺通过。测试使用多个调用方经真实 TCP 汇聚到同一个 OnlineService，覆盖 Bind/Lookup/Unbind 的真实状态变化与 LoginID 竞争；测量前明确持续时长、延迟和拒绝率门槛，记录实际输入/完成速率、P99/最大延迟、MailboxFull、超时、CPU、GC、堆/RSS、排空时间及最终目录正确性。节点调用压测与 access 长连接压测分别报告。
-
-参考证据：[GSR 性能基线](../../gsr/docs/PERFORMANCE-BASELINE.md)、[混合负载](../../gsr/docs/MIXED-LOAD-VALIDATION.md)。历史测试为单热点 Service 本地 Send 约 9,861/s，以及三分钟总量约 9,800/s（含跨节点 Send 约 1,960/s）；均非吞吐上限，也不直接证明当前版本的单热点跨节点 Call 容量。2026-10-24 独立内存估算程序在 Go 1.24.13/arm64 下使用 `map[uint64]location`，location 含 36 字节 LoginID、9 字节 AccessNode、40 字节 AgentName，字符串分别分配；100,000 条记录 GC 后堆增量约 18.7 MiB。此结果不包含完整节点、队列和网络缓冲，不替代业务实现后的内存测量。
-
-2026-10-24 首轮 Online 容量样本通过（GSR v1.0.2、Go 1.24.13、darwin/arm64）；命令与负载构成见第 7 节，非 race 采样，总耗时约 125 秒。
-
-| 预装记录 | 目标 RPC/s | 实际完成 RPC/s | 60 秒完成数 | P50 | P99 | 最大调用延迟 | 发生器最大迟到 |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 12,000 | 2,400 | 2,399.92 | 144,000 | 40.334 μs | 219.458 μs | 84.578 ms | 187.764 ms |
-| 100,000 | 5,000 | 4,999.83 | 300,000 | 38.291 μs | 163.750 μs | 40.962 ms | 38.626 ms |
-
-两档调用无错误，所有期望结果、最终逐条位置与清理核对通过，未观察到 Call 返回 MailboxFull 或超时。发生器按绝对时间追赶批次，平均速率达标不表示均匀输入；延迟包括调用端结果核对开销。开发机未做 CPU 隔离，首档采样期间还执行了一次局部 check/build；保留原始尾延迟，不据此归因或宣称生产 SLA。此结果支持单节点方案的初步容量选择，不代表多个真实 access 进程、客户端重连、实际业务流量比例或长期稳定性已验收；第 6 节的完整联调计划仍待执行。
-
-## 7. online 第一步（已确认）
-
-- 一个 OnlineService 独占 `map[uint64]onlineLocation`，按 UserID 保存 LoginID、AccessNode、AgentName。仅提供 Bind/Lookup/Unbind，不保存额外在线布尔值、房间状态、历史登录或墓碑，不访问 MySQL/Redis，不启动业务 goroutine。
-- AccessNode 与 AgentName 共同定位连接，支持多个 access 使用相同 Agent 名称。LoginID 是不可复用的字符串业务登录标识，只作相等校验，不是 Core Session 或 Runtime epoch；跨节点业务路由不保存临时 ServiceID。各 access 使用独立 Cluster 路由名；双实例配置、客户端认证和路由接线的当前结果见第 3.4 节，此处保留 Online 自身的边界。
-- 新 LoginID 替换当前绑定，返回旧位置；相同当前 LoginID 只接受完全相同的地址。Unbind 仅匹配 LoginID，不按接入节点批量清理。命令使用规范标量参数，结果为独立快照或 nil，具体错误与超时/重试约束见 [PROTOCOL.md](PROTOCOL.md#online-位置目录)。
-- 沿用 GSR v1.0.2 的 Cluster 教程和双节点示例：MainService 创建并命名 OnlineService，OpenCluster 后退出；Runtime 管理 Service，Run 管理节点。Online 不同步调用其他节点；重启清空目录，后续接入重新绑定，不承诺异常时目录实时准确。
-- 代码与命令定义放 onlineservice.go；没有真实业务消费者时不提前提取 common 契约。普通测试覆盖跨节点替换、同 ID 冲突、独立快照、非法输入、两接入节点竞争、旧连接迟到清理、真实 TCP 及重启空目录。
-- 容量测试使用 `GSRDEMO_ONLINE_LOAD=1 go test -run '^TestOnlineClusterLoad$' -v -timeout=3m` 显式开启；四个测试接入节点在同一测试进程内各运行一个 Runtime/Cluster，经 TCP 汇聚到实际 Online MainService。两档分别预装 12,000/100,000 条记录，定速 60 秒，目标 2,400/5,000 RPC/s。等量混合 Bind 替换、Lookup、旧 LoginID Unbind；计时后逐条核对最终位置、成功解绑与重复解绑。它是有界四路并发的目录压力样本，不是客户端重连或跨进程部署验收。
-- 容量样本不增大队列、不重试失败调用；任何调用/结果错误失败，并检查实际完成速率达到目标的 98%。P99、最大延迟和发生器最大迟到如实报告，不预设生产 SLA；堆/GC 是同进程客户端、服务端与夹具聚合采样，后采样还包含最终核对和清理，不等于 Online 独占 RSS 或精确稳态内存。CPU/RSS、长时间稳定性、实际 access 多实例和全量重连恢复仍需后续联调验收。
-
-2026-10-24 实现验证：`./scripts/dev.sh check online`（common/online test 与 vet）、`./scripts/dev.sh build online`、online 的 `go test -race ./... -timeout=2m` 及上述容量样本均通过。真实 TCP 用例运行多个独立 Runtime/Cluster，并未启动多个 OS 进程；重启测试为有序停止节点后创建新的空目录，不等于强杀恢复演练。没有新增依赖或修改其他节点业务。
-
-## 8. mole 方案与首版实现
-
-### 8.1 已确认边界与参考
-
-- 首版单个 mole、多个 access、独立 settlement；一个进程一个 Runtime/Cluster。mole 不访问 SQL；源批次和确认统计持久化到业务 Redis，权威余额和账务归 Settlement。
-- 一个 AttackService 管一个组，最多 3 人、9 洞，有人即可玩、空位可补、随时退出，无固定局长。每秒产生一个目标、有效 2 秒；每锤扣 100，返 0 或 198 各 50%，规则版本 demo-99-v1。期望返还 99，长期收益期望 1%，不动态控奖。
-- 不引入通用 FSM、PlayerService、技能、资金冻结或任务框架。只读参考 GoServerActorFsm 的分组、共享时间线、SpawnSeq/命中窗口和快照，不复制其 Actor/FSM 层次。GSR 接线依据 v1.0.2 的 Service owner、Call/Send/Timer 约定。
-
-### 8.2 Service 和状态所有权
-
-| 类型/角色 | 唯一拥有的数据 | 职责 |
-| --- | --- | --- |
-| MainService | 启动参数 | 创建并命名 Service、OpenCluster 后退出，资源由 Run 管理 |
-| MoleService（mole） | UserID → AttackName/登录/成员实例路由、组人数 | 返回进入地址、短回调预留分组、条件清理、转发余额校正；不等待 Online/SQL/Join |
-| MoleEntryService（唯一） | 无权威业务状态 | 核对 Online、加载缓存缺失的余额、请求目录预留并 Join；进入是低频操作，有限等待 |
-| AttackService（每组一个） | 成员/座位/连接地址、地鼠时间线、有限请求记录 | 校验命中、固定扣返、本地 Call 内存记账、立即完成目标、快照与推送 |
-| MoleAccountingService（唯一） | 确认余额/版本、内存修订号、待确认扣返、一份缓冲/在途批次/序号/统计 | 纯内存预检查与接纳、同步返回结果、归批、应用结算回执；不执行 SQL 或远端 Call |
-| MoleSubmissionService（唯一） | 一个 Redis 检查点、一个不可变批次及回执 | 保存源批次、结算重试、持久统计；不处理 SQL |
-| MolePulse（私有） | 目标 ServiceID、周期、失败边界 | 只接收自身 Timer；非阻塞唤醒 owner，满队列跳过一次而不停止后续推进 |
-
-统计池是 mole 的业务值对象：Redis 保存确认统计，Accounting 持有本地视图，累计唯一已入账锤数、扣除、返还及净留存。等待中或被拒绝的操作不计入；它不是可支出的资金账户，也不决定回报。
+即时命中只经过三个参与者，不等待 Redis 或 MySQL：
 
 ```mermaid
-flowchart LR
-    A["多个 access：Gate / Agent"] -->|"查询进入地址"| E
-    A -->|"进入 / 重连"| I
-    A -->|"命中 / 快照 / 离开"| G
-    subgraph M["单个 mole 节点：无 SQL"]
-        E["MoleService：分组 / 路由"]
-        I["单个 Entry：Online / 初始余额 / Join"] -->|"预留 / 清理"| E
-        I -->|"Join"| G["每组 AttackService"]
-        E -->|"Send 余额校正"| G
-        G -->|"本地 Call"| B["MoleAccountingService：纯内存账 / 统计"]
-        B -->|"立即返回扣返和余额"| G
-        B -->|"Send 不可变批次"| T["单个 Submission：异步提交 / 重试"]
-        T -->|"回执"| B
-        B -->|"仅余额不一致时"| E
-    end
-    G -->|"即时结果 / 余额校正"| A
-    T -->|"检查点 / 确认统计"| R[("业务 Redis")]
-    T -->|"Send 原 ID 幂等批量提交"| S["settlement-submit / 并行执行者"]
-    S -->|"Send 回执 / 20"| T
-    S --> D[("MySQL：余额 / 幂等索引 / 批次明细")]
+%%{init: {"theme":"neutral","sequence":{"mirrorActors":false}}}%%
+sequenceDiagram
+    participant A as access Agent
+    participant G as AttackService
+    participant B as Accounting
+    A->>G: Cluster Call：命中目标
+    G->>B: 本地 Call：固定 HitID 与扣返
+    B-->>G: 内存结果、余额、修订号
+    G-->>A: accepted，继续玩法
 ```
 
-### 8.3 命中、余额与 UI
+AttackService 检查 LoginID、ActionID、SpawnSeq、洞位、有效期及占用，生成 HitID 并固定抽奖一次；同目标只接纳一锤。相同身份和内容返回原记录，改目标或洞位报冲突。明确的内存拒绝可释放仍有效的目标；本地 Call 超时按未知处理，保留原 HitID 和占用，不能换 ID 或重抽。重试缓存缺失返回 `operation_unknown`。
 
-1. 调用方先向 mole / 1 获取 entry_name，再向该进入通道 / 1 调用 Enter；进入通道核对 Online 当前绑定，先由 Accounting 复用本地余额视图并取消延迟回收，仅缓存缺失时才直接向 Settlement 查询确认余额进行初始化，不与 Submission 排队。错误不当作缓存缺失，未知余额不放行。查询结果实际应用时再次检查该用户的待确认操作：有 pending 就保留确认基线，只有带明确操作结果的回执可推进，防止已入账但回执未到的命中被重复计算。Join 前保留路由，超时重试仍进入同一组；热点直达 AttackName，不逐锤查询 Online。
-2. 优先补足人数较多的未满组，分配真实空座位；同用户重连保留组/座位、替换连接。旧 LoginID 不得操作新成员；退出还匹配成员实例，隔离同 LoginID 离开后重进的迟到清理。空组退出，异常组在下次 Enter 时清理目录。
-3. 每个需要周期推进的 owner 配一个未命名 MolePulse，只有它自己向自己的 Mailbox 投递 Timer，无业务请求争用。唤醒 owner 失败仍继续下一周期，owner 不再自续约。命中和快照按服务端截止时间校验，Timer 迟到不延长窗口。客户端只传 ActionID、SpawnSeq 和洞位，不决定成本/奖励。
-4. AttackService 校验登录、目标实例、窗口和占用，生成 HitID（随机组实例 + 单调候选序号），固定抽样一次，然后有限本地 Call Accounting。Accounting 只做内存计算，返回 accepted、Debit、Credit、显示余额、可用额和修订号。命中流程始终处理同一条请求记录，事件只保存在该记录的结果中，不按 HitID 再遍历查找。目标当即完成，客户端直接展示结果，不等待远端回执。
-5. 相同 LoginID/ActionID 和内容返回原结果，冲突拒绝；同目标只允许一锤。明确的内存拒绝可释放仍有效的原目标；Call 超时表示未知，保留 HitID/占用，按原请求重试，不重抽样、不当作失败撤销。重试缓存缺失返回 operation_unknown，由受控验收/管理工具核查原操作；客户端不换 ID 重新扣款，重入刷新余额。
-6. 显示余额 = 确认余额 + 全部待确认操作的净变化；可用银子 = 确认余额 − 全部待确认 Debit。待确认返还可显示但不可支付下一锤，按完整 Debit 检查，不只检查净额。金额使用 int64，校验非负成本/返还及溢出。
-7. 回执在同一 Accounting 回调中更新较新确认版本、移除已处理待扣、重算显示余额。后续尚未结算的操作继续保留，不能盲目用确认余额覆盖预测，也不能把已包含的扣款再减一次。结果一致不再推一次奖励；不一致只向当前连接推送余额校正，不复活目标、不改变已完成命中，不提交反向财务操作。
-8. UI 使用绝对余额和本地 revision 收敛，重复响应不重复加减；accepted 表示内存接纳，committed/rejected 是财务终局状态。修订号仅在当前节点缓存生命周期内有效，重进/重启从新快照建立基线。当前 TS CLI 接入与验收见第 3 节，不据此承诺图形客户端或持续负载目标。
+[Accounting](../nodes/mole/moleaccountingservice.go) 按完整 Debit 检查可用额，接纳后立即返回结果：
 
-### 8.4 跨组归批、退出与恢复边界
+- 显示余额 = 确认余额 + 所有待确认操作的净变化。
+- 可用额 = max（确认余额 − 所有待确认 Debit，0）；未确认奖励可显示，但不能支付下一锤。
 
-- 一个缓冲、一个在途批次，全局最多 4,096 项待确认操作。每 100ms 归批，500 操作或约 256KiB 提前封存；积压满时明确拒绝新命中。确认结果缓存最多 4,096 项，目录/账户缓存最多 100,000 条，每组请求最多 1,024 条，不建无界队列。
-- Accounting 是纯内存 owner，余额计算只遍历本用户的待确认 HitID 索引，不扫描全局 pending；索引在接纳/回执同一回调内更新。只 Send 不可变批次给唯一 Submission，不等待外部 I/O。Send 未接纳保留缓冲，未知结果不撤销已返回的内存奖励。
-- Submission 先保存原 BatchID、内容与顺序，再 Send SettleBatch；不做 GetBatch 前置查询、不重新抽奖。约 5～5.5 秒未确认按原请求重发；明确临时错误按 100ms～2s 有界退避重试。身份冲突或损坏检查点等确定性错误保留原批次、暂停新记账；非法回执忽略并继续等待原请求的有效结果。State 可查询 blocked/batch_id，修复后重启恢复。统计保存成功才向 Accounting 交付，未被接纳时保留重发。
-- hitEvent 只含 HitID/UserID/ActionID/AttackName/Sequence/Hole/Debit/Credit/Rule；LoginID 和接入地址仅归成员/连接状态。OperationID=HitID；封存后不再改变身份、内容或操作顺序。
-- 退出释放成员而不取消已接纳操作；无待扣即可回收余额缓存，有待扣则等回执。校正按当前路由和 LoginID 投递。Join 超时保留预留组；只有明确房间已退出才清理并重新分配。慢 Join 会使后续进入排队，但不阻塞目录和已有房间的命中/快照。
-- Submission 恢复一个 Redis 检查点中的统计和原批次，完成后开放 Accounting。统计池直接使用唯一已确认视图，初始化未完成时报不可用，不再分通道汇总。
-- 旧版多通道 Redis 演示数据按用户确认不迁移。停止旧 mole 后，将 `redis_key` 改为新 key（默认 `gsrdemo:mole:accounting:v2`），执行一次 `-init-accounting` 创建版本 2 检查点；重复初始化不覆盖有效的新统计/序号。旧格式会明确拒绝。不支持两个活跃 mole 共用该 key。
-- **尚未保存到 Redis 的内存命中可丢失；已保存批次按原 ID、内容与序号恢复。** 检查点的统计/最后序号/待处理批次由 Lua CAS 整体替换，Lua 不做数值运算。统计保存成功才交付回执；旧跨批操作和拒绝不重复累计。Redis 故障不越过检查点调用 SQL。键无 TTL，需部署持久化、备份及 noeviction；严重数据丢失由业务离线重建，不承诺 Redis/MySQL 跨库事务。
-- 私有 Pulse 在 owner 满队列时继续推进；提交 owner 退出暂停整个 Accounting 的新记账，已有房间仍可查询快照/离开；房间退出只影响当前组。全局 Accounting 或目录退出则宿主返回失败，由外部进程管理器重启。进程资源耗尽或共享 Redis/MySQL 不可用仍是共同故障。单提交链路的吞吐和实际等待后续测量，有证据再增加并行度。
+### 5.3 批次提交与余额校正
 
-### 8.5 文件与实施范围
+Accounting 每 100ms 归批，达到数量或字节阈值时提前提交；每批最多 500 项、256KiB，全局最多 4,096 项待确认操作。只有一个在途批次，缓冲发送未接纳时保留操作，不撤销已经返回的内存奖励。
 
-源码按职责命名：moleservice.go、moleentryservice.go、molepulse.go、attackservice.go、attackgame.go、moleaccountingservice.go、molesubmissionservice.go、moleaccountingservice_wire.go、molesubmissionservice_redis.go、molepool.go 及对应测试，沿用 main.go/main_service.go。mole 不含 SQL 适配、schema.sql、MySQL 配置或驱动依赖；此前初始化的源端库不自动删除。
+后台链路按原批次完成持久化、入账和交付：
 
-AttackService 负责消息、成员、Call/Send 与生命周期；attackGame 私有值对象负责目标、请求记录、接纳结果和独立快照，不为对称新增组件。仅本节点使用的命令和 DTO 留在具体 Service 文件中；本地值对象不走远程 ValueCodec，远程契约使用规范 uint64/int64/map/列表，见 PROTOCOL.md。不新增通用 FSM、公共 GameService 或内部 Protobuf。TypeScript 最小接入和 access 双实例已完成；短 ID、日期表和归档仍作为后续阶段。
+```mermaid
+%%{init: {"theme":"neutral","sequence":{"mirrorActors":false}}}%%
+sequenceDiagram
+    participant A as Accounting
+    participant S as Submission
+    participant R as Redis
+    participant C as 结算节点
+    A->>S: Send：原批次
+    S->>R: savePendingBatch
+    S->>C: Send：Batch / 1
+    C-->>S: Send：回执 / 20
+    S->>R: completeBatch
+    S-->>A: Send：完整回执
+```
 
-Submission 的三个动作分别为 `restoreCheckpoint`（启动恢复）、`submitBatch`（保存原批次后 Send）、`completeBatch`（保存确认统计、清除 Redis 待批次后通知 Accounting）。`handleSettlementReceipt` 校验并保存回执后直接调用 `completeBatch`；Pulse 只选择需要重试的动作，不再经通用 `advance` 隐式分流。Accounting 的同名回执入口应用确认余额与操作状态，有差异才推送 `balanceSnapshot`。Redis 方法分别命名为 `savePendingBatch`、`completeBatch`，通知失败仍保留内存回执重试。
+[Submission](../nodes/mole/molesubmissionservice.go) 的三个动作是 `restoreCheckpoint`、`submitBatch`、`completeBatch`。保存原批次成功后才请求结算；收到有效回执后，先更新 Redis 确认统计、序号并清除待批次，再通知 Accounting，通知未接纳时保留内存回执重试。恢复批次只交付已确认统计，完成初始化后才开放新记账。
 
-### 8.6 当前验证与边界
+Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余额、释放本批待扣并保留后续操作，重算显示余额；不能把已入账扣款再减一次。显示有差异时经 `MoleService → AttackService → 当前 Agent` 推送绝对余额校正，一致时不重复奖励。校正不复活目标、不修改已完成命中、不反向冲账。
 
-规则和节点用例覆盖目标实例/时间窗口、同目标争抢、请求重复/冲突、完整 Debit 预检查、待确认返还不可消费、批次/载荷上限、总积压额度和回执释放容量。
+### 5.4 检查点与故障边界
 
-多 Runtime 经真实 TCP 与临时 Redis 验证分组补位、跨接入重连、旧登录/成员隔离、Join 超时沿用原路由、退出继续提交、慢进入不阻塞目录和已有房间、周期 owner 满邮箱后继续推进。结算替身覆盖原批次丢回执重提、检查点恢复、慢结算不阻塞即时命中、拒绝时只向当前连接校正余额、迟到结果不覆盖后续命中。永久错误或 Submission 退出暂停新记账，Accounting/目录退出使宿主明确失败；损坏及旧格式检查点拒绝开放业务。
+[Redis 检查点](../nodes/mole/molesubmissionservice_redis.go) 用一个版本 2 的值保存确认统计、最后序号/批次及至多一个 pending。Lua CAS 整体替换，不在 Lua 中计算金额；已完成的原批次重复处理不累计统计，跨批旧操作按 `origin_batch` 排除重复累计。检查点无 TTL，缺失时必须显式 `-init-accounting`，损坏或旧格式拒绝开放记账；不支持两个活跃 mole 共用同一个 key。
 
-真实 MySQL、独立进程、客户端和异步结算验证入口见 9.4；当前并行/批次成绩见 9.5。内存命中尚未保存到 Redis 时仍可丢失，不承诺 Redis 数据丢失、生产进程自动拉起或持续业务容量。
+- 未保存 Redis 的内存命中可能在崩溃时丢失；已保存批次按原 ID、顺序和金额恢复，不查询后再抽奖或重新生成请求。
+- Send 后约 5～5.5 秒未获有效回执，按原请求重提；临时错误按 100ms～2s 退避。确定性错误保留批次并暂停新记账，非法回执忽略，继续等待原请求的有效结果。
+- Leave 不取消已接纳账务；有待扣时保留账户缓存，结清且已离开后才回收。目录/账户上限为 100,000，每组请求记录上限 1,024，已完成记账记录上限 4,096。
+- 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 唤醒 owner，目标邮箱满只跳过本次，不切断后续周期。Submission 退出暂停新记账；Accounting 或目录退出使宿主返回失败；单个组退出不停止其他组。
 
-## 9. settlement 节点与结算实现
+## 6. 斗地主：牌桌与局末结算
 
-### 9.1 职责与接口
+### 6.1 凑桌、规则与可见性
 
-游戏写入使用 `Cluster.Send(settlementNode, "settlement-submit", 1/6/7, request, replyNode, replyService)`。一个轻量入口校验规范参数，轮转起点把任务投递到固定数量的 SettlementExecutor，正常路径一次 Send；目标邮箱满时尝试其余执行者，全部拒绝则尝试回传 settlement.busy。入口不做 SQL、不等待执行者、不保存等待结果表。各执行 Service 独立执行 MySQL 事务，Command 20 将 id string、receipt map[string]any、code string 直接 Send 回游戏。SQL 等待只占用对应执行 Service。
+[LandlordService](../nodes/landlord/landlordservice.go) 只管理桌预留、人数和用户路由，优先填充可加入的桌；客户端不指定桌号。每桌一个 [AttackService](../nodes/landlord/attackservice.go)，具名组合私有 `attackGame` 和 `roundSettlement`，由本桌串行修改，不增加规则 Service 或共享游戏基类。
 
-默认 worker_count=8、mysql_connections=10、mailbox_capacity=64，均为 YAML 可配置。MySQL 池由宿主创建/关闭，执行者共用池但不共享事务或内存钱包；连接池不足会限制实际并行。所有邮箱有界，任务从入口接纳起排队超过 2 秒即返回 busy，不再启动 SQL；SQL 仍有限 2 秒。保留 settlement-read（2/3/4）和 settlement-write（1/6/7）的受控 Call 接口供已有管理与验收工具；游戏写入不再走该路径。旧 Call 工具不参与本次异步吞吐结论。
+[attackGame](../nodes/landlord/attackgame.go) 用一个 phase 表示 `waiting → calling → robbing → playing → finished`，规则如下：
 
-游戏只保存原待结算请求和重试时间，不增加 AttemptID 或接收确认。OperationID/BatchID 与内容始终不变；回执地址是投递元数据，不参与账务摘要。每个 owner 注册不可复用的私有回执名称，重启用新地址补交原请求。5 秒加 0～500ms 抖动未确认时，由现有 GSR Pulse 原 ID 重提；Send nil 只表示本地接纳，路由、远端邮箱或回执丢失仍由此恢复。结果 Handler 校验当前业务 ID 与完整回执，终态只应用一次；迟到错误和其他批次回执不能覆盖终态。busy/store_unavailable 限频重试；非法参数、身份冲突或钱包缺失保留请求并暂停自动重试。结算节点不增加持久队列、通用 Outbox、回执确认或业务 goroutine。
+1. 三人入座且全部准备后洗牌，每人 17 张，另留 3 张底牌；随机选择首叫者。首个叫地主者成为候选，不叫者本次不再参与抢地主；有资格玩家依次抢，有人抢后首叫者可最终抢回。无其他候选时可直接确定地主，跳过后续询问。
+2. 三人都不叫最多重发两次；第三次仍不叫，清空手牌并回到 waiting，不产生资金变化。重发不重置 Turn。
+3. 确定地主后公开底牌并加入地主手牌，由地主领出。叫/抢各 10 秒，超时默认否；出牌 15 秒，跟牌超时不出，领出超时出最小单张。两家不出后，上一出牌者重新领出。
+4. 校验当前 LoginID、阶段、Turn、截止时间、持有的具体牌及牌型大小。普通牌型包括顺子、连对、飞机及带牌、四带二、炸弹和王炸等，见 [cards.go](../nodes/landlord/cards.go)。快照只返回本人手牌、他人余牌数及公开牌面；底牌在确定地主后才公开。
+5. 等待时离开释放座位；进行中离开/断线只断开推送路由，保留手牌并按超时继续。新登录 Join 更新路由、取得当前快照，旧登录不能操作新成员。
 
-Mole 保持一个在途批次，100ms/数量/字节阈值归批，最多 500 项/256KiB；Submission 先存 Redis 再异步提交，回执到达后先完成检查点/确认统计，再通知 Accounting。Landlord 每桌局末存 Redis 后立即 Send，当前回调返回，仍可处理重连/快照；有效终态到达后向三人推送，再清理 Redis。Redis 删除失败只重试清理，不能重新发起已确认结算。
+### 6.2 银子规则与结算时机
 
-Mole、Landlord、Access 的 settlement_node 显式选择地址表中的目标，默认 settlement；需要时另配 settlement-02，各节点共用权威 MySQL。数据库行锁、唯一键和事务保护跨执行者、跨节点并发；三人一局仍是一个事务，不按用户拆分。没有自动发现或切换。某执行者退出后不自动重建，其余执行者可继续接纳；全部不可用时降载并由外部重启恢复。
+底分为 10，初次叫地主不翻倍，每次抢地主、炸弹/王炸各翻倍。当前不计算春天、明牌、个人加倍或手续费。设统一倍率为 M：地主胜时地主 Credit=20M、两农民各 Debit=10M；地主负时反向。规则校验倍率和金额上限，三人净变化合计为零。
 
-按场景分三个入口：SettleSingle 单用户一笔，SettleBatch 多笔独立单人操作，SettleGroup 多用户整体操作。接口共享金额校验、幂等和事务实现，调用方不必统一组装多用户结构。地鼠调用批量入口；棋牌一局可立即调用多人入口，批量周期由调用方决定。GetBatch/GetOperation/GetBalance 提供查询，具体字段和编号见 PROTOCOL.md。
+准备时查询钱包，至少 20 银子才可准备；这是准入预判，不冻结账户。局末使用一个 SettleGroup 原子结算，任一钱包不足时整笔 rejected，余额不变，牌局胜负仍保留；当前不会自动扣光或调整赢家奖励。
 
-OperationID 定义业务原子性，BatchID 定义传输身份：地鼠一锤是一项单人操作，棋牌一局是一项多人操作；一项多人操作不能拆成独立付款和收款。单人使用 UserID + Items，组操作使用 Changes；每项包含 Reason、非负 Debit/Credit，同用户可有手续费、输赢等多条变化。Reason 只校验格式，不解释含义。Business/BusinessRef/Detail 只用于归档与追溯，settlement 不解析地鼠/牌型/概率/输赢规则。Settlement 不提供业务统计或 Summary；地鼠在业务 Redis 中维护确认统计。
-
-### 9.2 事务、幂等和最少状态
-
-1. 校验规范参数、数量/字节上限、全局操作身份、参与用户/明细数量、非负金额和整数范围；规范化 JSON 后取 SHA-256。批次内操作保持顺序，所有变化按 UserID、Reason、Debit、Credit 排序，保留重复明细。分类或拆分改变即为内容变更。
-2. 同 BatchID 已存在时核对摘要，返回原历史回执。同 OperationID 跨入口/跨批次存在时核对内容，沿用原终局结果和 origin_batch，不重新写操作索引或累计金额；冲突拒绝整次请求。
-3. 一个批次一个 MySQL 事务，按稳定用户顺序使用 FOR UPDATE NOWAIT 锁定钱包；行锁冲突即回滚并返回可重试的 store_unavailable，不跳过锁定用户，不保存部分多人结果。要求 MySQL 8.0+ / InnoDB；参见 [官方锁定读说明](https://dev.mysql.com/doc/refman/8.0/en/innodb-locking-reads.html)。NOWAIT 只处理行锁，元数据锁、归档读写和磁盘等待仍受 2 秒 SQL 预算限制；复制使用行格式，当前验收环境为 ROW。使用事务内普通 map 工作副本，按操作顺序先汇总每名用户的多条分类明细，再检查完整 Debit 能力、余额/版本溢出，最后应用 Credit。每名用户每笔成功 Operation 只递增一次版本。多人先全部检查再一起修改；批量单人每笔分别判定。
-4. 余额不足等业务拒绝保存为终局结果，同批其他操作可成功。只对新成功操作涉及用户批量更新余额/版本，再批量插入新操作索引和完整批次/回执，Commit 成功才返回。
-5. SQL/连接/提交错误是未知或失败，不保存成余额不足、不假报入账；事务回滚或调用方用原 ID 重试，已提交但丢回复时返回已有结果。数据库唯一键与余额行锁同时保护重复写入；竞争导致 SQL 失败时按原身份重试。
-
-写/读执行 Service 没有进度状态机、额外后台队列、Timer、监督 Service 或镜像余额缓存。事务临时数据归当前回调；持久终局状态归 MySQL。全局 OperationID 和 BatchID 的去重记录不自动过期。
-
-### 9.3 三张表及初始化
-
-| 表 | 用途 |
-| --- | --- |
-| silver_balances | UserID、amount、version；银子唯一持久余额 |
-| settlement_operations | 全局 OperationID、请求摘要、原批次及位置、业务/终局状态、扣返汇总；支持幂等、定位及离线验收 |
-| settlement_batches | BatchID、摘要、规范原始业务明细 JSON、完整回执 JSON；余额和记录同事务提交 |
-
-完整 Reason 明细随批次归档，不丢失同用户的分类构成，不建独立逐锤分析表或明细节点。当前表仍保留金额和业务字段用于离线核对，下一阶段日表再精简；线上 Summary 已移除。保留记录便于按用户变化、操作和批次对账，不只比较净额。需要外移明细或优化大规模历史汇总时再单独确认，本版不做通用 Outbox、MQ 或分布式事务。
-
-用户中心决定钱包创建和初始银子；Settlement 仅执行账务。Demo 的 -init-wallet UserID -silver Amount 模拟用户中心管理入口，不自动接入账号注册。普通 settle(ctx, batch) 不含创建分支；initialize(ctx, userID, amount) 单独开启事务，先查固定初始化凭据，再创建零余额钱包、执行 wallet_init/initial_balance 操作、保存索引/明细/回执并提交。OperationID=wallet-init-{UserID}，BatchID=derived(init, OperationID)。同金额重试返回历史结果，改金额或已有钱包缺少初始化凭据返回冲突。数据库唯一键保证不重复，业务核对摘要并定义返回语义；竞争导致 SQL 失败时回滚，调用方用原身份重试。GetBalance/普通结算遇到缺失钱包报 wallet_not_found；普通 RPC 禁用 wallet_init。
-
-配置为 settlement 私有 YAML mysql_dsn；公开模板留空，私密配置权限 0600。专用库 gsrdemo_settlement，由管理员执行 schema.sql 初始化，应用不自动迁移。驱动与 SQL mock 沿用 login 固定版本（MySQL v1.10.1、go-sqlmock v1.5.2），分别用于真实驱动和可重复失败注入，标准库没有对应实现。mole 不增加 SQL，配套迁移为批量单人参数及通用汇总字段；access/login/online/TS 业务不变。
-
-### 9.4 当前测试与验证边界
-
-| 测试层 | 当前保护的行为 |
-| --- | --- |
-| 规则与 SQL 单元测试 | 规范参数、金额/版本溢出、完整 Debit、分类摘要、多人原子性、事务回滚、初始化边界、BatchID/OperationID 幂等与内容冲突 |
-| Cluster 契约测试 | 规范类型与安全错误码、查询和受控 Call 写接口的命令边界；受控写入口仍供管理/验收工具使用 |
-| 异步链路测试 | 慢 SQL 时调用方与其他执行者继续工作、非法请求错误回执、过期排队任务不启动 SQL、不同回执地址并发重提仅入账一次 |
-| 真实 MySQL 与独立进程 | 热点钱包锁冲突快速回滚、跨节点幂等和金额守恒、多人事务整体接受/拒绝、地鼠原批次与检查点恢复 |
-| Access 端到端 | 真实客户端完成两个游戏，结算服中断、地主重启、已提交未确认恢复、当前登录余额校正及终态只交付一次 |
-
-普通检查使用 `./scripts/dev.sh check settlement`。真实 MySQL 测试显式使用 `GSRDEMO_SETTLEMENT_MYSQL=1 go -C nodes/settlement test -count=1 -race ./... -timeout=3m`，要求已初始化本机专用 gsrdemo_settlement 库和私密配置；独立进程测试还需先构建对应节点。用例只创建/清理自身随机钱包与操作，只回收自身进程。默认测试不代替真实通信、数据库或客户端验收。
-
-当前并行与批次对比见 9.5；钱包、操作幂等记录及回执仍属于权威 MySQL。未保存 Redis 的内存命中、进行中手牌、Redis 数据丢失、自动故障切换、生产长期容量不在当前恢复或性能承诺内。短 ID、按日归档、游戏期间禁止局外扣款及输光封顶尚未实施，具体业务约束见 10.3。
-
-### 9.5 异步并行结算对比
-
-同进程两个独立 GSR Runtime，经真实双向 TCP 与本机 MySQL 验证；每个来源仅一个在途批次，来源间钱包分散。每档核对全部钱包余额、版本、Operation/Batch 唯一记录数量；仅清理本次随机身份。没有修改 MySQL 服务配置、持久化策略或钱包规则，不将这些短程样本当成生产容量。
-
-首轮 16 来源、每批 64 项：1/2/4/8/16 执行者分别约 1.21/2.60/4.29/3.14/4.06 万 Operation/s。4 执行者的池缩至 2 时产生 247 次连接等待。邮箱 4 出现 6 次重试、P99 约 5 秒；邮箱 16/64 该档无重试。
-
-64 来源、每批 64 项、邮箱 64，2/4/8/16 执行者各重复三轮：吞吐中位数约 3.99/6.00/6.69/6.10 万 Operation/s；P99 中位数约 170/80/92/205ms，均无重试且逐档对账通过。选择 8 执行者、10 个连接作为本机吞吐与尾延迟的折中；更少来源可按需降低。邮箱 16/32 在这组突发下出现 24/7 次重试，P99 约 5 秒，故默认 64；128 无额外稳定收益。
-
-批次也存在取舍：64 来源、4 执行者、邮箱 64，批大小 32/128/500 分别约 4.94/5.98/6.71 万 Operation/s，P99 约 43/140/514ms。单批越大吞吐可提高，但尾延迟随之增加；地鼠继续按 100ms/阈值归批，最多 500 项，不逐锤调用，也不为凑满大批额外等待。单个 Mole 的单在途批次不会同时占满全部执行者，池并行用于多个来源和牌局。
-
-复现：`./scripts/dev.sh load settlement`；64 来源三轮确认使用 `GSRDEMO_SETTLEMENT_ASYNC_CONFIRM=1 ./scripts/dev.sh load settlement`。原始结果在本地 `.cache/settlement-async-load.json` 与 `.cache/settlement-async-confirm.json`。未覆盖长时持续负载、任意热点分布或生产机器容量。
-
-2026-11-04 异步改造验收：统一 build/check（全部 Go test/vet 与 TypeScript 8 项测试）通过。Settlement 全量 race 启用真实 MySQL 与独立进程用例通过，最终异步定向 race 复核通过；Mole 全量 race 约 38.2 秒、Landlord 约 14.2 秒。Access 全量 race 启用真实独立节点、三 TS 客户端、MySQL/临时 AOF Redis 约 39.4 秒通过，覆盖结算节点恢复、地主重启及已提交未确认补交。新增实际双向 TCP 验证慢 SQL 下调用方/另一执行者继续工作、非法请求错误回执、过期排队任务不启动 SQL；真实 MySQL 验证不同回执地址并发提交相同批次只入账一次。既有故障用例继续保护 Redis 完成/清理失败、当前登录余额校正、原批次丢回执重提、旧结果过滤和三人终态仅广播一次。HTML 教程同步改为 Send/20 回执，21 页布局/交互/打印与 72 个本地源码链接检查通过。本轮不更改游戏银子封顶/局外扣款限制，也不修改只读 GSR。
-
-## 10. 三人斗地主最小业务闭环（已确认并实施）
-
-本节按用户确认的随机房、AttackService 及完整叫抢流程实施。目标是三个独立 TS CLI 经多个 access 随机入桌，完成一局及多人银子结算。nodes/landlord 为独立 Go module，固定 GSR v1.0.2；access、协议、TS、构建和配置负责必要接线，结算使用第 9 节的异步公共协议。慢客户端积压及持续负载暂缓。
-
-### 10.1 参考与职责
-
-- 只读参考 ../../skynet_bt/nbgameserver/gameofhlddz/roomd1.lua 的随机入座与准备开局；baseattackd.lua 的 asklander/calllanderresult/askrob/roblanderresult 及 gamescene；attackd1.lua 的随机房结束流程。不搬入约局、癞子、赛事、任务、排行及高级托管。
-- 算法只读参考 ../../ServerLogic/hlddz/Hlddz_GameLogic.c/.h 的普通无癞子分支和 CompareCard，改写为 Go 纯函数，保留花色牌编码与 3..A、2、小王、大王的大小顺序；不引入 C/Lua 运行依赖，不将参考实现中的非必要兼容行为视为目标。
-- LandlordService 只拥有随机凑桌目录、座位预留和用户到桌的路由；优先填满可入座的桌，没有空位再建桌，不等待游戏或结算。当前版本不让客户端指定房间号。
-- 每桌一个 AttackService，职责与地鼠 AttackService 类似。它独占座位、准备、手牌、叫抢记录、地主、轮次、上一手牌、截止时间、胜负及本桌局末结果。拆分文件不拆分状态 owner，不新增 BidService、RuleService、通用 FSM 或游戏基类。
-- MainService 沿用 gsr.Run、RegisterService、OpenCluster 和 Runtime 生命周期。Agent 只保存当前游戏和具名桌路由，推送仍用 AccessNode + AgentName，并核对 LoginID。依据发布模块 APPLICATION-DEVELOPMENT.md、CLUSTER-CALL-TUTORIAL.md，不保存回调上下文或业务启动 goroutine。
-
-### 10.2 经典叫抢与出牌
-
-业务阶段为等待、叫地主、抢地主、出牌、结束，直接用一个 phase 表示。
-
-1. 三人入座并准备后洗牌，每人 17 张，另留 3 张底牌；服务端随机选择首叫座位，底牌此时不向玩家公开。
-2. 按座位顺序询问叫/不叫。不叫者本次发牌不再参与抢地主；首个叫地主者成为候选，若其他两人已经不叫，则直接确定地主。
-3. 其余有资格玩家依次选择抢/不抢，每人一次机会。如果没人抢，首叫者成为地主；有人抢后，首叫者还有一次最终抢回机会，最后一次选择抢的人为地主，不抢者不会重新参与。
-4. 三人都不叫时重新洗牌、发牌、随机选择首叫者，最多重发两次；第三次仍无人叫，结束本局，不产生资金变化，回到等待准备。不强行指定地主。轮次号在重发牌时不归零。
-5. 确定地主后公布 3 张底牌并加入地主手牌，形成 20/17/17 张，由地主领出。叫/抢默认各等待 10 秒，超时按不叫/不抢处理；出牌默认 15 秒，跟牌超时不出，领出超时出最小单张。
-6. 出牌校验当前 LoginID、阶段、轮次、持有的具体牌及牌型大小；首出不能不出，两家不出后由上一出牌者重新领出。非法操作不修改手牌、轮次、倍率或截止时间。超时结果未知时用快照核实，不自动重复操作。
-7. 实现普通单张、对子、三张、三带一/对、顺子、连对、三连、飞机及带翅膀、四带二、炸弹和王炸。纯函数用例固定飞机带牌、四带二及连牌长度边界，不因演示机器人只出简单牌而省略规则。
-8. 游戏中仅本人可见手牌，其他玩家只见余牌数；快照包含阶段、当前操作者、轮次、候选/确定地主、公开叫抢记录、倍率和截止时间。叫抢前底牌隐藏，确定地主后公开；已打出的牌公开。
-9. 等待时离开释放座位；叫抢及出牌中断线保留牌位，按上述超时规则继续。重登更新本人的连接地址并恢复当前阶段快照；旧 LoginID 的离开或迟到操作不能影响新成员。
-
-验收至少覆盖：叫→不抢→不抢；叫→抢→不抢→首叫者抢回/放弃；不叫→叫→抢；不叫→不叫→叫；三人都不叫；非当前玩家、旧轮次、重发牌后的迟到请求；叫抢期间断线重连。
-
-### 10.3 银子、倍率与恢复
-
-- 底分 10；保留与叫抢直接相关的倍率：初次叫地主不翻倍，每次抢地主翻倍，包括首叫者最终抢回。炸弹/王炸也各翻倍一次；暂不引入明牌、个人加倍、底牌花色倍率、春天或手续费。不扩展通用倍率框架。
-- 设当前统一倍率为 M：地主胜时地主 Credit=20M，两农民各 Debit=10M；地主负时反向，始终保留非负 Debit/Credit、合计净变化为零。所有倍率及金额计算检查溢出，Settlement 只接收最终通用资金变化，不解释叫抢或牌型。
-- 准备时检查钱包存在及最低参与余额，仅作准入预判，不能承诺覆盖后续倍率或其他业务扣款。最终使用现有 SettleGroup，任一钱包不足整笔拒绝；不部分入账、不假报财务成功，不改变已确定的牌局胜负。本版不引入钱包冻结。
-- 正常局末不广播 finished + pending；在确定胜负的当前回调中保存并异步提交结算，收到有效回执后只向三位玩家各广播一次最终结果。pending 仅保留为服务端未确认状态，结算异常时主动查询快照仍可看到 pending，不假报成功。
-- 一局一个唯一 OperationID，确定胜负的当前回调先把完整局末请求保存到本游戏独立 Redis key，保存成功后 Send settlement-submit / 7，回执由本桌 Command 20 处理。结算服中断或回执未知时，本桌按原 ID 和内容间隔重试；地主节点重启恢复已保存的请求。每桌只处理本桌结果，等待和故障限制在本桌，不增加全局串行结算队列；landlord 不处理 SQL。
-- Redis 只保留待确认请求用于故障恢复，不保存成功历史，也不用于吞吐优化。有效 committed/rejected 回执立即更新并推送本人扣返、余额与版本，然后删除待记录；清理失败只重试删除，不回退财务终态、不在存活进程内重复调用结算服。三人全部离开后，桌 Service 清理完成再退出；若清理前节点崩溃，重启仍以原 ID 幂等补交并清理。Redis 持续故障时待记录会保留，恢复后清理，不以 TTL 丢弃未确认请求。
-- 客户端使用终态快照，不再通过 Operation 追加查账。Access 移除旧 1151 Handler，1151/1152 定义及编号保留、不复用；受控验收集中核对本次 OperationID 的 SQL 记录与三人钱包。
-- 节点重启不恢复正在进行的手牌；Redis 已保存的结果按原 ID 恢复提交。尚未保存成功的局末结果不承诺崩溃恢复，不引入通用 Outbox、MQ 或分布式事务。
-
-后续银子约束（2026-11-04 已记录，尚未实施）：玩家处于本局游戏及未确认结算期间，不允许其他业务减少同一账户的银子；断线或节点重启不能被当作解除限制的依据。该规则需要在权威扣款入口统一执行，不能只依赖 Access 的游戏进入互斥。拟采用输光封顶：实际扣款不超过可结算余额，账户最低为 0；赢家收益必须按实际扣款同步调整，不能只截断输家的扣款而保留足额奖励。多人分配、取整和限制的生效/恢复/释放边界另行确认；当前实现仍按固定三人 Changes 提交，余额不足整笔拒绝，不会自动改成扣光。
-
-### 10.4 代码组织与调用链
-
-节点根目录按实际类型与职责组织；Service、玩法对象与结算组件分别维护自身状态和方法，测试随被测类型组织，不以“按阶段拆文件”代替组件边界：
+确定胜负的当前回调按以下顺序执行：
 
 ```text
-nodes/landlord/
-  main.go                    # 配置、Redis 客户端、信号与 gsr.Run
-  main_service.go            # 启动组装、待结算恢复与 Cluster 监听
-  landlordservice.go         # 随机凑桌目录，不处理出牌
-  attackservice.go           # 本桌命令入口、外部调用与广播编排
-  attackgame.go              # 入座、准备、叫抢、出牌、超时与可见快照
-  roundsettlement.go         # 本桌结算操作、提交与回执应用
-  landlordjournal.go         # 本游戏 Redis 待结算记录
-  landlordpulse.go           # 仅负责定时唤醒本桌
-  cards.go                   # 普通牌型与比较纯函数
+prepareOperation：固定本局 OperationID 与三人金额
+  → submit：保存 Redis 待请求，再 Send settlement-submit / 7
+  → 当前回调返回，继续处理快照和其他消息
+
+handleSettlementReceipt：核对原 ID、终态和三人余额
+  → applyReceipt：确认本桌财务终态
+  → pushSnapshots：向三人的当前连接发起推送
+  → deletePendingSettlement：删除 Redis 待记录
 ```
 
-AttackService 具名组合 attackGame 与 roundSettlement；游戏对象处理游戏状态变化，不依赖 GSR/Redis/RPC，结算组件持有局末请求、Redis 依赖、回执地址、重试时间和确认结果。Service 协调外部权限/余额查询、房间目录与广播，不再跨文件直接修改游戏成员或资金结果。两个组件由本桌 Service 串行调用，不增加 Service、Mailbox、goroutine 或父 Service 指针；进行中牌局与局末账务的恢复边界保持不变。2026-11-03 合并旧 attackservice_* 分类文件，按实际类型组织生产代码与测试，不按每条命令新建文件。
+[roundSettlement](../nodes/landlord/roundsettlement.go) 用 `operation *landlordOperation` 保存固定请求及确认结果，`snapshotFor` 组装本人扣返、状态、余额与版本；[landlordJournal](../nodes/landlord/landlordjournal.go) 只持久化请求字段。正常局末不先广播 finished + pending；客户端以终态快照为结算结果，不再追加查账。主动查快照仍可能看到未确认状态。
 
-本桌用 `operation *landlordOperation` 保存固定请求及后续确认结果。局末 `prepareOperation → submit`，回执入口 `handleSettlementReceipt` 明确依次调用 `applyReceipt → pushSnapshots → deletePendingSettlement`；`snapshotFor` 只组装玩家自己的快照，`pushSnapshots` 才发送。Pulse 的 `retrySettlement` 在确认前重提原操作，确认后只重试删除待记录；回执入口不再经过通用推进函数。Redis JSON 字段、远程命令编号及客户端快照字段保持兼容。
+### 6.3 重试、清理与恢复
 
-客户端 → Agent → LandlordService 获取预留桌地址 → AttackService 入座。之后准备、叫地主、抢地主、出牌/不出、快照及离开直接 Call AttackService；状态变化 Send 到当前 Agent。客户端使用终态快照，不再追加查账；受控验收按原 OperationID 核对账务。业务 Protobuf 每个消息编号使用独立的 payload 类型，遵守现有 GSR Registry 契约。
+- 每桌注册私有回执地址。请求未知时约 5～5.5 秒后按原操作重提，保存或本地发送失败至少间隔 1 秒；非临时远端错误保留请求并停止自动提交。原始 OperationID 和金额不变。
+- 有效回执只应用一次，过滤其他牌局、重复回执和迟到错误。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，不重新调用结算。
+- 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。三人离开后，待记录清理完成才退出桌 Service。
+- 启动时加载 Redis 待请求，为各请求创建恢复专用 AttackService；不发布可加入桌名，也不向旧连接广播，确认并清理后退出。只恢复已保存的局末账务，不恢复进行中手牌。清理前崩溃会再次按原 ID 幂等补交。
 
-### 10.5 当前验证
+## 7. Settlement：并行执行与权威账务
 
-普通规则测试覆盖牌型、叫抢、无人叫地主后的重发、旧轮次、非法操作、倍率溢出与银子守恒。Cluster 测试覆盖三人凑桌、第四人另开桌、重登恢复手牌、旧身份隔离和实际 Pulse 超时推进。
+### 7.1 入口与执行边界
 
-异步结算用例覆盖手动/超时出牌后的 committed/rejected 回执、重复回执和迟到错误过滤、非法回执不改状态、三人终态只推送一次。Redis 删除失败不掩盖终态，空桌继续清理且不重复提交已确认账务。真实客户端/MySQL/AOF Redis 用例覆盖结算节点恢复、地主节点重启补交和 SQL 已提交但游戏未确认：原 ID 唯一入账，余额和版本各变化一次，待记录最终清除。
+[MainService](../nodes/settlement/main_service.go) 组装三个公开 Service：
 
-验证命令和本轮结果见 9.4、9.5。故障用例不承诺恢复尚未保存的局末请求、进行中手牌或丢失的 Redis 数据；游戏期间扣款限制与输光封顶仍为待实施业务。
+| 入口 | 调用方式与用途 |
+| --- | --- |
+| `settlement-submit` | 游戏 Send 写入，1=Batch、6=Single、7=Group；参数带回执节点与服务名 |
+| `settlement-read` | Call 查询批次、参与者操作或钱包；余额初始化及受控核查使用 |
+| `settlement-write` | 保留相同写规则的 Call 接口，供管理/验收工具使用 |
+
+[异步入口](../nodes/settlement/settlementsubmitservice.go) 解码校验后，从轮转起点向独立执行 Service 投递任务；目标邮箱满或不可用时尝试其他执行者，全部拒绝则尝试回传 busy。入口不做 SQL、不等待结果、不维护回执关联表。各执行者独立执行事务，再直接 Send Command 20 的 `(id, receipt, code)` 给游戏 owner。
+
+默认配置为 8 个执行者、10 个 MySQL 连接、Mailbox 容量 64，见 [settlement YAML](../configs/settlement-01.yaml)。任务在入口生成后到执行前最多等待 2 秒，超期返回 busy、不启动 SQL；SQL 使用独立的 2 秒上下文预算。入口自身 Mailbox 的等待不计入该任务期限。执行者共享连接池，不共享事务或镜像钱包；连接池、热点锁和数据库能力共同限制实际并行。
+
+各游戏及 access 通过 `settlement_node` 选择配置中的目标。可配置其他结算节点共用同一个权威库，行锁与唯一键保护跨节点并发；没有自动发现或切换。执行者退出后不自动重建，余下执行者继续接纳。
+
+### 7.2 财务原子性与幂等
+
+- **Single**：一笔单用户操作；**Batch**：多笔按顺序判定的单用户操作；**Group**：一笔多用户整体操作。地鼠使用 Batch，斗地主每局立即提交 Group。
+- OperationID 定义财务原子性，BatchID 定义结算请求身份。多人操作不能拆成分别付款和收款；单/多人入口会派生稳定 BatchID。回执地址只用于投递，不参与财务摘要。
+- 请求规范化后作 SHA-256 摘要；同 BatchID 同内容返回原回执，不同内容报冲突。同 OperationID 跨批次出现时核对内容，沿用原终态及 origin_batch，不重复入账。幂等记录不自动过期。
+- settlement 只解释非负 Debit/Credit 和金额边界，不解释地鼠概率、牌型、输赢或 Reason 的业务含义。业务明细随批次保存；统计池归 mole，不由结算服计算。
+
+[事务实现](../nodes/settlement/settlementservice_mysql.go) 为一个批次开启一个 MySQL 事务：
+
+1. 核对已有批次和操作，再按 UserID 稳定顺序 `FOR UPDATE NOWAIT` 锁定钱包；行锁冲突回滚并返回可重试的 store_unavailable。
+2. 按请求顺序处理操作；先汇总每名用户的完整 Debit/Credit，再检查扣款能力、余额与版本溢出，全部参与者通过后一起修改。每用户每笔成功 Operation 只递增一次版本。
+3. 余额不足等业务拒绝保存为 rejected，同批其他操作仍可成功；Group 不产生部分资金变化。
+4. 将钱包、操作索引、批次明细及完整回执同事务提交，Commit 成功才返回。SQL/连接/提交错误不伪装成业务拒绝；回复未知时调用方保留原 ID 重试。
+
+需要 MySQL 8.0+ / InnoDB。NOWAIT 处理行锁冲突，不能代替所有 I/O 的等待预算。Send 只表示接纳，丢请求或丢回执由游戏 owner 的原 ID 重试恢复；结算服没有持久队列、Outbox 或回执确认机制。
+
+### 7.3 持久化表与初始化
+
+| 表 | 当前用途 |
+| --- | --- |
+| `silver_balances` | UserID、amount、version，唯一持久钱包 |
+| `settlement_operations` | 全局 OperationID、摘要、原批次及位置、business/status、扣返汇总 |
+| `settlement_batches` | BatchID、摘要、规范请求 JSON 和完整回执 JSON |
+
+[schema.sql](../nodes/settlement/schema.sql) 由管理员初始化专用库，节点启动不自动迁移。普通结算不创建钱包，缺失时报 wallet_not_found。`-init-wallet UserID -silver Amount` 是独立管理入口，以固定 `wallet-init-{UserID}` 操作完成初始化；同金额重复执行返回原结果，不同金额或缺失初始化凭据时拒绝覆盖。账号创建不自动创建钱包。
+
+## 8. 持久化与故障边界汇总
+
+| 数据 | owner 与持久化 | 故障后的实际行为 |
+| --- | --- | --- |
+| 账号 | login / MySQL | Token 校验不查询账号 SQL；密码认证受账号库可用性影响 |
+| Token | login / Redis 摘要记录与 TTL | Redis 保留时可跨 login 重启校验；丢失后重新认证 |
+| 在线位置 | online / 内存 | 重启清空，通过显式登录重建 |
+| 地鼠目标、座位与未保存命中 | mole / 内存 | 进程崩溃不恢复；已保存账务另行补交 |
+| 地鼠检查点 | Submission / Redis | 恢复原批次与确认统计，不恢复原游戏房间 |
+| 斗地主手牌与进行中阶段 | 本桌 AttackService / 内存 | 节点重启不恢复牌局 |
+| 斗地主待结算请求 | 本桌 / Redis Hash | 原 ID 补交，确认后删除；不积累成功历史 |
+| 钱包与幂等终态 | settlement / MySQL | 跨执行者、节点和重试复用原财务结果 |
+
+Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的请求，不能弥补尚未保存的内存数据或存储丢失；游戏 Redis 需按部署要求持久化、备份并避免驱逐待请求。业务进程的重启由外部管理，当前代码没有自动拉起或全局恢复协调器。
+
+## 9. 验证依据与设计取舍
+
+### 9.1 行为覆盖入口
+
+下表是当前测试代码的职责索引，不是本次文档整理重新运行的验收报告。执行条件与命令统一见 [README 开发与验证](../README.md#开发与验证)。
+
+| 设计边界 | 对应测试 |
+| --- | --- |
+| 认证不等于登录、失败回包后关闭 | [agent_auth_test.go](../nodes/access/agent_auth_test.go)、[tokenservice_test.go](../nodes/login/tokenservice_test.go)、[token_redis_test.go](../nodes/login/token_redis_test.go) |
+| Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
+| 地鼠内存余额、回执、重试与检查点恢复 | [Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[Cluster 用例](../nodes/mole/mole_cluster_test.go) |
+| 斗地主规则、终态一次应用、删除失败继续清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[回执集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
+| 事务、全局幂等、锁冲突与异步并行 | [SQL 用例](../nodes/settlement/settlementservice_mysql_test.go)、[真实并发用例](../nodes/settlement/settlementservice_concurrency_live_test.go)、[异步用例](../nodes/settlement/settlementsubmitservice_test.go) |
+| 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
+
+### 9.2 并行与容量取舍
+
+地鼠采用一个在途批次，减少提交顺序和检查点协调；单个 mole 来源不会同时占满所有结算执行者。结算并行用于不同来源和牌局，执行者与数据库连接数需要配套；单批越大，吞吐和等待延迟的取舍也越明显，因此地鼠按周期/阈值提交，不为凑满 500 项额外等待。
+
+现有 [Online 混合调用测试](../nodes/online/onlineservice_load_test.go) 和[结算并行/批次测试](../nodes/settlement/settlementsubmitservice_load_test.go) 提供可复现的短程样本。结算默认 8 个执行者、10 个连接、Mailbox 64 是当前配置选择，不表示生产最优值。测试包含本机、多 Runtime、分散钱包等条件，不能外推为生产在线人数、热点吞吐、长期稳定性或客户端重连能力。
+
+## 10. 后续工作
+
+以下内容尚未实现，或仍需业务方案/部署验收；不属于前文的当前能力。
+
+| 方向 | 待完成内容与边界 |
+| --- | --- |
+| 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
+| 斗地主输光封顶 | 当前余额不足整笔拒绝。后续实扣不超过可结算余额，账户最低为 0，赢家收益按实扣同步调整；多人分配、取整和限制生命周期仍需确认。 |
+| 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |
+| 历史存储 | 短 ID、按日表、冷热归档和清理策略尚未实施；不能在破坏原 ID 幂等约束的情况下直接删除去重记录。 |
+| 容量与部署 | 12,000 在线是业务目标，100,000 是容量余量目标。持续负载、真实慢客户端积压、全量重连、热点钱包、认证峰值及生产 WSS 仍需专门验收；当前 Gate 模板上限不是这些容量承诺。 |
+| 客户端与自动恢复 | 当前是 CLI，没有图形 UI 或自动重连；自动故障切换、监督拉起、Online 自动重建和进行中牌局恢复均未实现，是否增加需另行确认。 |
