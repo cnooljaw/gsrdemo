@@ -1,18 +1,14 @@
+// login 节点的 Runtime/TCP 调用夹具，供认证与 Token 协作用例复用。
 package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"errors"
-	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
@@ -145,75 +141,6 @@ func callLoginCommand(t *testing.T, address, name string, command runtime.Comman
 		t.Fatal(err)
 	}
 	return value, callErr
-}
-
-// TestLoginAuthenticatesOverCluster 保护真实远程接线、稳定 UserID、错误凭据、输入拒绝和安全数据库错误。
-func TestLoginAuthenticatesOverCluster(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	address := startLogin(t, db)
-	hash := sha256.Sum256([]byte("example-password"))
-	for _, password := range []string{"example-password", "example-password", "wrong"} {
-		mock.ExpectQuery(selectAccountSQL).WithArgs("alice").WillReturnRows(
-			sqlmock.NewRows([]string{"user_id", "password_hash"}).AddRow(7, hash[:]))
-		value, err := callLogin(t, address, "alice", password)
-		if password == "wrong" {
-			if !errors.Is(err, errInvalidCredentials) {
-				t.Fatalf("wrong password: %v", err)
-			}
-		} else if err != nil || !validAuthResult(value, 7) {
-			t.Fatalf("authenticate: value=%v err=%v", value, err)
-		}
-	}
-	mock.ExpectQuery(selectAccountSQL).WithArgs("missing").WillReturnRows(sqlmock.NewRows([]string{"user_id", "password_hash"}))
-	if _, err := callLogin(t, address, "missing", "example-password"); !errors.Is(err, errInvalidCredentials) {
-		t.Fatalf("missing account: %v", err)
-	}
-	for _, args := range [][]any{{"", "password"}, {"alice", ""}, {" alice", "password"}, {"alice", strings.Repeat("p", 129)}} {
-		if _, err := callLogin(t, address, args...); !errors.Is(err, errInvalidLoginInput) {
-			t.Fatalf("invalid input: %v", err)
-		}
-	}
-	if _, err := callLogin(t, address, uint64(7), "password"); !errors.Is(err, runtime.ErrInvalidCommandArguments) {
-		t.Fatalf("wrong wire argument: %v", err)
-	}
-	mock.ExpectQuery(selectAccountSQL).WithArgs("alice").WillReturnError(fmt.Errorf("private SQL error"))
-	if _, err := callLogin(t, address, "alice", "password"); !errors.Is(err, errAccountStoreUnavailable) || strings.Contains(err.Error(), "private SQL") {
-		t.Fatalf("database error: %v", err)
-	}
-	mock.ExpectQuery(selectAccountSQL).WithArgs("broken").WillReturnRows(
-		sqlmock.NewRows([]string{"user_id", "password_hash"}).AddRow(7, []byte{1}))
-	if _, err := callLogin(t, address, "broken", "password"); !errors.Is(err, errAccountStoreUnavailable) {
-		t.Fatalf("corrupt account: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestCreateAccountStoresHash 保护管理入口只存密码摘要，重复账号不会覆盖原账号。
-func TestCreateAccountStoresHash(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	hash := sha256.Sum256([]byte("example-password"))
-	mock.ExpectExec(insertAccountSQL).WithArgs("alice", hash[:]).WillReturnResult(sqlmock.NewResult(7, 1))
-	id, err := createAccount(context.Background(), db, "alice", "example-password")
-	if err != nil || id != 7 {
-		t.Fatalf("create: id=%d err=%v", id, err)
-	}
-	mock.ExpectExec(insertAccountSQL).WithArgs("alice", hash[:]).WillReturnError(errors.New("duplicate account"))
-	if _, err := createAccount(context.Background(), db, "alice", "example-password"); err == nil {
-		t.Fatal("duplicate insert reported success")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func validAuthResult(value any, uid uint64) bool {

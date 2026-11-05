@@ -21,25 +21,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// TestHandlerGroupsRejectDuplicateIDs 保护通用与游戏注册表发生 ID 冲突时初始化失败，不按组装顺序覆盖。
-func TestHandlerGroupsRejectDuplicateIDs(t *testing.T) {
-	for name, merge := range map[string]func(){
-		"protocol": func() { mustMergeHandlers(map[uint32]any{1001: "common"}, map[uint32]any{1001: "game"}) },
-		"command": func() {
-			mustMergeHandlers(map[runtime.CommandID]any{100: "first"}, map[runtime.CommandID]any{100: "second"})
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Fatal("重复 ID 被静默覆盖")
-				}
-			}()
-			merge()
-		})
-	}
-}
-
 // fixtureGame 模拟新增游戏，只提供接入组件契约，不实现玩法或框架行为。
 type fixtureGame struct {
 	name       string

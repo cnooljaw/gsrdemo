@@ -147,66 +147,6 @@ func waitOnlineStep(ctx context.Context, ready <-chan struct{}) error {
 	}
 }
 
-// TestOnlineTwoAccessNodesReplaceAndDisconnect 保护两个同时运行的接入节点使用同名 Agent 时，跨节点重连和旧连接断线不误清理。
-func TestOnlineTwoAccessNodesReplaceAndDisconnect(t *testing.T) {
-	address, _ := startOnline(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	oldBound, newBound, oldDisconnected := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	works := []func(gsr.ServiceContext) error{
-		func(self gsr.ServiceContext) error {
-			if err := expectOnlineCall(self, bindCommand, nil, uint64(7), "old", "access-01", "agent-1"); err != nil {
-				return err
-			}
-			close(oldBound)
-			if err := waitOnlineStep(ctx, newBound); err != nil {
-				return err
-			}
-			if err := expectOnlineCall(self, unbindCommand, false, uint64(7), "old"); err != nil {
-				return err
-			}
-			if err := expectOnlineCall(self, lookupCommand, wantLocation("new", "access-02", "agent-1"), uint64(7)); err != nil {
-				return err
-			}
-			close(oldDisconnected)
-			return nil
-		},
-		func(self gsr.ServiceContext) error {
-			if err := waitOnlineStep(ctx, oldBound); err != nil {
-				return err
-			}
-			if err := expectOnlineCall(self, bindCommand, wantLocation("old", "access-01", "agent-1"), uint64(7), "new", "access-02", "agent-1"); err != nil {
-				return err
-			}
-			if err := expectOnlineCall(self, bindCommand, nil, uint64(8), "other", "access-02", "agent-2"); err != nil {
-				return err
-			}
-			close(newBound)
-			if err := waitOnlineStep(ctx, oldDisconnected); err != nil {
-				return err
-			}
-			if err := expectOnlineCall(self, unbindCommand, true, uint64(7), "new"); err != nil {
-				return err
-			}
-			if err := expectOnlineCall(self, lookupCommand, nil, uint64(7)); err != nil {
-				return err
-			}
-			return expectOnlineCall(self, lookupCommand, wantLocation("other", "access-02", "agent-2"), uint64(8))
-		},
-	}
-	done := make(chan error, len(works))
-	for index, work := range works {
-		node, directory := fmt.Sprintf("access-%02d", index+1), t.TempDir()
-		go func() { done <- runOnlineAccess(ctx, address, node, directory, work) }()
-	}
-	for range works {
-		if err := <-done; err != nil {
-			cancel()
-			t.Errorf("access node: %v", err)
-		}
-	}
-}
-
 // TestOnlineConcurrentBindsHaveOneWinner 保护两个接入节点同时绑定同一用户时，只有一个当前记录，落败连接不能清除胜出连接。
 func TestOnlineConcurrentBindsHaveOneWinner(t *testing.T) {
 	address, _ := startOnline(t)

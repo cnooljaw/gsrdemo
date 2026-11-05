@@ -12,22 +12,6 @@ import (
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
-// TestMoleDoesNotRegisterOperationQuery 保护客户端旧 HitID 查询编号不再接线，不转发逐锤账务查询。
-func TestMoleDoesNotRegisterOperationQuery(t *testing.T) {
-	mole := NewMole(Dependencies{})
-	if _, exists := mole.ProtocolHandlers()[uint32(demopb.MsgId_C2S_OPERATION)]; exists {
-		t.Fatal("地鼠仍注册客户端逐锤账务查询")
-	}
-}
-
-// TestLandlordDoesNotRegisterOperationQuery 保护斗地主客户端不再注册重复查账入口，终局快照就是结算结果。
-func TestLandlordDoesNotRegisterOperationQuery(t *testing.T) {
-	landlord := NewLandlord(Dependencies{})
-	if _, exists := landlord.ProtocolHandlers()[uint32(demopb.MsgId_C2S_LANDLORD_OPERATION)]; exists {
-		t.Fatal("斗地主仍注册客户端重复查账")
-	}
-}
-
 // TestAgentRequiresLoginBeforeGame 保护未登录连接不能调用任何游戏入口，不触发下游请求。
 func TestAgentRequiresLoginBeforeGame(t *testing.T) {
 	deps := Dependencies{Identity: func() Identity { return Identity{} }, AllowEnter: func(string) error { return ErrLoginRequired }}

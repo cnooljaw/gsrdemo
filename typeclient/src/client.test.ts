@@ -44,21 +44,23 @@ const originalSocket = globalThis.WebSocket;
 beforeEach(() => { globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket; });
 afterEach(() => { globalThis.WebSocket = originalSocket; });
 
-// 保护推送与响应交错时仍按 request_id 匹配，旧余额和重复修订不能重复修改显示。
-test("推送与响应交错，余额按修订收敛并保留确认版本", async () => {
+// 保护交错消息按 request_id 匹配，余额按修订收敛，身份、金额和版本保留 64 位精度。
+test("交错响应与余额推送保持修订顺序及 64 位精度", async () => {
+  const amount = 9_223_372_036_854_775_807n;
+  const maxUint64 = 18_446_744_073_709_551_615n;
   const client = await DemoClient.connect("ws://fixture", 1000);
   try {
-    client.enter(create(SnapshotSchema, { attackName: "attack" }), create(BalanceSchema, { balance: 1000n, confirmed: { amount: 1000n, version: 8n }, revision: 1n }));
+    client.enter(create(SnapshotSchema, { attackName: "attack" }), create(BalanceSchema, { balance: amount, confirmed: { amount, version: maxUint64 }, revision: maxUint64 - 2n }));
     const pending = client.request(MsgId.C2S_LOGIN, new Uint8Array(), MsgId.S2C_LOGIN, LoginResponseSchema);
     const wire = FakeSocket.last;
-    wire.envelope(MsgId.S2C_BALANCE_PUSH, 0, toBinary(BalancePushSchema, create(BalancePushSchema, { silver: { balance: 900n, revision: 3n } })));
-    wire.envelope(MsgId.S2C_BALANCE_PUSH, 0, toBinary(BalancePushSchema, create(BalancePushSchema, { silver: { balance: 1n, revision: 2n } })));
-    wire.envelope(MsgId.S2C_LOGIN, wire.requests[0]!, toBinary(LoginResponseSchema, create(LoginResponseSchema, { userId: 7n })));
-    assert.equal((await pending).userId, 7n);
-    assert.equal(client.silver?.balance, 900n);
-    assert.equal(client.silver?.confirmed?.version, 8n);
-    assert.equal(client.silver?.confirmed?.amount, 1000n);
-    assert.equal(client.applyBalance(create(BalanceSchema, { balance: 5n, revision: 3n })), false);
+    wire.envelope(MsgId.S2C_BALANCE_PUSH, 0, toBinary(BalancePushSchema, create(BalancePushSchema, { silver: { balance: amount - 100n, revision: maxUint64 } })));
+    wire.envelope(MsgId.S2C_BALANCE_PUSH, 0, toBinary(BalancePushSchema, create(BalancePushSchema, { silver: { balance: 1n, revision: maxUint64 - 1n } })));
+    wire.envelope(MsgId.S2C_LOGIN, wire.requests[0]!, toBinary(LoginResponseSchema, create(LoginResponseSchema, { userId: maxUint64 })));
+    assert.equal((await pending).userId, maxUint64);
+    assert.equal(client.silver?.balance, amount - 100n);
+    assert.equal(client.silver?.confirmed?.version, maxUint64);
+    assert.equal(client.silver?.confirmed?.amount, amount);
+    assert.equal(client.applyBalance(create(BalanceSchema, { balance: 5n, revision: maxUint64 })), false);
   } finally {
     client.close();
   }

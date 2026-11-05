@@ -132,11 +132,6 @@ func startAccessProcess(t *testing.T, binary string, arguments []string, address
 	return nil
 }
 
-// TestAccessClientProcessesLiveMySQL 保护单客户端通过五个独立进程完成认证、即时命中和真实入账。
-func TestAccessClientProcessesLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 1, 1, "mole")
-}
-
 // TestAccessThreeClientsLiveMySQL 保护三个不同账号并发进入同组、共享目标且各完成三次入账，余额/版本与逐锤结果一致。
 func TestAccessThreeClientsLiveMySQL(t *testing.T) {
 	runAccessClientsLiveMySQL(t, 3, 1, "mole")

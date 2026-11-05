@@ -197,13 +197,15 @@ unset demo_password
 | 重新生成 Go / TS 业务协议 | `./scripts/dev.sh generate access` |
 | TS 客户端单测 | `npm --prefix typeclient test` |
 
+测试按行为归属组织：纯规则用例就近放在被测文件对应的 `*_test.go`，`*_cluster_test.go` 验证节点调用契约，`*_live_test.go` / `*_process_test.go` 验证真实存储或进程协作，`*_load_test.go` 提供显式启用的容量样本。共享启动与后端替身放在 `*_fixture_test.go`。不同层只保留各自特有的失败边界，避免重复验证同一成功流程。
+
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 
-单/双接入的独立节点进程、单/三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）：
+单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）：
 
 ```shell
 GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
-  -run '^TestAccess(ClientProcessesLiveMySQL|ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult)$' -v -timeout=1m
+  -run '^TestAccess(ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult|CLITokenFileAuthentication)$' -v -timeout=1m
 ```
 
 用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正与旧客户端查账入口拒绝，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、终态后不重复查账、三人唯一结算、结算服中断重试及已保存结果的地主节点重启恢复。地鼠验收程序在客户端结束后按本次操作 ID 集中核对 SQL 账务与钱包，不经玩家协议轮询。测试覆盖入口与恢复边界见 [设计文档](docs/DESIGN.md#9-验证依据与设计取舍)。
