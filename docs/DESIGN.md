@@ -111,7 +111,7 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 
 进入走低频协调：Agent 向 `mole / 1` 获取进入地址，再调用 Entry。Entry 核对 Online 当前绑定，优先复用 Accounting 的余额缓存；仅缓存缺失才查询 `settlement-read` 初始化。错误不视为缓存缺失，有待确认操作时普通余额查询不能改写确认基线。
 
-目录优先补足未满组，Join 前保留路由；Join 超时可能已经成功，保留原路由，不能另开组。确认原组已停止后才清理重选。相同用户重进保留组/座位、更新连接；离开清理同时检查 LoginID 和 Membership。
+目录优先补足未满组，Join 前保留路由；Join 超时可能已经成功，保留原路由，不能另开组。确认原组已停止后才清理重选。相同用户重进保留组/座位、更新连接。Entry 在余额初始化前生成本次 Membership，同一身份贯穿 Accounting 缓存与组目录；离开清理同时检查 LoginID 和 Membership，Accounting 也只接受当前 Membership 的回收通知。
 
 即时命中只经过三个参与者，不等待 Redis 或 MySQL：
 
@@ -157,7 +157,7 @@ sequenceDiagram
 
 [Submission](../nodes/mole/molesubmissionservice.go) 的三个动作是 `restoreCheckpoint`、`submitBatch`、`completeBatch`。保存原批次成功后才请求结算；收到有效回执后，先更新 Redis 确认统计、序号并清除待批次，再通知 Accounting，通知未接纳时保留内存回执重试。恢复批次只交付已确认统计，完成初始化后才开放新记账。
 
-Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余额、释放本批待扣并保留后续操作，重算显示余额；不能把已入账扣款再减一次。显示有差异时经 `MoleService → AttackService → 当前 Agent` 推送绝对余额校正，一致时不重复奖励。校正不复活目标、不修改已完成命中、不反向冲账。
+Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余额、释放本批待扣并保留后续操作，重算显示余额；不能把已入账扣款再减一次。确认基线降低而后续批次仍待确认时，显示余额最低为 0，后续待操作继续按原 ID 等待回执，不因显示封底而取消。显示有差异时经 `MoleService → AttackService → 当前 Agent` 推送绝对余额校正，一致时不重复奖励。校正不复活目标、不修改已完成命中、不反向冲账。
 
 ### 5.4 检查点与故障边界
 
@@ -206,8 +206,8 @@ handleSettlementReceipt：核对原 ID、终态和三人余额
 ### 6.3 重试、清理与恢复
 
 - 每桌注册私有回执地址。请求未知时约 5～5.5 秒后按原操作重提，保存或本地发送失败至少间隔 1 秒；非临时远端错误保留请求并停止自动提交。原始 OperationID 和金额不变。
-- 有效回执只应用一次，过滤其他牌局、重复回执和迟到错误。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，不重新调用结算。
-- 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。三人离开后，待记录清理完成才退出桌 Service。
+- 有效回执只应用一次，过滤其他牌局、重复回执和迟到错误。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，从本次等待结束后至少退避 1 秒再清理；等待期间的 Tick 不访问 Redis，也不重新调用结算。
+- 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。结算确认后或全不叫回到 waiting 时，桌通过本地 Call 请求目录释放已离开成员；目录确认无同桌新预留才移除座位。空桌在待记录清理完成后退出；刚创建等待首次 Join 的桌不提前退出。
 - 启动时加载 Redis 待请求，为各请求创建恢复专用 AttackService；不发布可加入桌名，也不向旧连接广播，确认并清理后退出。只恢复已保存的局末账务，不恢复进行中手牌。清理前崩溃会再次按原 ID 幂等补交。
 
 ## 7. Settlement：并行执行与权威账务

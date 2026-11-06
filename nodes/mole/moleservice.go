@@ -85,19 +85,16 @@ func (service *moleService) handleEntryAddress(_ gsr.CommandContext, userID uint
 }
 
 // reserve 在 Join 前保留座位；未知结果的重试始终回到原组。
-func (service *moleService) handleReserve(self gsr.CommandContext, userID uint64, loginID string) (moleRoute, error) {
-	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(loginID) {
+func (service *moleService) handleReserve(self gsr.CommandContext, userID uint64, loginID, membership string) (moleRoute, error) {
+	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(loginID) || !validMoleIdentifier(membership) {
 		return moleRoute{}, errInvalidMoleInput
 	}
 	if _, exists := service.routes[userID]; !exists && len(service.routes) >= maxMoleUsers {
 		return moleRoute{}, errMoleBusy
 	}
 	name := service.routes[userID].Attack
-	membership, err := randomInstance("member-")
-	if err != nil {
-		return moleRoute{}, err
-	}
 	if name == "" {
+		var err error
 		name, err = service.chooseGroup(self)
 		if err != nil {
 			return moleRoute{}, err
@@ -155,7 +152,7 @@ func (service *moleService) handleDeparted(self gsr.CommandContext, userID uint6
 	if !service.removeMember(userID, loginID, attack, membership) {
 		return nil
 	}
-	if err := self.SendName(moleAccountingName, accountingForgetCommand, userID); err != nil {
+	if err := self.SendName(moleAccountingName, accountingForgetCommand, userID, membership); err != nil {
 		logMoleError(self, "余额缓存回收通知未接纳", err)
 	}
 	return nil

@@ -73,6 +73,8 @@ func (backend *landlordTestBackend) Handle(_ gsr.CommandContext, cmd runtime.Com
 		return map[string]any{"login_id": login, "access_node": "access-01", "agent_name": "agent"}, nil
 	case 4:
 		return map[string]any{"user_id": uid, "amount": int64(10000), "version": uint64(1)}, nil
+	case releaseCommand:
+		return true, nil
 	}
 	return nil, runtime.ErrUnknownCommand
 }

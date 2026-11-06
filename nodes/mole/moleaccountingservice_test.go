@@ -70,7 +70,7 @@ func fundedAccounting(t *testing.T, amount int64) *moleAccountingService {
 	if err := service.handleInitPool(nil, molePool{}, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.handleSetBalance(nil, 7, silverBalance{Amount: amount, Version: 1}.snapshot()); err != nil {
+	if _, err := service.handleSetBalance(nil, 7, "member-test", silverBalance{Amount: amount, Version: 1}.snapshot()); err != nil {
 		t.Fatal(err)
 	}
 	return service
@@ -83,7 +83,7 @@ func TestMolePendingLimitIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, uid := range []uint64{1, 2} {
-		if _, err := service.handleSetBalance(nil, uid, silverBalance{Amount: 1000000, Version: 1}.snapshot()); err != nil {
+		if _, err := service.handleSetBalance(nil, uid, "member-test", silverBalance{Amount: 1000000, Version: 1}.snapshot()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -147,7 +147,7 @@ func TestMemoryHitReturnsFullResultAndDoesNotSpendPendingCredit(t *testing.T) {
 func TestMemoryHitRequiresInitializationAndNeverReappliesUnknownRetry(t *testing.T) {
 	service := newMoleAccountingService()
 	event := exampleHit("hit-1", 7)
-	if _, err := service.handleResumeBalance(nil, 7); !errors.Is(err, errAccountingUnavailable) {
+	if _, err := service.handleResumeBalance(nil, 7, "member-test"); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("uninitialized resume became a cache miss: %v", err)
 	}
 	if _, err := service.accept(event, false); !errors.Is(err, errAccountingUnavailable) {
@@ -268,14 +268,14 @@ func TestMoleAccountLeaveAndReenterKeepsPendingDebit(t *testing.T) {
 	if _, err := service.accept(event, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.handleForgetBalance(nil, 7); err != nil {
+	if err := service.handleForgetBalance(nil, 7, "member-test"); err != nil {
 		t.Fatal(err)
 	}
 	view, err := service.handleLoadBalance(nil, 7)
 	if err != nil || view["available"] != int64(900) {
 		t.Fatalf("leaving lost pending debit: %v %v", view, err)
 	}
-	resumed, err := service.handleResumeBalance(nil, 7)
+	resumed, err := service.handleResumeBalance(nil, 7, "new-member")
 	if err != nil || resumed == nil || resumed.(map[string]any)["available"] != int64(900) {
 		t.Fatalf("resume lost pending debit: %v %v", resumed, err)
 	}
@@ -283,17 +283,20 @@ func TestMoleAccountLeaveAndReenterKeepsPendingDebit(t *testing.T) {
 		Results:  []operationResult{{HitID: event.HitID, Status: "committed", OriginBatch: "batch-1"}},
 		Balances: map[uint64]silverBalance{7: {Amount: 900, Version: 2}}})
 	service.evictIfIdle(7)
+	if err := service.handleForgetBalance(nil, 7, "member-test"); err != nil {
+		t.Fatal(err)
+	}
 	view, err = service.handleLoadBalance(nil, 7)
 	if err != nil || view["available"] != int64(900) {
 		t.Fatalf("reenter did not cancel delayed eviction: %v %v", view, err)
 	}
-	if err := service.handleForgetBalance(nil, 7); err != nil {
+	if err := service.handleForgetBalance(nil, 7, "new-member"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.handleLoadBalance(nil, 7); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("idle departed account was retained: %v", err)
 	}
-	if resumed, err := service.handleResumeBalance(nil, 7); err != nil || resumed != nil {
+	if resumed, err := service.handleResumeBalance(nil, 7, "member-test"); err != nil || resumed != nil {
 		t.Fatalf("cache miss was not distinguished from failure: %v %v", resumed, err)
 	}
 }
@@ -314,7 +317,7 @@ func TestMoleBalanceQueryCannotRebasePendingHits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			view, err := service.handleSetBalance(nil, 7, queried.snapshot())
+			view, err := service.handleSetBalance(nil, 7, "member-test", queried.snapshot())
 			if err != nil || view["balance"] != second.Balance || view["confirmed_balance"] != int64(1000) ||
 				view["version"] != uint64(1) || view["revision"] != second.Revision || view["available"] != int64(800) {
 				t.Fatalf("query rebased pending hits: %v %v", view, err)
@@ -327,10 +330,36 @@ func TestMoleBalanceQueryCannotRebasePendingHits(t *testing.T) {
 				t.Fatalf("receipt lost later hit: %v %v", view, err)
 			}
 			// 其他用户有待确认操作不应妨碍本用户初始化/刷新。
-			view, err = service.handleSetBalance(nil, 8, silverBalance{Amount: 500, Version: 1}.snapshot())
+			view, err = service.handleSetBalance(nil, 8, "member-test", silverBalance{Amount: 500, Version: 1}.snapshot())
 			if err != nil || view["confirmed_balance"] != int64(500) {
 				t.Fatalf("other user's pending hit blocked balance load: %v %v", view, err)
 			}
 		})
+	}
+}
+
+// TestMoleRejectedBatchKeepsDisplayNonNegative 保护首批被拒绝且还有后续待扣时，客户端显示余额不能变成负数。
+func TestMoleRejectedBatchKeepsDisplayNonNegative(t *testing.T) {
+	service := fundedAccounting(t, 300)
+	first, second := exampleHit("hit-1", 7), exampleHit("hit-2", 7)
+	if _, err := service.accept(first, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.accept(second, false); err != nil {
+		t.Fatal(err)
+	}
+	// 外部操作已把权威钱包扣到零，第一批的失败回执先到，第二锤仍在后续批次。
+	service.applyReceipt(batchReceipt{BatchID: "first-batch", Results: []operationResult{{HitID: first.HitID, Status: "rejected", OriginBatch: "first-batch"}}, Balances: map[uint64]silverBalance{7: {Amount: 0, Version: 2}}})
+	view, err := service.balanceSnapshot(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view["balance"] != int64(0) || view["available"] != int64(0) || len(service.pending) != 1 {
+		t.Fatalf("余额未封底或丢弃了后续操作: %v", view)
+	}
+	service.applyReceipt(batchReceipt{BatchID: "second-batch", Results: []operationResult{{HitID: second.HitID, Status: "rejected", OriginBatch: "second-batch"}}, Balances: map[uint64]silverBalance{7: {Amount: 0, Version: 2}}})
+	view, err = service.balanceSnapshot(7)
+	if err != nil || view["balance"] != int64(0) || len(service.pending) != 0 || service.pool.Hits != 0 {
+		t.Fatalf("后续拒绝回执未正常收敛: %v %v", view, err)
 	}
 }

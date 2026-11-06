@@ -90,7 +90,14 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 		}
 	}
 	service.retrySettlement(self)
-	if service.settlement.operation != nil && !service.settlement.pending() && !service.settlement.cleanupPending {
+	if service.settlement.pending() || (service.game.Phase != "waiting" && service.game.Phase != "finished") {
+		return nil
+	}
+	reclaimed, err := service.releaseDetachedPlayers(self)
+	if err != nil {
+		return err
+	}
+	if (reclaimed || service.settlement.operation != nil) && !service.settlement.cleanupPending {
 		if !service.recovery {
 			for _, player := range service.game.Players {
 				if player.UserID != 0 {
@@ -102,6 +109,39 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 		return nil
 	}
 	return nil
+}
+
+// releaseDetachedPlayers 在牌局不再需要手牌后回收已离开成员；尚未完成的结算仍保留全部参与者。
+func (service *attackService) releaseDetachedPlayers(self gsr.ServiceContext) (bool, error) {
+	reclaimed := false
+	for seat, player := range service.game.Players {
+		if player.UserID == 0 || player.AccessNode != "" {
+			continue
+		}
+		released, err := service.releaseRoute(self, player)
+		if err != nil {
+			return reclaimed, err
+		}
+		if released {
+			service.game.remove(seat)
+			reclaimed = true
+		}
+	}
+	return reclaimed, nil
+}
+
+func (service *attackService) releaseRoute(self gsr.ServiceContext, player landlordPlayer) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	value, err := self.CallName(ctx, landlordName, releaseCommand, player.UserID, player.LoginID, service.game.Name, player.Membership, service.game.Phase == "waiting")
+	if err != nil {
+		return false, err
+	}
+	released, ok := value.(bool)
+	if !ok {
+		return false, errLandlordInput
+	}
+	return released, nil
 }
 
 func (service *attackService) registerSettlementReply(self gsr.ServiceContext) error {
@@ -220,8 +260,13 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 		service.game.detach(seat)
 		return true, nil
 	}
-	if err := self.SendName(landlordName, releaseCommand, uid, login, service.game.Name, player.Membership, service.game.Phase == "waiting"); err != nil {
+	released, err := service.releaseRoute(self, player)
+	if err != nil {
 		return false, err
+	}
+	if !released {
+		service.game.detach(seat)
+		return true, nil
 	}
 	if service.game.remove(seat) {
 		if service.settlement.cleanupPending {

@@ -50,7 +50,10 @@ func startLandlordRedis(t *testing.T) *redis.Client {
 	return client
 }
 
-type landlordCleanupFault struct{ blocked atomic.Bool }
+type landlordCleanupFault struct {
+	blocked atomic.Bool
+	slow    bool
+}
 
 var _ redis.Hook = (*landlordCleanupFault)(nil)
 
@@ -61,6 +64,10 @@ func (*landlordCleanupFault) ProcessPipelineHook(next redis.ProcessPipelineHook)
 func (fault *landlordCleanupFault) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		if cmd.Name() == "hdel" && fault.blocked.Load() {
+			if fault.slow {
+				<-ctx.Done()
+				return ctx.Err()
+			}
 			return errors.New("test Redis cleanup unavailable")
 		}
 		return next(ctx, cmd)
@@ -242,5 +249,28 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 				t.Fatalf("清理重试重复结算或保留终态记录: calls=%d", backend.calls.Load())
 			}
 		})
+	}
+}
+
+// TestSlowCleanupKeepsSnapshotResponsive 保护 Redis 慢故障期间，已确认牌桌的快照不被周期清理重试积压饿死。
+func TestSlowCleanupKeepsSnapshotResponsive(t *testing.T) {
+	journal := landlordJournal{client: startLandlordRedis(t), key: "review:cleanup"}
+	fault := &landlordCleanupFault{slow: true}
+	fault.blocked.Store(true)
+	journal.client.AddHook(fault)
+	defer fault.blocked.Store(false)
+	game := testLandlordGame(t)
+	game.Phase, game.Winner = "finished", game.Landlord
+	service := newAttackService(game.Name, journal, nil, "settlement")
+	service.game = *game
+	service.settlement.prepareOperation(*game)
+	service.settlement.operation.Status = "committed"
+	service.settlement.cleanupPending = true
+	routes := map[cluster.NodeID]string{}
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
+	time.Sleep(2 * time.Second)
+	_, err := landlordTestRPC(t, routes, "landlord", game.Name, roomSnapshotCommand, uint64(1), "login")
+	if err != nil {
+		t.Fatalf("Redis 清理每秒超时，250ms Tick 积压导致本桌快照超时: %v", err)
 	}
 }

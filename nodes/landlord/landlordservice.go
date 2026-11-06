@@ -156,9 +156,14 @@ func (service *landlordService) handleSeal(_ gsr.CommandContext, room string, se
 	return nil
 }
 
-func (service *landlordService) handleRelease(_ gsr.CommandContext, uid uint64, login, room, membership string, waiting bool) error {
-	if service.routes[uid] != (landlordRoute{room, login, membership}) {
-		return nil
+// handleRelease 确认旧成员可移除；同桌的新预留尚未 Join 时返回 false，保留原座位供重连。
+func (service *landlordService) handleRelease(_ gsr.CommandContext, uid uint64, login, room, membership string, waiting bool) (bool, error) {
+	route, exists := service.routes[uid]
+	if !exists || route.Room != room {
+		return true, nil
+	}
+	if route != (landlordRoute{room, login, membership}) {
+		return false, nil
 	}
 	delete(service.routes, uid)
 	table := service.tables[room]
@@ -171,7 +176,7 @@ func (service *landlordService) handleRelease(_ gsr.CommandContext, uid uint64, 
 	} else {
 		service.tables[room] = table
 	}
-	return nil
+	return true, nil
 }
 
 func (service *landlordService) handleDiscard(_ gsr.CommandContext, room string) error {

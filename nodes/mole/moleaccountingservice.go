@@ -91,9 +91,10 @@ type accountingEntry struct {
 
 // moleAccount 将同一用户的确认余额、内存修订与退出标记放在一起，仅归 Accounting 修改。
 type moleAccount struct {
-	Balance  silverBalance
-	Revision uint64
-	Departed bool
+	Balance    silverBalance
+	Revision   uint64
+	Membership string
+	Departed   bool
 	// Pending 只索引本人的待确认 HitID，内容仍由全局幂等索引唯一持有。
 	Pending map[string]struct{}
 }
@@ -174,8 +175,8 @@ func (service *moleAccountingService) handleLoadBalance(_ gsr.CommandContext, us
 }
 
 // resumeBalance 进入时复用本地账并取消延迟回收；真正的缓存缺失返回 nil，错误不当作未命中。
-func (service *moleAccountingService) handleResumeBalance(_ gsr.CommandContext, userID uint64) (any, error) {
-	if userID == 0 {
+func (service *moleAccountingService) handleResumeBalance(_ gsr.CommandContext, userID uint64, membership string) (any, error) {
+	if userID == 0 || !validMoleIdentifier(membership) {
 		return nil, errInvalidMoleInput
 	}
 	if !service.ready {
@@ -185,12 +186,12 @@ func (service *moleAccountingService) handleResumeBalance(_ gsr.CommandContext, 
 	if account == nil {
 		return nil, nil
 	}
-	account.Departed = false
+	account.Membership, account.Departed = membership, false
 	return service.balanceSnapshot(userID)
 }
 
-func (service *moleAccountingService) handleSetBalance(_ gsr.CommandContext, userID uint64, value map[string]any) (map[string]any, error) {
-	if userID == 0 {
+func (service *moleAccountingService) handleSetBalance(_ gsr.CommandContext, userID uint64, membership string, value map[string]any) (map[string]any, error) {
+	if userID == 0 || !validMoleIdentifier(membership) {
 		return nil, errInvalidMoleInput
 	}
 	if !service.ready {
@@ -208,7 +209,7 @@ func (service *moleAccountingService) handleSetBalance(_ gsr.CommandContext, use
 	if account == nil || !service.hasPending(userID) {
 		account = service.updateBalance(userID, balance)
 	}
-	account.Departed = false
+	account.Membership, account.Departed = membership, false
 	return service.balanceSnapshot(userID)
 }
 
@@ -240,7 +241,8 @@ func (service *moleAccountingService) balanceAmounts(userID uint64) (int64, int6
 	if delta > 0 && amount > math.MaxInt64-delta {
 		return 0, 0, errInvalidMoleInput
 	}
-	return amount + delta, max(amount-debit, 0), nil
+	// 确认基线可能因外部扣款降为零；后续待操作仍要保留，但显示不能透支。
+	return max(amount+delta, 0), max(amount-debit, 0), nil
 }
 
 func (service *moleAccountingService) balanceSnapshot(userID uint64) (map[string]any, error) {
@@ -419,8 +421,8 @@ func (service *moleAccountingService) handleOperationStatus(_ gsr.CommandContext
 	return nil, nil
 }
 
-func (service *moleAccountingService) handleForgetBalance(_ gsr.CommandContext, userID uint64) error {
-	if account := service.accounts[userID]; account != nil {
+func (service *moleAccountingService) handleForgetBalance(_ gsr.CommandContext, userID uint64, membership string) error {
+	if account := service.accounts[userID]; account != nil && account.Membership == membership {
 		account.Departed = true
 		service.evictIfIdle(userID)
 	}

@@ -248,7 +248,7 @@ func TestMoleMissingCheckpointNeedsExplicitInitialization(t *testing.T) {
 	fixture := newSettlementFixture()
 	fixture.checkpoint = moleCheckpoint{client: startMoleRedis(t), key: "test:missing"}
 	routes, _ := prepareMoleCluster(t, fixture)
-	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingResumeCommand, uint64(1)); !errors.Is(err, errAccountingUnavailable) {
+	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingResumeCommand, uint64(1), "member-test"); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("missing checkpoint allowed balance access: %v", err)
 	}
 	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand); !errors.Is(err, errAccountingUnavailable) {

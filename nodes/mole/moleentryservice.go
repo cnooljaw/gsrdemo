@@ -50,13 +50,18 @@ func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uin
 	if !ok || current["login_id"] != loginID || current["access_node"] != accessNode || current["agent_name"] != agentName {
 		return nil, errMoleStaleLogin
 	}
-	balance, err := service.entryBalance(self, userID)
+	// 同一成员身份贯穿余额缓存与组目录，旧连接的迟到回收不能作用于本次进入。
+	membership, err := randomInstance("member-")
+	if err != nil {
+		return nil, err
+	}
+	balance, err := service.entryBalance(self, userID, membership)
 	if err != nil {
 		return nil, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
-		value, err := self.CallName(ctx, moleServiceName, moleReserveCommand, userID, loginID)
+		value, err := self.CallName(ctx, moleServiceName, moleReserveCommand, userID, loginID, membership)
 		cancel()
 		if err != nil {
 			return nil, err
@@ -94,9 +99,9 @@ func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uin
 }
 
 // entryBalance 只在缓存缺失时直接查询 settlement，不与批次提交共享等待队列。
-func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID uint64) (any, error) {
+func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID uint64, membership string) (any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
-	cached, err := self.CallName(ctx, moleAccountingName, accountingResumeCommand, userID)
+	cached, err := self.CallName(ctx, moleAccountingName, accountingResumeCommand, userID, membership)
 	cancel()
 	if err != nil || cached != nil {
 		return cached, err
@@ -113,5 +118,5 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
 	defer cancel()
-	return self.CallName(ctx, moleAccountingName, accountingSetBalanceCommand, userID, confirmed.snapshot())
+	return self.CallName(ctx, moleAccountingName, accountingSetBalanceCommand, userID, membership, confirmed.snapshot())
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,4 +245,118 @@ func TestMoleUsesConfiguredSettlementNode(t *testing.T) {
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
 	hit := testHitTarget(t, routes, snapshot, 1, "login", "configured-node")
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
+}
+
+// resumeBarrier 仅延迟 Resume 的回包，用于复现两个接入实例重叠清理的真实消息顺序。
+type resumeBarrier struct {
+	owner   gsr.Service
+	armed   atomic.Bool
+	resumed chan struct{}
+	release chan struct{}
+}
+
+var _ gsr.Service = (*resumeBarrier)(nil)
+
+func (probe *resumeBarrier) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	return probe.owner.OnStart(ctx, self)
+}
+func (probe *resumeBarrier) OnStop(ctx context.Context) error { return probe.owner.OnStop(ctx) }
+func (probe *resumeBarrier) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	value, err := probe.owner.Handle(self, cmd, args...)
+	if cmd == accountingResumeCommand && err == nil && value != nil && probe.armed.CompareAndSwap(true, false) {
+		close(probe.resumed)
+		select {
+		case <-probe.release:
+		case <-time.After(time.Second):
+			return nil, context.DeadlineExceeded
+		}
+	}
+	return value, err
+}
+
+type resumeBarrierContext struct {
+	gsr.ServiceContext
+	probe *resumeBarrier
+}
+
+var _ gsr.ServiceContext = (*resumeBarrierContext)(nil)
+
+func (self *resumeBarrierContext) CreateService(ctx context.Context, child gsr.Service) (runtime.ServiceID, error) {
+	if _, ok := child.(*moleAccountingService); ok {
+		self.probe.owner = child
+		child = self.probe
+	}
+	return self.ServiceContext.CreateService(ctx, child)
+}
+
+type resumeBarrierMain struct {
+	main  gsr.Service
+	probe *resumeBarrier
+}
+
+var _ gsr.Service = (*resumeBarrierMain)(nil)
+
+func (main *resumeBarrierMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	return main.main.OnStart(ctx, &resumeBarrierContext{self, main.probe})
+}
+func (main *resumeBarrierMain) OnStop(ctx context.Context) error { return main.main.OnStop(ctx) }
+func (main *resumeBarrierMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	return main.main.Handle(self, cmd, args...)
+}
+
+// TestMoleReplacedLoginKeepsReenteredAccount 保护新接入 Resume 与旧接入 Leave 重叠时，真实 Entry 成功后仍可命中。
+func TestMoleReplacedLoginKeepsReenteredAccount(t *testing.T) {
+	fixture := newSettlementFixture()
+	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: fixture})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
+	probe := &resumeBarrier{resumed: make(chan struct{}), release: make(chan struct{})}
+	address, _ := startMoleTestNode(t, "mole", routes, &resumeBarrierMain{newMoleTestMain(t, fixture), probe})
+	routes["mole"] = address
+	old := enterMoleTestUser(t, routes, 1, "old-login", "access-01")
+	if _, err := moleRPC(t, routes, "online", "online", 1, uint64(1), "new-login", "access-02", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	// 新接入先取得 Entry 地址，随后进入已通过 Online 校验并停在 Resume 回包。
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleResolveEntryCommand, uint64(1), "new-login", "access-02", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	probe.armed.Store(true)
+	type response struct {
+		value any
+		err   error
+	}
+	entered := make(chan response, 1)
+	go func() {
+		value, err := callMoleEnter(t, routes, uint64(1), "new-login", "access-02", "agent")
+		entered <- response{value, err}
+	}()
+	select {
+	case <-probe.resumed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("new entry did not resume")
+	}
+	// 旧 Agent 收到替换通知后清理旧成员，目录将 Forget 送到正在 Resume 的 Accounting。
+	if _, err := moleRPC(t, routes, "mole", old["attack_name"].(string), attackLeaveCommand, uint64(1), "old-login"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleHealthCommand); err != nil {
+		t.Fatal(err)
+	}
+	close(probe.release)
+	var result response
+	select {
+	case result = <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("new Entry did not return")
+	}
+	if result.err != nil {
+		t.Fatalf("new Entry: %v", result.err)
+	}
+	snapshot := result.value.(map[string]any)
+	target := snapshot["targets"].([]any)[0].(map[string]any)
+	_, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), attackHitCommand, uint64(1), "new-login", "new-action", target["spawn_seq"], target["hole"])
+	if err != nil {
+		t.Fatalf("新 Entry 已成功，但首锤被旧离开清理破坏: %v", err)
+	}
 }

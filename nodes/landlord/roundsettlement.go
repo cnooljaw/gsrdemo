@@ -192,15 +192,22 @@ func (round *roundSettlement) applyReceipt(id string, fields map[string]any, cod
 	}
 	operation.Status, operation.Reason, operation.Balances = status, reason, balances
 	round.cleanupPending = true
+	round.retryAt = time.Time{}
 	return true, nil
 }
 
 func (round *roundSettlement) deletePending() error {
+	if time.Now().Before(round.retryAt) {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	if err := round.journal.client.HDel(ctx, round.journal.key, round.operation.ID).Err(); err != nil {
+		// 从本次等待结束后退避，队列中积压的 Tick 只检查时间，不再次等待 Redis。
+		round.retryAt = time.Now().Add(time.Second)
 		return err
 	}
 	round.cleanupPending = false
+	round.retryAt = time.Time{}
 	return nil
 }
