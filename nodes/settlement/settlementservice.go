@@ -29,7 +29,7 @@ var (
 	errWalletNotFound        = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.wallet_not_found", "wallet must be explicitly initialized")
 )
 
-// settlementService 是一个独立写入入口；三个命令共享事务规则，不持有钱包副本。
+// settlementService 是写入池的独立成员；三个命令共享事务规则，不持有钱包副本。
 type settlementService struct {
 	store      settlementStore
 	dispatcher *gsr.Dispatcher
@@ -47,11 +47,11 @@ func newSettlementService(db *sql.DB) *settlementService {
 	return service
 }
 
-func (service *settlementService) OnStart(_ context.Context, self gsr.ServiceContext) error {
+func (service *settlementService) OnStart(context.Context, gsr.ServiceContext) error {
 	if service.store.db == nil {
 		return errors.New("settlement requires a database")
 	}
-	return self.Node().RegisterService(settlementWriteName, self.Self())
+	return nil
 }
 
 func (service *settlementService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {

@@ -24,7 +24,17 @@ func NewMain(node cluster.NodeID, db *sql.DB, workers int) gsr.Service {
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, child := range []gsr.Service{newSettlementService(service.db), newSettlementQueryService(service.db), newSettlementSubmitService(service.db, service.workers)} {
+	// 池成员各自串行处理，邮箱容量沿用 Runtime 的 YAML 配置；共享数据库由宿主关闭。
+	if err := self.Node().CreateServicePool(ctx, settlementWriteName, gsr.ServicePoolConfig{
+		Size: service.workers,
+		NewService: func() gsr.Service {
+			return newSettlementService(service.db)
+		},
+	}); err != nil {
+		return err
+	}
+	// 游戏调用方尚未迁移到 Call，暂时保留原 Send 入口。
+	for _, child := range []gsr.Service{newSettlementQueryService(service.db), newSettlementSubmitService(service.db, service.workers)} {
 		if _, err := self.CreateService(ctx, child); err != nil {
 			return err
 		}

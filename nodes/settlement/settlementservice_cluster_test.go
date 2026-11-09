@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"net"
 	"sync"
@@ -199,5 +201,83 @@ func TestSettlementReadWriteBoundaries(t *testing.T) {
 	}
 	if _, err := businessRPC(t, routes, "settlement", "settlement-write", getBalanceCommand, uint64(1)); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatal(err)
+	}
+}
+
+type settlementBatchStarted struct {
+	id      string
+	started chan struct{}
+}
+
+func (argument settlementBatchStarted) Match(value driver.Value) bool {
+	if value != argument.id {
+		return false
+	}
+	select {
+	case argument.started <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// TestSettlementCallPoolSlowSQLIsolation 保护普通 Cluster Call 写入口的慢 SQL 不阻塞其他写入和独立查询，回执与错误直接返回各调用者。
+func TestSettlementCallPoolSlowSQLIsolation(t *testing.T) {
+	store, mock := mockStore(t)
+	mock.MatchExpectationsInOrder(false)
+	started := make(chan struct{}, 1)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT request_hash, receipt_json").
+		WithArgs(settlementBatchStarted{"slow", started}).
+		WillDelayFor(time.Second).
+		WillReturnError(errors.New("injected SQL outage"))
+	mock.ExpectRollback()
+
+	request := testBatch("fast", testSingle("op-fast", 2, 10, 0))
+	batch, err := decodeSettlementBatch(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := batch.digest()
+	receipt := settlementReceipt{BatchID: "fast", Results: []settlementResult{{OperationID: "op-fast", Status: "committed", OriginBatch: "fast"}}, Balances: []walletBalance{{UserID: 2, Amount: 990, Version: 2}}}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT request_hash, receipt_json").WithArgs("fast").
+		WillReturnRows(sqlmock.NewRows([]string{"request_hash", "receipt_json"}).AddRow(hash[:], encoded))
+	mock.ExpectRollback()
+	mock.ExpectQuery("SELECT amount, version").WithArgs(uint64(3)).
+		WillReturnRows(sqlmock.NewRows([]string{"amount", "version"}).AddRow(1000, 1))
+
+	address, _ := startSettlementTestNode(t, store.db)
+	slow := make(chan error, 1)
+	go func() {
+		defer close(slow)
+		_, err := settlementRPC(t, address, settleBatchCommand, testBatch("slow", testSingle("op-slow", 1, 10, 0)))
+		slow <- err
+	}()
+	// 即使前面的断言失败，也等当前调用结束后再关闭节点与数据库。
+	defer func() {
+		if err := <-slow; !errors.Is(err, errSettlementUnavailable) {
+			t.Errorf("慢 SQL 未返回稳定错误: %v", err)
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("慢请求未进入 SQL")
+	}
+	begin := time.Now()
+	value, err := settlementRPC(t, address, settleBatchCommand, request)
+	if err != nil || value.(map[string]any)["batch_id"] != "fast" {
+		t.Fatalf("快速写入未返回原回执: %v %v", value, err)
+	}
+	value, err = settlementRPC(t, address, getBalanceCommand, uint64(3))
+	if err != nil || value.(map[string]any)["amount"] != int64(1000) {
+		t.Fatalf("独立查询被阻塞: %v %v", value, err)
+	}
+	if elapsed := time.Since(begin); elapsed >= 500*time.Millisecond {
+		t.Fatalf("其他写入或查询等待了慢 SQL: %v", elapsed)
 	}
 }

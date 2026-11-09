@@ -15,7 +15,6 @@ const (
 	settlementSubmitName                       = "settlement-submit"
 	settlementResultCommand  runtime.CommandID = 20
 	settlementExecuteCommand runtime.CommandID = 1
-	defaultSettlementWorkers                   = 8
 	settlementQueueWait                        = 2 * time.Second
 )
 

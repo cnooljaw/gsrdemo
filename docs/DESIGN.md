@@ -214,17 +214,19 @@ handleSettlementReceipt：核对原 ID、终态和三人余额
 
 ### 7.1 入口与执行边界
 
-[MainService](../nodes/settlement/main_service.go) 组装三个公开 Service：
+[MainService](../nodes/settlement/main_service.go) 创建 `settlement-write` 服务池，并组装独立查询与现有游戏使用的异步入口：
 
 | 入口 | 调用方式与用途 |
 | --- | --- |
 | `settlement-submit` | 游戏 Send 写入，1=Batch、6=Single、7=Group；参数带回执节点与服务名 |
 | `settlement-read` | Call 查询批次、参与者操作或钱包；余额初始化及受控核查使用 |
-| `settlement-write` | 保留相同写规则的 Call 接口，供管理/验收工具使用 |
+| `settlement-write` | GSR 服务池；Call 1=Batch、6=Single、7=Group，直接返回回执或错误 |
+
+写入池由 GSR v1.0.3 `CreateServicePool` 创建，每个成员是独立的 [settlementService](../nodes/settlement/settlementservice.go)，各自串行执行，多个成员可并行处理不同调用。MainService 统一注册池名，成员不再自行注册名称。名称路由轮询选择一次成员，选中邮箱满即返回 ErrMailboxFull，不扫描其他成员；同步 Call 仍阻塞调用方 Service，超时不撤销目标请求。SQL 保持独立的 2 秒预算，Call 路径没有旧异步任务的 2 秒排队期限。
 
 [异步入口](../nodes/settlement/settlementsubmitservice.go) 解码校验后，从轮转起点向独立执行 Service 投递任务；目标邮箱满或不可用时尝试其他执行者，全部拒绝则尝试回传 busy。入口不做 SQL、不等待结果、不维护回执关联表。各执行者独立执行事务，再直接 Send Command 20 的 `(id, receipt, code)` 给游戏 owner。
 
-默认配置为 8 个执行者、10 个 MySQL 连接、Mailbox 容量 64，见 [settlement YAML](../configs/settlement-01.yaml)。任务在入口生成后到执行前最多等待 2 秒，超期返回 busy、不启动 SQL；SQL 使用独立的 2 秒上下文预算。入口自身 Mailbox 的等待不计入该任务期限。执行者共享连接池，不共享事务或镜像钱包；连接池、热点锁和数据库能力共同限制实际并行。
+默认配置为写入池 8 个成员、旧异步入口 8 个执行者，两组成员共享同一个最多 10 个连接的 MySQL 池；各成员 Mailbox 容量为 64，见 [settlement YAML](../configs/settlement-01.yaml)。旧异步任务在入口生成后到执行前最多等待 2 秒，超期返回 busy、不启动 SQL；入口自身 Mailbox 的等待不计入该任务期限。两条写入路径使用相同事务规则，不共享事务或镜像钱包；连接池、热点锁和数据库能力共同限制实际并行。
 
 各游戏及 access 通过 `settlement_node` 选择配置中的目标。可配置其他结算节点共用同一个权威库，行锁与唯一键保护跨节点并发；没有自动发现或切换。执行者退出后不自动重建，余下执行者继续接纳。
 
@@ -281,7 +283,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
 | 地鼠内存余额、回执、重试与检查点恢复 | [Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
 | 斗地主规则、终态一次应用、删除失败继续清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[回执集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
-| 事务、全局幂等、锁冲突与异步并行 | [SQL 用例](../nodes/settlement/settlementservice_mysql_test.go)、[真实并发用例](../nodes/settlement/settlementservice_concurrency_live_test.go)、[异步用例](../nodes/settlement/settlementsubmitservice_test.go) |
+| 事务、全局幂等、锁冲突、Call 池与异步并行 | [SQL 用例](../nodes/settlement/settlementservice_mysql_test.go)、[Call 池用例](../nodes/settlement/settlementservice_cluster_test.go)、[真实并发用例](../nodes/settlement/settlementservice_concurrency_live_test.go)、[异步用例](../nodes/settlement/settlementsubmitservice_test.go) |
 | 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
 
 ### 9.2 并行与容量取舍
@@ -296,6 +298,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
+| 游戏结算改用 Call | settlement-write 已池化；mole 的 Submission 和 landlord 的桌仍使用原 Send/Command 20。后续逐节点切换 Call、核对超时预算，再删除 settlement-submit、自建执行者、回调地址和过期测试，更新教程与压测入口。现有异步压测不代表新 Call 池的性能。 |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
 | 斗地主输光封顶 | 当前余额不足整笔拒绝。后续实扣不超过可结算余额，账户最低为 0，赢家收益按实扣同步调整；多人分配、取整和限制生命周期仍需确认。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |

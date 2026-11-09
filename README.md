@@ -109,7 +109,7 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 
 演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。
 
-每个 settlement 节点提供 `settlement-submit` 异步入口，默认 8 个结算执行 Service、10 个 MySQL 连接、邮箱容量 64，可通过 `worker_count/mysql_connections/mailbox_capacity` 调整。游戏 Send 提交，Command 20 回执直接返回原游戏 Service；地鼠仍 100ms/阈值归批、单个在途批次，斗地主每局一笔多人事务。结果未知按原 ID 限频重试，已确认结果不重复应用。`settlement-read` 和旧 `settlement-write` Call 接口保留给查询及受控管理/验收工具。`settlement_node` 默认 `settlement`，其他实例在 `nodes.yaml` 配置并显式选择，共用权威 MySQL，不自动切换。
+每个 settlement 节点提供 `settlement-write` Call 服务池、`settlement-read` 查询和当前游戏使用的 `settlement-submit` 异步入口。通过 `worker_count/mysql_connections/mailbox_capacity` 调整容量；当前两条写入路径各有默认 8 个执行者，共享 10 个 MySQL 连接，各邮箱容量 64。地鼠仍 100ms/阈值归批、单个在途批次，斗地主每局一笔多人事务；游戏暂用 Send 提交，Command 20 回执直接返回原游戏 Service，结果未知按原 ID 限频重试。调用边界见 [Settlement 设计](docs/DESIGN.md#7-settlement并行执行与权威账务)，调用方迁移列于[后续工作](docs/DESIGN.md#10-后续工作)。`settlement_node` 默认 `settlement`，其他实例在 `nodes.yaml` 配置并显式选择，共用权威 MySQL，不自动切换。
 
 需要复测本机并行与批次取舍时运行 `./scripts/dev.sh load settlement`；三轮 64 来源确认运行 `GSRDEMO_SETTLEMENT_ASYNC_CONFIRM=1 ./scripts/dev.sh load settlement`。测试使用真实本机专用 MySQL、双向 TCP，只清理自建样本，逐档核对余额/版本/唯一账务；结果保存在 `.cache/settlement-async-*.json`。当前默认依据短程对比选择，不代表生产在线人数上限。
 

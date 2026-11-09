@@ -177,14 +177,14 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 
 ### 2.6 通用银子结算接口
 
-Node 取配置 `settlement_node`，默认 `settlement`。入口见[异步提交](../nodes/settlement/settlementsubmitservice.go)、[查询](../nodes/settlement/settlementqueryservice.go)、[受控 Call 写入](../nodes/settlement/settlementservice.go)。
+Node 取配置 `settlement_node`，默认 `settlement`。入口见[异步提交](../nodes/settlement/settlementsubmitservice.go)、[查询](../nodes/settlement/settlementqueryservice.go)、[Call 写入池](../nodes/settlement/settlementservice.go)。
 
 | Service / Command | 调用方式 | 顺序参数 | 完成结果 |
 | --- | --- | --- | --- |
 | `settlement-submit / 1` Batch | 游戏 Send | `request map, replyNode string, replyService string` | 稍后回 Command 20，id 为原 BatchID |
 | `settlement-submit / 6` Single | 游戏 Send | 同上 | 稍后回 Command 20，id 为原 OperationID |
 | `settlement-submit / 7` Group | 游戏 Send | 同上 | 稍后回 Command 20，id 为原 OperationID |
-| `settlement-write / 1,6,7` | 受控管理/验收 Call | `request map` | 直接返回完整回执；游戏写入不走此接口 |
+| `settlement-write / 1,6,7` | Call，GSR 池成员处理 | `request map` | 直接返回完整回执或错误；当前游戏仍使用上述 Send 入口 |
 | `settlement-read / 2` GetBatch | 受控 Call | `batchID string` | 原回执，缺失为 nil；不是提交前置查询 |
 | `settlement-read / 3` GetOperation | 受控 Call | `U, operationID string` | OperationResult；不存在或 U 不是参与用户时为 nil |
 | `settlement-read / 4` GetBalance | 游戏准入/初始化或受控 Call | `U` | map：`user_id uint64, amount int64, version uint64`；钱包缺失报错 |
@@ -227,7 +227,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 游戏 owner 注册私有回执服务名，并显式填写 replyNode/replyService；地址不进入账务摘要，不能来自客户端或依赖远程 Source。原请求与内容保持不变，约 5～5.5s 未确认时重提；有效终态只应用一次，其他操作、重复回执和迟到错误不能覆盖已确认结果。Send、路由或回执丢失可能只体现为超时，没有同步远端错误。
 
-结算入口不做 SQL，独立执行者提交后直接回执。任务生成后排队超过 2s 不启动 SQL、尝试回 busy；不包含入口邮箱里的先前等待。并行度、事务及 MySQL 表设计见 [Settlement 设计](DESIGN.md#7-settlement并行执行与权威账务)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
+旧 Send 入口不做 SQL，独立执行者提交后直接回执；任务生成后排队超过 2s 不启动 SQL、尝试回 busy，不包含入口邮箱里的先前等待。Call 路径由 GSR 直接路由至写入池成员，无回执地址或 Command 20；Call 超时不保证请求未执行，重试必须保持原 ID 和内容，也没有上述异步任务排队期限。池容量、SQL 预算与事务边界见 [Settlement 设计](DESIGN.md#7-settlement并行执行与权威账务)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
 
 ### 2.7 回调 access：快照、校正与旧登录替换
 

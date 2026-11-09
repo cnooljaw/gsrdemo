@@ -19,6 +19,8 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/model"
 )
 
+const defaultSettlementWorkers = 8
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
