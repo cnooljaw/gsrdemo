@@ -1,6 +1,6 @@
 # GSR Demo
 
-基于 **GSR v1.0.2** 的多节点打地鼠与三人斗地主示例，使用 TypeScript 命令行客户端演示登录、地鼠命中反馈、斗地主叫抢出牌和银子结算。
+基于 **GSR v1.0.3** 的多节点打地鼠与三人斗地主示例，使用 TypeScript 命令行客户端演示登录、地鼠命中反馈、斗地主叫抢出牌和银子结算。
 
 调用链：客户端 → access → login / online / mole 或 landlord → settlement → MySQL。Redis 保存临时认证 Token、地鼠批次/统计检查点及斗地主待结算局末结果。
 
@@ -212,7 +212,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
 
 ## 源码与文档
 
-每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，客户端在 `typeclient`；节点间直接使用 GSR Call/Send。构建依赖发布的 GSR v1.0.2。
+每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，客户端在 `typeclient`；节点间直接使用 GSR Call/Send。构建依赖发布的 GSR v1.0.3。
 
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)。
 - 异步结算与推送：见 [结算入口及执行者](nodes/settlement/settlementsubmitservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/gameagent/mole.go)。

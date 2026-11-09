@@ -10,7 +10,7 @@
 
 | 项目 | 当前约定 |
 | --- | --- |
-| 传输 | GSR v1.0.2 MAC WebSocket；握手、序号和 MAC 由 Gate 处理，业务使用 Protobuf Envelope；MAC 不加密载荷 |
+| 传输 | GSR v1.0.3 MAC WebSocket；握手、序号和 MAC 由 Gate 处理，业务使用 Protobuf Envelope；MAC 不加密载荷 |
 | Envelope | `msg_id uint32`、`request_id uint32`、`payload bytes` |
 | 请求与响应 | 请求使用非零 request_id，响应回同一 ID；服务端推送 request_id=0 |
 | 身份与路由 | 客户端不填写 UserID、LoginID、节点或 Service 地址，由 Agent 根据当前连接补齐 |
