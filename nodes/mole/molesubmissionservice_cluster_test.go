@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cnooljaw/gsr/runtime"
 )
 
 // TestMolePoisonBatchPausesSubmission 保护永久错误保留原批次并停止新记账，不持续冲击结算节点。
@@ -117,10 +119,10 @@ func TestMoleDamagedCheckpointBlocksAccounting(t *testing.T) {
 	}
 }
 
-// TestMolePendingBatchAllowsHitsAndRetriesOriginalRequest 保护缺回执期间其他组仍返回内存余额，超时按原批次重提且只入账一次。
-func TestMolePendingBatchAllowsHitsAndRetriesOriginalRequest(t *testing.T) {
+// TestMoleSettlementCallTimeoutAllowsHitsAndRetriesOriginalBatch 保护 Call 等待和超时期间其他组仍返回内存余额，重试保持原批次且只入账一次。
+func TestMoleSettlementCallTimeoutAllowsHitsAndRetriesOriginalBatch(t *testing.T) {
 	fixture := newSettlementFixture()
-	fixture.loseFirstReply = true
+	fixture.firstReplyDelay = 3100 * time.Millisecond
 	routes, _ := prepareMoleCluster(t, fixture)
 	first := enterMoleTestUser(t, routes, 1, "login-1", "access-01")
 	_ = enterMoleTestUser(t, routes, 2, "login-2", "access-01")
@@ -159,6 +161,71 @@ func TestMolePendingBatchAllowsHitsAndRetriesOriginalRequest(t *testing.T) {
 	firstRequest, retry := <-fixture.submitRequests, <-fixture.submitRequests
 	if !reflect.DeepEqual(firstRequest, retry) {
 		t.Fatal("retry changed the batch identity or contents")
+	}
+}
+
+// TestMoleSubmissionRetriesUnconfirmedCallResults 保护临时远端错误、满邮箱或畸形回执不丢弃批次，原请求重试后只确认一次。
+func TestMoleSubmissionRetriesUnconfirmedCallResults(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		err       error
+		malformed bool
+	}{
+		{"database_unavailable", runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.store_unavailable", "injected SQL error"), false},
+		{"mailbox_full", runtime.ErrMailboxFull, false},
+		{"malformed_receipt", nil, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			fixture := newSettlementFixture()
+			fixture.firstError, fixture.badFirstReceipt = scenario.err, scenario.malformed
+			routes, _ := prepareMoleCluster(t, fixture)
+			snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
+			hit := testHitTarget(t, routes, snapshot, 1, "login", "action")
+			waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
+			if fixture.submitCount.Load() != 2 || len(fixture.submitRequests) != 2 || len(fixture.submitted) != 1 || len(fixture.batchQueries) != 0 {
+				t.Fatal("未按原请求直接重试，或发生重复入账/额外查账")
+			}
+			first, retry := <-fixture.submitRequests, <-fixture.submitRequests
+			if !reflect.DeepEqual(first, retry) {
+				t.Fatal("重试改变了批次身份或内容")
+			}
+			state, err := fixture.checkpoint.load(context.Background())
+			if err != nil || state.Pending != nil || state.Sequence != 1 || state.Pool.Hits != 1 {
+				t.Fatalf("批次确认丢失或重复: %+v %v", state, err)
+			}
+		})
+	}
+}
+
+// TestMoleCheckpointRetryKeepsReceivedReceipt 保护 Call 已返回后 Redis 故障只重试确认和交付，不再次调用结算或重复统计。
+func TestMoleCheckpointRetryKeepsReceivedReceipt(t *testing.T) {
+	fixture := newSettlementFixture()
+	fixture.firstReplyDelay = 300 * time.Millisecond
+	routes, _ := prepareMoleCluster(t, fixture)
+	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
+	var unavailable atomic.Bool
+	fixture.checkpoint.client.AddHook(moleRedisFaultHook{unavailable: &unavailable})
+	defer unavailable.Store(false)
+	hit := testHitTarget(t, routes, snapshot, 1, "login", "action")
+	select {
+	case <-fixture.submitted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("批次未提交")
+	}
+	unavailable.Store(true)
+	// 此查询在同一 Submission 邮箱中等待 Call 返回，确保已走过 Redis 确认失败。
+	value, err := moleRPC(t, routes, "mole", moleSubmissionName, submissionStateCommand)
+	if err != nil || value.(map[string]any)["blocked"] != false || value.(map[string]any)["batch_id"] == nil {
+		t.Fatalf("Redis 故障未保留当前批次: %v %v", value, err)
+	}
+	unavailable.Store(false)
+	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
+	if fixture.submitCount.Load() != 1 {
+		t.Fatal("已有有效回执仍重复调用了结算")
+	}
+	state, err := fixture.checkpoint.load(context.Background())
+	if err != nil || state.Pending != nil || state.Pool.Hits != 1 {
+		t.Fatalf("检查点重试丢失或重复统计: %+v %v", state, err)
 	}
 }
 

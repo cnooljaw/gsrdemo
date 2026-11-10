@@ -149,13 +149,13 @@ sequenceDiagram
     participant C as 结算节点
     A->>S: Send：原批次
     S->>R: savePendingBatch
-    S->>C: Send：Batch / 1
-    C-->>S: Send：回执 / 20
+    S->>C: Call：settlement-write / 1
+    C-->>S: 返回完整回执或错误
     S->>R: completeBatch
     S-->>A: Send：完整回执
 ```
 
-[Submission](../nodes/mole/molesubmissionservice.go) 的三个动作是 `restoreCheckpoint`、`submitBatch`、`completeBatch`。保存原批次成功后才请求结算；收到有效回执后，先更新 Redis 确认统计、序号并清除待批次，再通知 Accounting，通知未接纳时保留内存回执重试。恢复批次只交付已确认统计，完成初始化后才开放新记账。
+[Submission](../nodes/mole/molesubmissionservice.go) 的三个动作是 `restoreCheckpoint`、`submitBatch`、`completeBatch`。保存原批次成功后，Call 结算写池并直接校验返回的完整回执，不注册远程回调名称或 Command 20。等待仅占用 Submission，Accounting 和各组继续处理命中。收到有效回执后，先更新 Redis 确认统计、序号并清除待批次，再通知 Accounting；Redis 确认或本地通知失败时保留内存回执，只重试完成与交付，不重复调用结算。恢复批次只交付已确认统计，完成初始化后才开放新记账。
 
 Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余额、释放本批待扣并保留后续操作，重算显示余额；不能把已入账扣款再减一次。确认基线降低而后续批次仍待确认时，显示余额最低为 0，后续待操作继续按原 ID 等待回执，不因显示封底而取消。显示有差异时经 `MoleService → AttackService → 当前 Agent` 推送绝对余额校正，一致时不重复奖励。校正不复活目标、不修改已完成命中、不反向冲账。
 
@@ -164,7 +164,7 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 [Redis 检查点](../nodes/mole/molesubmissionservice_redis.go) 用一个版本 2 的值保存确认统计、最后序号/批次及至多一个 pending。Lua CAS 整体替换，不在 Lua 中计算金额；已完成的原批次重复处理不累计统计，跨批旧操作按 `origin_batch` 排除重复累计。检查点无 TTL，缺失时必须显式 `-init-accounting`，损坏或旧格式拒绝开放记账；不支持两个活跃 mole 共用同一个 key。
 
 - 未保存 Redis 的内存命中可能在崩溃时丢失；已保存批次按原 ID、顺序和金额恢复，不查询后再抽奖或重新生成请求。
-- Send 后约 5～5.5 秒未获有效回执，按原请求重提；临时错误按 100ms～2s 退避。确定性错误保留批次并暂停新记账，非法回执忽略，继续等待原请求的有效结果。
+- 结算 Call 使用独立的 3 秒等待预算，Redis 使用 500ms 预算。Call 超时不保证未入账；超时、满邮箱、临时错误或非法回执保留原请求，按 100ms～2s 退避重试，不逐笔查账。确定性错误保留批次并暂停新记账。
 - Leave 不取消已接纳账务；有待扣时保留账户缓存，结清且已离开后才回收。目录/账户上限为 100,000，每组请求记录上限 1,024，已完成记账记录上限 4,096。
 - 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 唤醒 owner，目标邮箱满只跳过本次，不切断后续周期。Submission 退出暂停新记账；Accounting 或目录退出使宿主返回失败；单个组退出不停止其他组。
 
@@ -218,9 +218,9 @@ handleSettlementReceipt：核对原 ID、终态和三人余额
 
 | 入口 | 调用方式与用途 |
 | --- | --- |
-| `settlement-submit` | 游戏 Send 写入，1=Batch、6=Single、7=Group；参数带回执节点与服务名 |
+| `settlement-submit` | 旧 Send 写入，1=Batch、6=Single、7=Group；当前斗地主仍用 7，参数带回执节点与服务名 |
 | `settlement-read` | Call 查询批次、参与者操作或钱包；余额初始化及受控核查使用 |
-| `settlement-write` | GSR 服务池；Call 1=Batch、6=Single、7=Group，直接返回回执或错误 |
+| `settlement-write` | GSR 服务池；Call 1=Batch、6=Single、7=Group，地鼠用 1，直接返回回执或错误 |
 
 写入池由 GSR v1.0.3 `CreateServicePool` 创建，每个成员是独立的 [settlementService](../nodes/settlement/settlementservice.go)，各自串行执行，多个成员可并行处理不同调用。MainService 统一注册池名，成员不再自行注册名称。名称路由轮询选择一次成员，选中邮箱满即返回 ErrMailboxFull，不扫描其他成员；同步 Call 仍阻塞调用方 Service，超时不撤销目标请求。SQL 保持独立的 2 秒预算，Call 路径没有旧异步任务的 2 秒排队期限。
 
@@ -298,7 +298,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
-| 游戏结算改用 Call | settlement-write 已池化；mole 的 Submission 和 landlord 的桌仍使用原 Send/Command 20。后续逐节点切换 Call、核对超时预算，再删除 settlement-submit、自建执行者、回调地址和过期测试，更新教程与压测入口。现有异步压测不代表新 Call 池的性能。 |
+| 游戏结算改用 Call | settlement-write 已池化，mole 已改用 Call；landlord 的桌仍使用原 Send/Command 20。后续切换 landlord 并核对外层等待预算，再删除 settlement-submit、自建执行者、回调地址和过期测试，完成教程与压测入口调整。现有异步压测不代表新 Call 池的性能。 |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
 | 斗地主输光封顶 | 当前余额不足整笔拒绝。后续实扣不超过可结算余额，账户最低为 0，赢家收益按实扣同步调整；多人分配、取整和限制生命周期仍需确认。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |

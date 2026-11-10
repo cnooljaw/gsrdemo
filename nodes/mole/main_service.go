@@ -33,7 +33,7 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 		{moleAccountingName, accounting},
 		{moleServiceName, directory},
 		{moleEntryName, newMoleEntryService(service.settlementNode)},
-		{moleSubmissionName, newMoleSubmissionService(service.checkpoint, service.settlementNode, service.node)},
+		{moleSubmissionName, newMoleSubmissionService(service.checkpoint, service.settlementNode)},
 	} {
 		id, err := self.CreateService(ctx, child.service)
 		if err != nil {

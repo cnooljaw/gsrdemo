@@ -70,7 +70,7 @@ func TestMoleCorrectionUsesCurrentLogin(t *testing.T) {
 	if _, err := moleRPC(t, routes, "settlement", "settlement", 997, false); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.After(settlementReplyWait + 2*time.Second)
+	deadline := time.After(moleTestWait)
 	for {
 		select {
 		case message := <-agent.messages:

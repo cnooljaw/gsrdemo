@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	jitter "math/rand/v2"
 	"reflect"
 	"time"
 
@@ -14,20 +12,17 @@ import (
 )
 
 const (
-	moleSubmissionName                         = "mole-submission"
-	submissionBatchCommand   runtime.CommandID = 1
-	submissionTickCommand    runtime.CommandID = 10
-	submissionStateCommand   runtime.CommandID = 11
-	submissionReceiptCommand runtime.CommandID = 20
-	settlementReplyWait                        = 5 * time.Second
+	moleSubmissionName                       = "mole-submission"
+	submissionBatchCommand runtime.CommandID = 1
+	submissionTickCommand  runtime.CommandID = 10
+	submissionStateCommand runtime.CommandID = 11
+	moleSettlementTimeout                    = 3 * time.Second
 )
 
 // moleSubmissionService 独占 Redis 检查点和结算调用；只推进一个在途批次，不持有钱包。
 type moleSubmissionService struct {
 	store          moleCheckpoint
 	settlementNode cluster.NodeID
-	replyNode      cluster.NodeID
-	replyName      cluster.ServiceName
 	batch          *moleBatch
 	receipt        *batchReceipt
 	ready          bool
@@ -39,22 +34,17 @@ type moleSubmissionService struct {
 
 var _ gsr.Service = (*moleSubmissionService)(nil)
 
-func newMoleSubmissionService(store moleCheckpoint, settlementNode, replyNode cluster.NodeID) *moleSubmissionService {
-	service := &moleSubmissionService{store: store, settlementNode: settlementNode, replyNode: replyNode}
+func newMoleSubmissionService(store moleCheckpoint, settlementNode cluster.NodeID) *moleSubmissionService {
+	service := &moleSubmissionService{store: store, settlementNode: settlementNode}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		submissionBatchCommand:   service.handleSubmit,
-		submissionTickCommand:    service.handleTick,
-		submissionStateCommand:   service.handleState,
-		submissionReceiptCommand: service.handleSettlementReceipt,
+		submissionBatchCommand: service.handleSubmit,
+		submissionTickCommand:  service.handleTick,
+		submissionStateCommand: service.handleState,
 	})
 	return service
 }
 
 func (service *moleSubmissionService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	service.replyName = cluster.ServiceName("mole-settle-" + rand.Text())
-	if err := self.Node().RegisterService(service.replyName, self.Self()); err != nil {
-		return err
-	}
 	_, err := self.CreateService(ctx, &molePulse{target: self.Self(), command: submissionTickCommand, period: accountingPeriod, pauseAccounting: true})
 	return err
 }
@@ -82,7 +72,7 @@ func (service *moleSubmissionService) handleSubmit(self gsr.CommandContext, batc
 	}
 	copied := batch.clone()
 	service.batch = &copied
-	// 保存原批次后异步提交；等待回执期间仍可处理状态查询和重复通知。
+	// 保存原批次后 Call 结算；等待仅占用 Submission，Accounting 继续处理命中。
 	if err := service.submitBatch(self); err != nil {
 		service.retryOrPause(self, err)
 		return err
@@ -115,7 +105,7 @@ func (service *moleSubmissionService) handleTick(self gsr.CommandContext) error 
 
 func (service *moleSubmissionService) retryOrPause(self gsr.ServiceContext, err error) {
 	var status *runtime.StatusError
-	if errors.As(err, &status) && (status.Class == runtime.ErrorClassDomain && status.Code != "settlement.store_unavailable" && status.Code != "mole.accounting_unavailable" && status.Code != "settlement.busy") {
+	if errors.As(err, &status) && (status.Class == runtime.ErrorClassDomain && status.Code != "settlement.store_unavailable" && status.Code != "mole.accounting_unavailable") {
 		service.fault = err
 		_ = self.SendName(moleAccountingName, accountingPauseCommand)
 		logMoleError(self, "结算提交暂停，保留原批次，修复后重启恢复", err)
@@ -155,7 +145,7 @@ func (service *moleSubmissionService) restoreCheckpoint(self gsr.ServiceContext)
 	return nil
 }
 
-// submitBatch 先保存原批次再发送；成功只表示接纳，原批次保留到有效回执完成交付。
+// submitBatch 先保存原批次，再 Call 结算并校验完整回执；结果未知时保留原请求。
 func (service *moleSubmissionService) submitBatch(self gsr.ServiceContext) error {
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
 	err := service.store.savePendingBatch(ctx, *service.batch)
@@ -163,11 +153,18 @@ func (service *moleSubmissionService) submitBatch(self gsr.ServiceContext) error
 	if err != nil {
 		return err
 	}
-	if err := self.Cluster().Send(service.settlementNode, "settlement-submit", 1, service.batch.wire(), string(service.replyNode), string(service.replyName)); err != nil {
+	ctx, cancel = context.WithTimeout(context.Background(), moleSettlementTimeout)
+	value, err := self.Cluster().Call(ctx, service.settlementNode, "settlement-write", 1, service.batch.wire())
+	cancel()
+	if err != nil {
 		return err
 	}
-	service.retryAt = time.Now().Add(settlementReplyWait + jitter.N(500*time.Millisecond))
-	return nil
+	receipt, err := decodeBatchReceipt(value, *service.batch)
+	if err != nil {
+		return err
+	}
+	service.receipt = &receipt
+	return service.completeBatch(self)
 }
 
 // completeBatch 先持久化确认统计并清除待批次，再通知 Accounting；通知未接纳时保留回执重试。
@@ -189,29 +186,5 @@ func (service *moleSubmissionService) completeBatch(self gsr.ServiceContext) err
 	}
 	service.batch, service.receipt = nil, nil
 	service.retryDelay, service.retryAt = 0, time.Time{}
-	return nil
-}
-
-func (service *moleSubmissionService) handleSettlementReceipt(self gsr.CommandContext, id string, fields map[string]any, code string) error {
-	if service.batch == nil || service.batch.ID != id || service.receipt != nil || service.fault != nil {
-		return nil
-	}
-	if code != "" {
-		err := runtime.NewStatusError(runtime.ErrorClassDomain, runtime.ErrorCode(code), "settlement request did not complete")
-		service.retryOrPause(self, err)
-		return nil
-	}
-	receipt, err := decodeBatchReceipt(fields, *service.batch)
-	if err != nil {
-		// 不接受格式错误的结果，原请求继续保留；不能把坏回执当成拒绝入账。
-		logMoleError(self, "忽略非法结算回执", err)
-		return nil
-	}
-	service.receipt = &receipt
-	service.retryAt = time.Time{}
-	if err := service.completeBatch(self); err != nil {
-		service.retryOrPause(self, err)
-		return err
-	}
 	return nil
 }
