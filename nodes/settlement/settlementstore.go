@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -61,7 +62,51 @@ func readBatchReceipt(ctx context.Context, tx *sql.Tx, batch settlementBatch) (s
 	if err == nil && receipt.BatchID != batch.ID {
 		err = errors.New("stored batch identity mismatch")
 	}
+	if err == nil && len(batch.Operations) == 1 && batch.Operations[0].Policy != "" && !validStoredGroup(batch.Operations[0], receipt) {
+		err = errors.New("invalid stored group receipt")
+	}
 	return receipt, true, err
+}
+
+// validStoredGroup 核对原回执的参与者及分配规则，避免重试时确认损坏的实际扣返。
+func validStoredGroup(operation silverOperation, receipt settlementReceipt) bool {
+	if len(receipt.Results) != 1 || receipt.Results[0].OperationID != operation.ID || receipt.Results[0].Status != "committed" || receipt.Results[0].OriginBatch != receipt.BatchID {
+		return false
+	}
+	result := receipt.Results[0]
+	expected := make(map[uint64]silverChange, len(operation.Changes))
+	for _, c := range operation.Changes {
+		expected[c.UserID] = c
+	}
+	if len(result.ActualChanges) != len(expected) || len(receipt.Balances) != len(expected) {
+		return false
+	}
+	// 使用每人的实扣重建最小付款余额，重新计算分配；不依赖当前已经变化的钱包。
+	wallets := make(map[uint64]walletBalance, len(expected))
+	for _, c := range result.ActualChanges {
+		want, ok := expected[c.UserID]
+		if !ok || wallets[c.UserID].UserID != 0 || c.Debit < 0 || c.Credit < 0 || c.Debit > want.Debit || c.Credit > want.Credit {
+			return false
+		}
+		wallets[c.UserID] = walletBalance{UserID: c.UserID, Amount: c.Debit, Version: 1}
+	}
+	seen := map[uint64]bool{}
+	for _, balance := range receipt.Balances {
+		if _, ok := expected[balance.UserID]; !ok || seen[balance.UserID] {
+			return false
+		}
+		seen[balance.UserID] = true
+	}
+	switch operation.Policy {
+	case "equal":
+		actual, reason := settleEqualGroup(wallets, operation.Changes)
+		return reason == "" && len(result.ActualTransfers) == 0 && reflect.DeepEqual(actual, result.ActualChanges)
+	case "transfer":
+		actual, transfers, reason := settleTransferGroup(wallets, operation.Transfers)
+		return reason == "" && reflect.DeepEqual(actual, result.ActualChanges) && reflect.DeepEqual(transfers, result.ActualTransfers)
+	default:
+		return false
+	}
 }
 
 // applySettlementBatch 只操作调用方事务，钱包创建仅属于 initialize。
@@ -89,12 +134,41 @@ func applySettlementBatch(ctx context.Context, tx *sql.Tx, batch settlementBatch
 			continue
 		}
 		result := settlementResult{OperationID: operation.ID, Status: "committed", OriginBatch: batch.ID}
-		result.Reason = applySilverOperation(wallets, operation)
+		switch operation.Policy {
+		case "equal":
+			result.ActualChanges, result.Reason = settleEqualGroup(wallets, operation.Changes)
+		case "transfer":
+			result.ActualChanges, result.ActualTransfers, result.Reason = settleTransferGroup(wallets, operation.Transfers)
+		case "":
+			result.Reason = applySilverOperation(wallets, operation)
+		default:
+			return receipt, errInvalidSettlement
+		}
+		// 新规则中的异常不是牌局拒绝；回滚并返回确定性错误，保留原请求供修复后处理。
+		if operation.Policy != "" && result.Reason != "" {
+			switch result.Reason {
+			case "balance_overflow":
+				return receipt, errBalanceOverflow
+			case "version_overflow":
+				return receipt, errVersionOverflow
+			case "wallet_not_found":
+				return receipt, errWalletNotFound
+			default:
+				return receipt, errInvalidSettlement
+			}
+		}
 		if result.Reason != "" {
 			result.Status = "rejected"
-		} else {
+			result.ActualChanges, result.ActualTransfers = nil, nil
+		} else if operation.Policy == "" {
 			for _, change := range operation.Changes {
 				dirty[change.UserID] = true
+			}
+		} else {
+			for _, change := range result.ActualChanges {
+				if change.Debit != 0 || change.Credit != 0 {
+					dirty[change.UserID] = true
+				}
 			}
 		}
 		fresh = append(fresh, position)
@@ -244,9 +318,16 @@ func writeOperations(ctx context.Context, tx *sql.Tx, batch settlementBatch, rec
 		result := receipt.Results[position]
 		hash := operation.digest()
 		var debit, credit int64
-		for _, change := range operation.Changes {
-			debit += change.Debit
-			credit += change.Credit
+		if operation.Policy == "" {
+			for _, change := range operation.Changes {
+				debit += change.Debit
+				credit += change.Credit
+			}
+		} else {
+			for _, change := range result.ActualChanges {
+				debit += change.Debit
+				credit += change.Credit
+			}
 		}
 		values = append(values, "(?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args, operation.ID, hash[:], batch.ID, position, operation.Business, result.Status, debit, credit)
@@ -319,7 +400,8 @@ func (store settlementStore) getOperation(ctx context.Context, userID uint64, id
 	}
 	for _, change := range operation.Changes {
 		if change.UserID == userID {
-			return receipt.Results[position].wire(), nil
+			result := receipt.Results[position]
+			return map[string]any{"operation_id": result.OperationID, "status": result.Status, "reason": result.Reason, "origin_batch": result.OriginBatch}, nil
 		}
 	}
 	return nil, nil

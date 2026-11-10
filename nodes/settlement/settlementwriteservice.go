@@ -11,15 +11,17 @@ import (
 )
 
 const (
-	settlementWriteName                    = "settlement-write"
-	settlementReadName                     = "settlement-read"
-	settleBatchCommand   runtime.CommandID = 1
-	getBatchCommand      runtime.CommandID = 2
-	getOperationCommand  runtime.CommandID = 3
-	getBalanceCommand    runtime.CommandID = 4
-	settleSingleCommand  runtime.CommandID = 6
-	settleGroupCommand   runtime.CommandID = 7
-	settlementSQLTimeout                   = 2 * time.Second
+	settlementWriteName                          = "settlement-write"
+	settlementReadName                           = "settlement-read"
+	settleBatchCommand         runtime.CommandID = 1
+	getBatchCommand            runtime.CommandID = 2
+	getOperationCommand        runtime.CommandID = 3
+	getBalanceCommand          runtime.CommandID = 4
+	settleSingleCommand        runtime.CommandID = 6
+	settleGroupCommand         runtime.CommandID = 7
+	settleEqualGroupCommand    runtime.CommandID = 8
+	settleTransferGroupCommand runtime.CommandID = 9
+	settlementSQLTimeout                         = 2 * time.Second
 )
 
 var (
@@ -27,9 +29,11 @@ var (
 	errSettlementConflict    = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.identity_conflict", "settlement identity conflicts with stored content")
 	errSettlementUnavailable = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.store_unavailable", "settlement storage is unavailable; query or retry the original identity")
 	errWalletNotFound        = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.wallet_not_found", "wallet must be explicitly initialized")
+	errBalanceOverflow       = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.balance_overflow", "wallet balance would overflow")
+	errVersionOverflow       = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.version_overflow", "wallet version would overflow")
 )
 
-// settlementWriteService 是写入池的独立成员；三个命令共享事务规则，不持有钱包副本。
+// settlementWriteService 是写入池的独立成员；写命令共享事务规则，不持有钱包副本。
 type settlementWriteService struct {
 	store      settlementStore
 	dispatcher *gsr.Dispatcher
@@ -40,9 +44,11 @@ var _ gsr.Service = (*settlementWriteService)(nil)
 func newSettlementWriteService(db *sql.DB) *settlementWriteService {
 	service := &settlementWriteService{store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		settleBatchCommand:  service.handleSettleBatch,
-		settleSingleCommand: service.handleSettleSingle,
-		settleGroupCommand:  service.handleSettleGroup,
+		settleBatchCommand:         service.handleSettleBatch,
+		settleSingleCommand:        service.handleSettleSingle,
+		settleGroupCommand:         service.handleSettleGroup,
+		settleEqualGroupCommand:    service.handleSettleEqualGroup,
+		settleTransferGroupCommand: service.handleSettleTransferGroup,
 	})
 	return service
 }
@@ -86,6 +92,22 @@ func (service *settlementWriteService) handleSettleGroup(self gsr.CommandContext
 	return service.commit(self, batch)
 }
 
+func (service *settlementWriteService) handleSettleEqualGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+	batch, err := decodeEqualGroup(request)
+	if err != nil {
+		return nil, err
+	}
+	return service.commit(self, batch)
+}
+
+func (service *settlementWriteService) handleSettleTransferGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+	batch, err := decodeTransferGroup(request)
+	if err != nil {
+		return nil, err
+	}
+	return service.commit(self, batch)
+}
+
 func (service *settlementWriteService) commit(self gsr.ServiceContext, batch settlementBatch) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
 	defer cancel()
@@ -97,7 +119,7 @@ func (service *settlementWriteService) commit(self gsr.ServiceContext, batch set
 }
 
 func settlementError(self gsr.ServiceContext, err error) error {
-	if err == nil || errors.Is(err, errInvalidSettlement) || errors.Is(err, errSettlementConflict) || errors.Is(err, errWalletNotFound) {
+	if err == nil || errors.Is(err, errInvalidSettlement) || errors.Is(err, errSettlementConflict) || errors.Is(err, errWalletNotFound) || errors.Is(err, errBalanceOverflow) || errors.Is(err, errVersionOverflow) {
 		return err
 	}
 	_ = self.Logger().Error("结算数据库操作未确认完成", "error", err.Error())

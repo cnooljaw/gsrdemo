@@ -251,7 +251,7 @@ Call 等待会占用当前调用方 Service：地鼠由独立 Submission 等待�
 [事务实现](../nodes/settlement/settlementstore.go) 为每批开启一个 MySQL 事务：
 
 1. 核对已有 BatchID、OperationID；同 ID 同内容复用原结果，不同内容报冲突。按 UserID 排序，使用 `FOR UPDATE NOWAIT` 锁钱包，锁冲突返回可重试错误。
-2. 按请求顺序检查并计算余额、版本。Single 是一笔单人操作；Batch 中各笔单人操作分别判定；Group 是一笔多人操作，参与者全部通过才一起修改。余额不足会拒绝该操作，不自动扣到 0。
+2. 按请求顺序检查并计算余额、版本。Single 是一笔单人操作；Batch 中各笔单人操作分别判定；旧 Group 参与者全部通过才一起修改，余额不足时整笔拒绝。新均分 Group 和付款明细 Group 按事务内余额独立封顶，返回实际扣返；具体分配与限制见 [Group 协议](PROTOCOL.md#26-通用银子结算接口)。
 3. 同事务保存钱包、操作索引、请求明细和完整回执，Commit 成功才返回。SQL 或提交错误不当作业务拒绝；Call 成功后仍须检查回执中各项 `committed/rejected`。
 
 OperationID 是全局财务身份，BatchID 是提交身份；Single/Group 派生稳定 BatchID。规范请求作 SHA-256 摘要，跨批次重复操作保留原终态及 `origin_batch`，不重复扣返；幂等记录不自动过期。需要 MySQL 8.0+ / InnoDB，结算服不保存持久待执行队列，未完成请求由游戏负责恢复。
@@ -261,7 +261,7 @@ OperationID 是全局财务身份，BatchID 是提交身份；Single/Group 派�
 | 表 | 当前用途 |
 | --- | --- |
 | `silver_balances` | UserID、amount、version，唯一持久钱包 |
-| `settlement_operations` | 全局 OperationID、摘要、原批次及位置、business/status、扣返汇总 |
+| `settlement_operations` | 全局 OperationID、摘要、原批次及位置、business/status、扣返汇总；旧入口记录请求汇总，新 Group 记录实际汇总 |
 | `settlement_batches` | BatchID、摘要、规范请求 JSON 和完整回执 JSON |
 
 [schema.sql](../nodes/settlement/schema.sql) 由管理员初始化专用库，节点启动不自动迁移。普通结算不创建钱包，缺失时报 wallet_not_found。`-init-wallet UserID -silver Amount` 是独立管理入口，以固定 `wallet-init-{UserID}` 操作完成初始化；同金额重复执行返回原结果，不同金额或缺失初始化凭据时拒绝覆盖。账号创建不自动创建钱包。
@@ -333,7 +333,8 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 方向 | 待完成内容与边界 |
 | --- | --- |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
-| 斗地主输光封顶 | 当前余额不足整笔拒绝。后续实扣不超过可结算余额，账户最低为 0，赢家收益按实扣同步调整；多人分配、取整和限制生命周期仍需确认。 |
+| 斗地主输光封顶 | 结算服已提供均分 Group，但斗地主仍使用旧 Group，余额不足整笔拒绝。接入时需区分已持久化旧请求与新请求，使用回执中的实际扣返生成客户端结果。 |
+| 麻将接入 | 结算服已提供按付款明细比例封顶的通用 Group；具体玩法的应付关系、事件时序及客户端尚未实现或验收。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |
 | 历史存储 | 短 ID、按日表、冷热归档和清理策略尚未实施；不能在破坏原 ID 幂等约束的情况下直接删除去重记录。 |
 | 容量与部署 | 12,000 在线是业务目标，100,000 是容量余量目标。持续负载、真实慢客户端积压、全量重连、热点钱包、认证峰值及生产 WSS 仍需专门验收；当前 Gate 模板上限不是这些容量承诺。 |

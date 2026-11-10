@@ -24,11 +24,13 @@ type silverChange struct {
 }
 
 type silverOperation struct {
-	ID        string          `json:"operation_id"`
-	Business  string          `json:"business"`
-	Reference string          `json:"business_ref"`
-	Changes   []silverChange  `json:"changes"`
-	Detail    json.RawMessage `json:"detail"`
+	ID        string               `json:"operation_id"`
+	Business  string               `json:"business"`
+	Reference string               `json:"business_ref"`
+	Changes   []silverChange       `json:"changes"`
+	Detail    json.RawMessage      `json:"detail"`
+	Policy    string               `json:"policy,omitempty"`
+	Transfers []settlementTransfer `json:"transfers,omitempty"`
 }
 
 func (operation silverOperation) digest() [32]byte {
@@ -58,14 +60,31 @@ func (balance walletBalance) wire() map[string]any {
 }
 
 type settlementResult struct {
-	OperationID string `json:"operation_id"`
-	Status      string `json:"status"`
-	Reason      string `json:"reason"`
-	OriginBatch string `json:"origin_batch"`
+	OperationID     string               `json:"operation_id"`
+	Status          string               `json:"status"`
+	Reason          string               `json:"reason"`
+	OriginBatch     string               `json:"origin_batch"`
+	ActualChanges   []settlementActual   `json:"actual_changes,omitempty"`
+	ActualTransfers []settlementTransfer `json:"actual_transfers,omitempty"`
 }
 
 func (result settlementResult) wire() map[string]any {
-	return map[string]any{"operation_id": result.OperationID, "status": result.Status, "reason": result.Reason, "origin_batch": result.OriginBatch}
+	fields := map[string]any{"operation_id": result.OperationID, "status": result.Status, "reason": result.Reason, "origin_batch": result.OriginBatch}
+	if result.ActualChanges != nil {
+		changes := make([]any, 0, len(result.ActualChanges))
+		for _, c := range result.ActualChanges {
+			changes = append(changes, map[string]any{"user_id": c.UserID, "debit": c.Debit, "credit": c.Credit})
+		}
+		fields["actual_changes"] = changes
+	}
+	if result.ActualTransfers != nil {
+		transfers := make([]any, 0, len(result.ActualTransfers))
+		for _, e := range result.ActualTransfers {
+			transfers = append(transfers, map[string]any{"from_user_id": e.FromUserID, "to_user_id": e.ToUserID, "amount": e.Amount})
+		}
+		fields["actual_transfers"] = transfers
+	}
+	return fields
 }
 
 type settlementReceipt struct {

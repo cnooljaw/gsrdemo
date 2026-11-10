@@ -184,6 +184,8 @@ Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入�
 | `settlement-write / 1` SettleBatch | Call，地鼠使用 | Batch 请求 map | 完整回执或错误；各笔单人操作分别判定 |
 | `settlement-write / 6` SettleSingle | Call | Single 请求 map | 完整回执或错误；一笔单人操作 |
 | `settlement-write / 7` SettleGroup | Call，斗地主使用 | Group 请求 map | 完整回执或错误；多人整体成功或拒绝 |
+| `settlement-write / 8` SettleEqualGroup | Call | Group 请求 map | 输方各自封顶、赢家均分；返回每人的实际扣返和余额 |
+| `settlement-write / 9` SettleTransferGroup | Call | TransferGroup 请求 map | 按付款明细比例封顶；返回实际付款明细、每人实际扣返和余额 |
 | `settlement-read / 2` GetBatch | 受控 Call | `batchID string` | 原回执，缺失为 nil；不是提交前置查询 |
 | `settlement-read / 3` GetOperation | 受控 Call | `U, operationID string` | OperationResult；不存在或 U 不是参与用户时为 nil |
 | `settlement-read / 4` GetBalance | 游戏准入/初始化或受控 Call | `U` | map：`user_id uint64, amount int64, version uint64`；钱包缺失报错 |
@@ -200,8 +202,15 @@ Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入�
 | 单人明细 item | `reason string, debit int64, credit int64` | Debit/Credit 均非负，按完整 Debit 检查能力 |
 | Group 请求 | `version uint64, operation_id/business/business_ref string, changes list, detail map` | 一笔多人整体操作，2～64 名不同参与用户，1～512 条 changes |
 | 多人明细 change | `user_id uint64, reason string, debit int64, credit int64` | 同一用户可有多条，先汇总再整体检查；不允许部分资金变化 |
+| TransferGroup 请求 | `version uint64, operation_id/business/business_ref string, transfers list, detail map` | 一笔多人操作；每项为 `from_user_id uint64, to_user_id uint64, amount int64` |
 
 地鼠每锤一个单人 Operation，items 保留 `hammer_cost` 与 `hammer_reward` 两类，即使奖励为零也保留；斗地主每局一个 Group，三人的 changes 分类为 `game_win_loss`。settlement 不解释概率、牌型或业务输赢规则，detail 仅作归档。
+
+新接口的规则及限制：
+
+- **8 均分**：沿用 Group 请求结构，每人一条 change；正 Debit 表示输家且 Credit 必须为 0，Debit 为 0 的条目表示赢家（理论 Credit 可为 0，非参与者不应列入）。至少一输一赢，理论总扣款等于总返还；赢家理论 Credit 按理论奖池均分，余数按赢家 UserID 从大到小分配。每个输家按事务内余额独立封顶，实际扣款合计重新均分赢家，余数采用相同顺序；余额不足不由其他输家补足。
+- **9 明细**：`transfers` 为 1～512 条，不同付款人与收款人均为非零 UserID，amount 为正，每对付款人/收款人最多一条，全部参与者为 2～64 人。每位付款人按事务开始时的钱包余额独立封顶，实付款按原应付比例向下取整，余数按收款 UserID 从大到小分配；同组收入不能提前用于付款。请求明细顺序不影响身份，实际明细按付款、收款 UserID 升序返回。
+- 两个接口均保证实际扣款合计等于实际返还合计；所有输家为零也返回 committed 的全零实际扣返，余额和版本不变。有实际扣款或返还的参与者，其钱包版本每操作增加一次。余额、版本或请求金额溢出返回错误并回滚，不保存财务终态。
 
 | 校验项 | 约束 |
 | --- | --- |
@@ -217,11 +226,12 @@ Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入�
 | --- | --- | --- |
 | Receipt | `batch_id string, results list, balances list` | Single/Group 同样返回此结构，results 只有一项 |
 | OperationResult | `operation_id/status/reason/origin_batch string` | status 为 committed/rejected；origin_batch 为首次保存该操作的批次 |
+| 新 Group 的 OperationResult | 在上行字段外，`actual_changes list`；接口 9 另有 `actual_transfers list` | `actual_changes` 每项为 `user_id uint64, debit/credit int64`；实际付款明细使用与请求相同的字段，amount 可以为 0。接口 8 不返回付款边明细 |
 | balances 项 | `user_id uint64, amount int64, version uint64` | 本次提交后的余额；原批次重提返回原历史回执，不能覆盖调用方较新的版本 |
 
-Call 成功返回回执后，财务结果仍看每项 status。当前 rejected 的 reason 为 insufficient_silver、balance_overflow 或 version_overflow；committed 时为空。业务拒绝是持久终态，与 SQL/提交错误的未知结果不同；同批其他操作可成功，Group 始终整体判定。
+Call 成功返回回执后，财务结果仍看每项 status。旧 1/6/7 的 rejected reason 为 insufficient_silver、balance_overflow 或 version_overflow；committed 时为空。新 8/9 对余额不足采用封顶，成功结果为 committed；其余额/版本溢出返回错误，不写入 rejected。接口 3 仅返回基本 OperationResult，不返回整组参与者实际扣返或付款明细。
 
-OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容复用原终态，不重复扣返；不同内容报 identity_conflict。摘要由规范化内部结构的 JSON 作 SHA-256：明细按 UserID/Reason/Debit/Credit 排序但不合并，批次操作顺序保持有意义。Single/Group 的内部 BatchID 为 `single-/group-` 加 OperationID 的 SHA-256 十六进制。
+OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容复用原终态，不重复扣返；不同内容或切换接口策略报 identity_conflict。摘要由规范化内部结构的 JSON 作 SHA-256：旧明细按 UserID/Reason/Debit/Credit 排序但不合并，批次操作顺序保持有意义；接口 9 的付款明细按付款、收款 UserID 排序。Single、旧 Group、新均分 Group、新明细 Group 的内部 BatchID 分别使用 `single-`、`group-`、`group-equal-`、`group-transfer-` 加 OperationID 的 SHA-256 十六进制。旧请求和回执保留原摘要与语义。
 
 斗地主由本桌直接 Call 写池，校验原 OperationID、终态和三名参与者余额后立即返回/推送最终快照，再清理待记录。结果未知保留原请求，确认后不再调用结算；等待预算、重试及恢复边界见[斗地主恢复设计](DESIGN.md#63-重试清理与恢复)。
 
@@ -255,7 +265,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | mole | `mole.invalid_request / stale_login / conflict / busy / target_unavailable / online_unavailable / accounting_unavailable / insufficient_silver / operation_unknown` | 区分明确拒绝与未知结果；target_unavailable 的 C/S 特例见 1.3 |
 | landlord | `landlord.invalid_request / stale_login / invalid_turn / invalid_cards / busy / insufficient_silver` | 不盲目重复出牌；当前轮次与状态用快照核实 |
 | settlement 临时故障 | `settlement.store_unavailable` | 保留原请求，按游戏 owner 的限频策略重试；框架 ErrMailboxFull 同样退避，不能当成财务 rejected |
-| settlement 确定性故障 | `settlement.invalid_request / identity_conflict / wallet_not_found` | 保留请求并暂停自动重试，核查身份、格式或钱包初始化 |
+| settlement 确定性故障 | `settlement.invalid_request / identity_conflict / wallet_not_found / balance_overflow / version_overflow` | 保留请求并暂停自动重试，核查身份、格式、钱包或数值范围；后两项为新 Group 接口的错误 |
 
 表中同一行的省略项沿用第一个完整前缀，例如 `login.store_unavailable`。本地 Redis/通知失败的恢复与退避由各游戏管理，详见设计文档，不新增通用重试器。
 
