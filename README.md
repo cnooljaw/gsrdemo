@@ -109,7 +109,7 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 
 演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。
 
-每个 settlement 节点提供 `settlement-write` Call 服务池与独立的 `settlement-read` 查询。通过 `worker_count/mysql_connections/mailbox_capacity` 调整成员数、连接数和每成员邮箱容量，默认值与并行边界见 [Settlement 设计](docs/DESIGN.md#7-settlement并行执行与权威账务)。地鼠由独立 Submission 直接 Call 写池，仍 100ms/阈值归批、单个在途批次，等待不阻塞内存命中；斗地主每局由本桌 Call 一笔三人事务，确认后立即返回/推送终态，再清理待记录。结果未知按原 ID 限频重试。`settlement_node` 默认 `settlement`，其他实例在 `nodes.yaml` 配置并显式选择，共用权威 MySQL，不自动切换。
+settlement 提供 `settlement-write` Call 服务池与独立的 `settlement-read` 查询。写池由多个串行 Service 并行处理不同请求，调用方统一 Call 池名。通过 `worker_count/mysql_connections/mailbox_capacity` 调整成员数、数据库连接数和每成员邮箱容量；默认值、游戏调用及超时处理见 [Settlement 设计](docs/DESIGN.md#7-settlement并行执行与权威账务)。`settlement_node` 默认 `settlement`，其他实例在 `nodes.yaml` 配置并显式选择，共用权威 MySQL，不自动切换。
 
 需要比较本机 Call 池的并行度、连接数、邮箱和批次时运行 `./scripts/dev.sh load settlement`；64 来源、并行数各三轮确认运行 `GSRDEMO_SETTLEMENT_POOL_CONFIRM=1 ./scripts/dev.sh load settlement`。测试使用真实本机专用 MySQL 与 Cluster Call，只清理自建样本，逐档核对余额、版本和唯一账务；延迟包含重试，计时排除节点启动。结果分别保存在 `.cache/settlement-pool-load.json` 与 `.cache/settlement-pool-confirm.json`，保留原始样本，参数选择还应比较尾延迟、重试和 MySQL 等待；测试不会改 YAML。样本适用边界见[并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)。
 

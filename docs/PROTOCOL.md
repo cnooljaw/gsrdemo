@@ -181,7 +181,9 @@ Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入�
 
 | Service / Command | 调用方式 | 顺序参数 | 完成结果 |
 | --- | --- | --- | --- |
-| `settlement-write / 1,6,7` | Call，GSR 池成员处理；地鼠用 1、斗地主用 7 | `request map` | 直接返回完整回执或错误，不传回执地址 |
+| `settlement-write / 1` SettleBatch | Call，地鼠使用 | Batch 请求 map | 完整回执或错误；各笔单人操作分别判定 |
+| `settlement-write / 6` SettleSingle | Call | Single 请求 map | 完整回执或错误；一笔单人操作 |
+| `settlement-write / 7` SettleGroup | Call，斗地主使用 | Group 请求 map | 完整回执或错误；多人整体成功或拒绝 |
 | `settlement-read / 2` GetBatch | 受控 Call | `batchID string` | 原回执，缺失为 nil；不是提交前置查询 |
 | `settlement-read / 3` GetOperation | 受控 Call | `U, operationID string` | OperationResult；不存在或 U 不是参与用户时为 nil |
 | `settlement-read / 4` GetBalance | 游戏准入/初始化或受控 Call | `U` | map：`user_id uint64, amount int64, version uint64`；钱包缺失报错 |
@@ -225,7 +227,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 地鼠由 Submission 直接 Call 写池并校验 BatchID、逐项结果和全部参与者余额；结果未知按原批次退避重试。有效回执先完成 Redis 检查点，再通过节点内消息交付 Accounting。等待与失败边界见[地鼠检查点设计](DESIGN.md#54-检查点与故障边界)。
 
-GSR 直接把 Call 路由至写入池成员，由 Handler 返回完整回执或错误。选中成员邮箱满返回 ErrMailboxFull；Call 超时不保证请求未执行，重试必须保持原 ID 和内容。池容量、SQL 预算与事务边界见 [Settlement 设计](DESIGN.md#7-settlement并行执行与权威账务)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
+写入共用一个池名，由 GSR 选择成员并返回结果，不传回执地址。Call 超时后必须按原 ID 和内容重试；池化作用见[入口与执行边界](DESIGN.md#71-入口与执行边界)，Call 与 SQL 的计时关系见[调用与超时](DESIGN.md#72-调用与超时)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
 
 ### 2.7 回调 access：快照、校正与旧登录替换
 
