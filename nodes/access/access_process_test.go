@@ -31,27 +31,61 @@ type accessNodeProcess struct {
 	binary, config, address string
 }
 
+// readAccessDatabaseDSN 只提取验收需要的 DSN；节点的其他配置由对应节点自行解析。
+func readAccessDatabaseDSN(path string) (string, error) {
+	var config struct {
+		DSN   string         `yaml:"mysql_dsn"`
+		Other map[string]any `yaml:",inline"`
+	}
+	if err := model.ReadYAMLFile(path, &config); err != nil {
+		return "", err
+	}
+	return config.DSN, nil
+}
+
 func accessLiveDatabase(t *testing.T, node, database string) (*sql.DB, string) {
 	t.Helper()
-	var config struct {
-		Node model.NodeConfig `yaml:",inline"`
-		DSN  string           `yaml:"mysql_dsn"`
-	}
-	if err := model.ReadYAMLFile("../../configs/"+node+"-01.local.yaml", &config); err != nil {
+	dsn, err := readAccessDatabaseDSN("../../configs/" + node + "-01.local.yaml")
+	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := mysql.ParseDSN(config.DSN)
+	parsed, err := mysql.ParseDSN(dsn)
 	if err != nil || parsed.DBName != database || parsed.Net != "tcp" || parsed.Addr != "127.0.0.1:3306" {
 		t.Fatal("integration requires dedicated local database " + database)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	db, err := mysqlclient.Open(ctx, config.DSN)
+	db, err := mysqlclient.Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return db, config.DSN
+	return db, dsn
+}
+
+// TestAccessDatabaseDSNReadsNodeSettings 保护验收可以从包含节点专有配置的单文档中读取 DSN，同时拒绝重复键和多文档。
+func TestAccessDatabaseDSNReadsNodeSettings(t *testing.T) {
+	const dsn = "example@tcp(127.0.0.1:3306)/gsrdemo_settlement"
+	for _, test := range []struct {
+		name, content string
+		valid         bool
+	}{
+		{"settlement", "instance: settlement-01\nmysql_dsn: " + dsn + "\nwrite_workers: 12\nread_workers: 2\nmysql_connections: 10\nmailbox_capacity: 64\n", true},
+		{"login", "instance: login-01\nmysql_dsn: " + dsn + "\nredis_url: redis://localhost:6379\ntoken_ttl_seconds: 3600\n", true},
+		{"duplicate", "mysql_dsn: " + dsn + "\nmysql_dsn: other\n", false},
+		{"multiple_documents", "mysql_dsn: " + dsn + "\n---\nmysql_dsn: other\n", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "node.yaml")
+			if err := os.WriteFile(path, []byte(test.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readAccessDatabaseDSN(path)
+			if (err == nil) != test.valid || test.valid && got != dsn {
+				t.Fatalf("配置解析不符合预期: dsn=%q err=%v", got, err)
+			}
+		})
+	}
 }
 
 func freeAccessAddress(t *testing.T) string {
