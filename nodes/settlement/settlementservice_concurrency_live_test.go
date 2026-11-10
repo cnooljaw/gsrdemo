@@ -49,6 +49,65 @@ func liveGroupRequest(id, business string, from, to uint64, debit int64) map[str
 	}}
 }
 
+// TestSettlementConcurrentBatchLiveMySQL 保护同一多用户批次并发 Call 到不同池成员时只入账一次，每个调用者都收到完整原回执。
+func TestSettlementConcurrentBatchLiveMySQL(t *testing.T) {
+	store, _ := liveSettlementStore(t)
+	store.db.SetMaxOpenConns(10)
+	sample := newLiveSettlementSample(t, store, 2)
+	id := "pool-duplicate-" + rand.Text()
+	request := testBatch(id, testSingle(id+"-a", sample.Users[0], 10, 0), testSingle(id+"-b", sample.Users[1], 20, 0))
+	sample.Operations = append(sample.Operations, id+"-a", id+"-b")
+	sample.Batches = append(sample.Batches, id)
+	address, _ := startSettlementTestNode(t, store.db)
+	type outcome struct {
+		receipt map[string]any
+		err     error
+	}
+	results := make(chan outcome, 8)
+	var callers sync.WaitGroup
+	callers.Add(8)
+	defer callers.Wait()
+	for range 8 {
+		go func() {
+			defer callers.Done()
+			receipt, err := retryLiveSettlement(t, address, settlementWriteName, settleBatchCommand, request)
+			results <- outcome{receipt, err}
+		}()
+	}
+	for range 8 {
+		select {
+		case result := <-results:
+			if result.err != nil || result.receipt["batch_id"] != id {
+				t.Fatalf("原批次未返回: %v %v", result.receipt, result.err)
+			}
+			rows, ok := result.receipt["results"].([]any)
+			if !ok || len(rows) != 2 {
+				t.Fatal("批次回执不完整")
+			}
+			for i, value := range rows {
+				row := value.(map[string]any)
+				if row["operation_id"] != []string{id + "-a", id + "-b"}[i] || row["status"] != "committed" || row["origin_batch"] != id {
+					t.Fatalf("批次结果发生变化: %v", row)
+				}
+			}
+		case <-time.After(8 * time.Second):
+			t.Fatal("同批并发 Call 未完成")
+		}
+	}
+	for i, uid := range sample.Users {
+		value := liveCall(t, address, getBalanceCommand, uid)
+		if value["amount"] != int64(1000-(i+1)*10) || value["version"] != uint64(2) {
+			t.Fatalf("重复入账: %v", value)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
+	defer cancel()
+	var count int
+	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id IN (?, ?)", id+"-a", id+"-b").Scan(&count); err != nil || count != 2 {
+		t.Fatalf("批次操作记录数量错误: %d %v", count, err)
+	}
+}
+
 // TestSettlementHotWalletLiveMySQL 保护真实持锁钱包快速失败、其他钱包继续入账，原多人操作解锁重试后只生效一次。
 func TestSettlementHotWalletLiveMySQL(t *testing.T) {
 	store, _ := liveSettlementStore(t)

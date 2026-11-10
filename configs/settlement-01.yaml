@@ -5,8 +5,8 @@ log_directory: ../logs/settlement-01
 # 复制为 settlement-01.local.yaml，填写专用 gsrdemo_settlement 库连接串并设为 0600。
 mysql_dsn: ""
 
-# Call 写池与现有 Send 执行者各使用 worker_count 个成员，共享 MySQL 连接池。
-# 各成员邮箱有界；仅旧 Send 任务保留 2 秒排队期限，Call 超时不撤销请求。
+# Call 写池的成员数与 MySQL 连接池配套；各成员独立串行、邮箱有界。
+# Call 超时不撤销已接纳请求；游戏按原 ID 和内容重试。
 worker_count: 8
 mysql_connections: 10
 mailbox_capacity: 64

@@ -108,10 +108,10 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 | --- | --- |
 | 定位 | `Node + ServiceName + CommandID`；节点来自 [nodes.yaml](../configs/nodes.yaml)，动态组名/桌名使用后端返回值，不自行拼接 |
 | 编码 | 直接使用 GSR Cluster ValueCodec；整数为规范 int64/uint64，集合为 map/list，不额外包装内部 Protobuf |
-| 调用者 | 受信任内部节点/管理工具；Cluster Source 不充当用户身份，也不能用它推导回执地址 |
+| 调用者 | 受信任内部节点/管理工具；Cluster Source 不充当用户身份 |
 | Call | 有限等待，返回结果或错误；超时后远端可能已执行，不能盲目新建身份重试 |
-| Send | nil 只表示本地接纳，不代表远端执行或客户端收到；需要完成结果的结算另走 Command 20 |
-| 等待预算 | access 的后端 Call 最多 3s；mole 协调 Call 500ms；landlord 协调 Call 1s；Auth SQL 2s、Token I/O/本地 Call 500ms；结算 SQL 2s |
+| Send | nil 只表示本地接纳，不代表远端执行或客户端收到；结算通过 Call 获取完成结果 |
+| 等待预算 | access 的后端 Call 最多 3s；mole/landlord 的游戏协调和结算等待分别见[地鼠故障边界](DESIGN.md#54-检查点与故障边界)、[斗地主恢复](DESIGN.md#63-重试清理与恢复)；Auth SQL 2s、Token I/O/本地 Call 500ms；结算 SQL 2s |
 | 标识 | U 非零；Online/游戏/结算的字符串标识通常为 1～128 字节可见 ASCII，不裁剪、不改大小写；各入口额外限制另列 |
 
 ### 2.2 login：认证与凭据
@@ -177,14 +177,11 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 
 ### 2.6 通用银子结算接口
 
-Node 取配置 `settlement_node`，默认 `settlement`。入口见[异步提交](../nodes/settlement/settlementsubmitservice.go)、[查询](../nodes/settlement/settlementqueryservice.go)、[Call 写入池](../nodes/settlement/settlementservice.go)。
+Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入池](../nodes/settlement/settlementservice.go)与[查询](../nodes/settlement/settlementqueryservice.go)。
 
 | Service / Command | 调用方式 | 顺序参数 | 完成结果 |
 | --- | --- | --- | --- |
 | `settlement-write / 1,6,7` | Call，GSR 池成员处理；地鼠用 1、斗地主用 7 | `request map` | 直接返回完整回执或错误，不传回执地址 |
-| `settlement-submit / 1` Batch | 旧 Send | `request map, replyNode string, replyService string` | 稍后回 Command 20，id 为原 BatchID；地鼠已不使用 |
-| `settlement-submit / 6` Single | 旧 Send | 同上 | 稍后回 Command 20，id 为原 OperationID |
-| `settlement-submit / 7` Group | 旧 Send | 同上 | 稍后回 Command 20，id 为原 OperationID；斗地主已不使用 |
 | `settlement-read / 2` GetBatch | 受控 Call | `batchID string` | 原回执，缺失为 nil；不是提交前置查询 |
 | `settlement-read / 3` GetOperation | 受控 Call | `U, operationID string` | OperationResult；不存在或 U 不是参与用户时为 nil |
 | `settlement-read / 4` GetBalance | 游戏准入/初始化或受控 Call | `U` | map：`user_id uint64, amount int64, version uint64`；钱包缺失报错 |
@@ -219,9 +216,8 @@ Node 取配置 `settlement_node`，默认 `settlement`。入口见[异步提交]
 | Receipt | `batch_id string, results list, balances list` | Single/Group 同样返回此结构，results 只有一项 |
 | OperationResult | `operation_id/status/reason/origin_batch string` | status 为 committed/rejected；origin_batch 为首次保存该操作的批次 |
 | balances 项 | `user_id uint64, amount int64, version uint64` | 本次提交后的余额；原批次重提返回原历史回执，不能覆盖调用方较新的版本 |
-| Command 20（旧 Send 入口） | `id string, receipt map, code string` | 成功时 code 为空；错误时 receipt 为空 map，code 为稳定内部错误码；两个游戏均已不再接收 |
 
-code 为空只表示收到了结算回执，财务结果仍看每项 status。当前 rejected 的 reason 为 insufficient_silver、balance_overflow 或 version_overflow；committed 时为空。业务拒绝是持久终态，与 SQL/提交错误的未知结果不同；同批其他操作可成功，Group 始终整体判定。
+Call 成功返回回执后，财务结果仍看每项 status。当前 rejected 的 reason 为 insufficient_silver、balance_overflow 或 version_overflow；committed 时为空。业务拒绝是持久终态，与 SQL/提交错误的未知结果不同；同批其他操作可成功，Group 始终整体判定。
 
 OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容复用原终态，不重复扣返；不同内容报 identity_conflict。摘要由规范化内部结构的 JSON 作 SHA-256：明细按 UserID/Reason/Debit/Credit 排序但不合并，批次操作顺序保持有意义。Single/Group 的内部 BatchID 为 `single-/group-` 加 OperationID 的 SHA-256 十六进制。
 
@@ -229,7 +225,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 地鼠由 Submission 直接 Call 写池并校验 BatchID、逐项结果和全部参与者余额；结果未知按原批次退避重试。有效回执先完成 Redis 检查点，再通过节点内消息交付 Accounting。等待与失败边界见[地鼠检查点设计](DESIGN.md#54-检查点与故障边界)。
 
-旧 Send 入口不做 SQL，独立执行者提交后直接回执；任务生成后排队超过 2s 不启动 SQL、尝试回 busy，不包含入口邮箱里的先前等待。Call 路径由 GSR 直接路由至写入池成员，无回执地址或 Command 20；Call 超时不保证请求未执行，重试必须保持原 ID 和内容，也没有上述异步任务排队期限。池容量、SQL 预算与事务边界见 [Settlement 设计](DESIGN.md#7-settlement并行执行与权威账务)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
+GSR 直接把 Call 路由至写入池成员，由 Handler 返回完整回执或错误。选中成员邮箱满返回 ErrMailboxFull；Call 超时不保证请求未执行，重试必须保持原 ID 和内容。池容量、SQL 预算与事务边界见 [Settlement 设计](DESIGN.md#7-settlement并行执行与权威账务)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
 
 ### 2.7 回调 access：快照、校正与旧登录替换
 
@@ -242,7 +238,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | landlord / 110 SnapshotPush | `L, snapshot map` | 核对当前桌，推送本人快照或结算结果 | 1161 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
-推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Command 20 回给游戏 owner，不直接回给 access 或客户端。
+推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
 
 ### 2.8 内部错误与停用入口
 
@@ -256,7 +252,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | Online | `online.invalid_request / login_id_conflict` | 不修改非法目录状态，不复用旧登录身份 |
 | mole | `mole.invalid_request / stale_login / conflict / busy / target_unavailable / online_unavailable / accounting_unavailable / insufficient_silver / operation_unknown` | 区分明确拒绝与未知结果；target_unavailable 的 C/S 特例见 1.3 |
 | landlord | `landlord.invalid_request / stale_login / invalid_turn / invalid_cards / busy / insufficient_silver` | 不盲目重复出牌；当前轮次与状态用快照核实 |
-| settlement 临时故障 | `settlement.busy / store_unavailable` | 保留原请求，按游戏 owner 的限频策略重试；不能当成财务 rejected |
+| settlement 临时故障 | `settlement.store_unavailable` | 保留原请求，按游戏 owner 的限频策略重试；框架 ErrMailboxFull 同样退避，不能当成财务 rejected |
 | settlement 确定性故障 | `settlement.invalid_request / identity_conflict / wallet_not_found` | 保留请求并暂停自动重试，核查身份、格式或钱包初始化 |
 
 表中同一行的省略项沿用第一个完整前缀，例如 `login.store_unavailable`。本地 Redis/通知失败的恢复与退避由各游戏管理，详见设计文档，不新增通用重试器。

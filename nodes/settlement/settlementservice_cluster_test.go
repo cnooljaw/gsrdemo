@@ -18,18 +18,19 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
-// 小邮箱专门验证受控 Call 的背压；生产入口容量由 YAML 指定。
+// 功能用例使用小邮箱；生产入口容量由 YAML 指定，压测按档位设置。
 const settlementMailboxCapacity = 4
 
 type settlementTestMain struct {
-	db    *sql.DB
-	ready chan string
+	db      *sql.DB
+	workers int
+	ready   chan string
 }
 
 var _ gsr.Service = (*settlementTestMain)(nil)
 
 func (service *settlementTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	if err := NewMain("settlement", service.db, defaultSettlementWorkers).OnStart(ctx, self); err != nil {
+	if err := NewMain("settlement", service.db, service.workers).OnStart(ctx, self); err != nil {
 		return err
 	}
 	_, port, err := net.SplitHostPort(self.Node().ClusterListenAddress())
@@ -49,17 +50,17 @@ func (service *settlementTestMain) OnStop(context.Context) error {
 
 func startSettlementTestNode(t *testing.T, db *sql.DB) (string, func()) {
 	t.Helper()
-	main := &settlementTestMain{db: db, ready: make(chan string, 1)}
-	return startSettlementMain(t, main, main.ready)
+	return startSettlementNode(t, db, defaultSettlementWorkers, settlementMailboxCapacity)
 }
 
-func startSettlementMain(t *testing.T, main gsr.Service, ready <-chan string) (string, func()) {
+func startSettlementNode(t *testing.T, db *sql.DB, workers, mailbox int) (string, func()) {
 	t.Helper()
+	main := &settlementTestMain{db: db, workers: workers, ready: make(chan string, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	directory := t.TempDir()
 	go func() {
-		done <- gsr.Run(ctx, gsr.Config{Runtime: gsr.RuntimeConfig{MailboxCapacity: settlementMailboxCapacity}, Logging: logging.Config{Directory: directory}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"settlement": "127.0.0.1:0"}}}, main)
+		done <- gsr.Run(ctx, gsr.Config{Runtime: gsr.RuntimeConfig{MailboxCapacity: mailbox}, Logging: logging.Config{Directory: directory}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"settlement": "127.0.0.1:0"}}}, main)
 	}()
 	var once sync.Once
 	stop := func() {
@@ -77,7 +78,7 @@ func startSettlementMain(t *testing.T, main gsr.Service, ready <-chan string) (s
 	}
 	t.Cleanup(stop)
 	select {
-	case address := <-ready:
+	case address := <-main.ready:
 		return address, stop
 	case err := <-done:
 		done <- err
@@ -201,6 +202,9 @@ func TestSettlementReadWriteBoundaries(t *testing.T) {
 	}
 	if _, err := businessRPC(t, routes, "settlement", "settlement-write", getBalanceCommand, uint64(1)); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatal(err)
+	}
+	if _, err := businessRPC(t, routes, "settlement", "settlement-submit", settleBatchCommand, map[string]any{}); !errors.Is(err, runtime.ErrServiceNotFound) {
+		t.Fatalf("旧 Send 入口仍存在: %v", err)
 	}
 }
 

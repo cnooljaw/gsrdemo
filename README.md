@@ -109,9 +109,9 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 
 演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。
 
-每个 settlement 节点提供 `settlement-write` Call 服务池、`settlement-read` 查询和已无游戏调用者的旧 `settlement-submit` 入口。通过 `worker_count/mysql_connections/mailbox_capacity` 调整容量；当前两条写入路径各有默认 8 个执行者，共享 10 个 MySQL 连接，各邮箱容量 64。地鼠由独立 Submission 直接 Call 写池，仍 100ms/阈值归批、单个在途批次，等待不阻塞内存命中；斗地主每局由本桌 Call 一笔三人事务，确认后立即返回/推送终态，再清理待记录。结果未知按原 ID 限频重试。调用边界见 [Settlement 设计](docs/DESIGN.md#7-settlement并行执行与权威账务)，旧入口与压测清理列于[后续工作](docs/DESIGN.md#10-后续工作)。`settlement_node` 默认 `settlement`，其他实例在 `nodes.yaml` 配置并显式选择，共用权威 MySQL，不自动切换。
+每个 settlement 节点提供 `settlement-write` Call 服务池与独立的 `settlement-read` 查询。通过 `worker_count/mysql_connections/mailbox_capacity` 调整成员数、连接数和每成员邮箱容量，默认值与并行边界见 [Settlement 设计](docs/DESIGN.md#7-settlement并行执行与权威账务)。地鼠由独立 Submission 直接 Call 写池，仍 100ms/阈值归批、单个在途批次，等待不阻塞内存命中；斗地主每局由本桌 Call 一笔三人事务，确认后立即返回/推送终态，再清理待记录。结果未知按原 ID 限频重试。`settlement_node` 默认 `settlement`，其他实例在 `nodes.yaml` 配置并显式选择，共用权威 MySQL，不自动切换。
 
-需要复测本机并行与批次取舍时运行 `./scripts/dev.sh load settlement`；三轮 64 来源确认运行 `GSRDEMO_SETTLEMENT_ASYNC_CONFIRM=1 ./scripts/dev.sh load settlement`。测试使用真实本机专用 MySQL、双向 TCP，只清理自建样本，逐档核对余额/版本/唯一账务；结果保存在 `.cache/settlement-async-*.json`。当前默认依据短程对比选择，不代表生产在线人数上限。
+需要比较本机 Call 池的并行度、连接数、邮箱和批次时运行 `./scripts/dev.sh load settlement`；64 来源、并行数各三轮确认运行 `GSRDEMO_SETTLEMENT_POOL_CONFIRM=1 ./scripts/dev.sh load settlement`。测试使用真实本机专用 MySQL 与 Cluster Call，只清理自建样本，逐档核对余额、版本和唯一账务；延迟包含重试，计时排除节点启动。结果分别保存在 `.cache/settlement-pool-load.json` 与 `.cache/settlement-pool-confirm.json`，保留原始样本，参数选择还应比较尾延迟、重试和 MySQL 等待；测试不会改 YAML。样本适用边界见[并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)。
 
 `run` 前台运行节点，优先读取 `configs/<节点>-01.local.yaml`，没有时读取对应 `.yaml`。mole 监听启动后会恢复 Redis 检查点，恢复成功才接纳玩家；全部服务正常运行后再启动客户端。日志在 `logs/<实例名>/`。
 
@@ -182,7 +182,7 @@ unset demo_password
 
 默认仍连接 access-01；需要跨接入时，在终端 B 的 node 命令后添加 `--url ws://127.0.0.1:7889/ws`。客户端自动随机入桌、准备、叫抢地主、出牌/不出，等待整局结算后离开。叫抢各等待 10 秒，出牌 15 秒；三人都不叫最多重发两次。演示机器人使用简单单张策略，服务端仍校验全部普通牌型。
 
-斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `authenticated → login → landlord_enter → landlord_bid → landlord_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID，客户端直接使用该回执，不再追加查询账务。局末不先广播 pending；每桌先保存待结算请求到 Redis，再异步 Send 给结算服，收到有效回执后向三人各推送一次最终结果，随后删除待记录，清理失败单独重试。Redis 只保留待处理请求，不积累成功流水；结算服恢复或地主节点重启后，已保存请求按原 ID 补交，避免重复入账。不恢复进行中的手牌。
+斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `authenticated → login → landlord_enter → landlord_bid → landlord_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID，客户端直接使用该回执，不再追加查询账务。局末不先广播 pending；每桌先保存待结算请求到 Redis，再 Call 结算池，收到有效回执后向三人各推送一次最终结果，随后删除待记录，清理失败单独重试。Redis 只保留待处理请求，不积累成功流水；结算服恢复或地主节点重启后，已保存请求按原 ID 补交，避免重复入账。不恢复进行中的手牌。
 
 ### 7. 停止演示
 
@@ -201,10 +201,10 @@ unset demo_password
 
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 
-单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）：
+单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）。此验收执行外部节点二进制，使用 `-count=1` 确保本次实际启动进程：
 
 ```shell
-GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
+GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
   -run '^TestAccess(ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult|CLITokenFileAuthentication)$' -v -timeout=1m
 ```
 
@@ -215,7 +215,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test \
 每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，客户端在 `typeclient`；节点间直接使用 GSR Call/Send。构建依赖发布的 GSR v1.0.3。
 
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)。
-- 异步结算与推送：见 [结算入口及执行者](nodes/settlement/settlementsubmitservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/gameagent/mole.go)。
+- 结算与推送：见 [结算池组装](nodes/settlement/main_service.go)、[结算池成员](nodes/settlement/settlementservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/gameagent/mole.go)。
 - [业务协议](docs/PROTOCOL.md)、[设计与恢复边界](docs/DESIGN.md)、[Go 代码规范](docs/GO-CODE-STYLE.md)、[工作规则](AGENTS.md)。
 - [GSR 游戏业务教程（21 页 HTML）](docs/gsr-game-business.html)：在浏览器中离线打开，支持分步讲解、讲者备注、打印 PDF 和新游戏开发清单。
 - 容量测试入口及适用边界见 [并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)，不属于运行 Demo 的必需步骤。

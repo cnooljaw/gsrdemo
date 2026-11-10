@@ -33,11 +33,8 @@ func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext
 	}); err != nil {
 		return err
 	}
-	// 游戏调用方尚未迁移到 Call，暂时保留原 Send 入口。
-	for _, child := range []gsr.Service{newSettlementQueryService(service.db), newSettlementSubmitService(service.db, service.workers)} {
-		if _, err := self.CreateService(ctx, child); err != nil {
-			return err
-		}
+	if _, err := self.CreateService(ctx, newSettlementQueryService(service.db)); err != nil {
+		return err
 	}
 	if err := self.Node().OpenCluster(service.node); err != nil {
 		return err
