@@ -17,13 +17,27 @@ func TestSettlementConfigRequiresPrivateDatabase(t *testing.T) {
 	for _, entry := range []struct {
 		extra string
 		valid bool
-	}{{"mysql_dsn: example\n", true}, {"mysql_dsn: example\nworker_count: -1\n", false}, {"mysql_dsn: example\nworker_count: 65\n", false}, {"mysql_dsn: example\nmysql_connections: 1\n", false}, {"mysql_dsn: example\nmailbox_capacity: 257\n", false}, {"", false}, {"mysql_dsn: example\nunknown: true\n", false}} {
+	}{
+		{"mysql_dsn: example\n", true},
+		{"mysql_dsn: example\nwrite_workers: 4\nread_workers: 3\n", true},
+		{"mysql_dsn: example\nread_workers: -1\n", false},
+		{"mysql_dsn: example\nread_workers: 65\n", false},
+		{"mysql_dsn: example\nwrite_workers: -1\n", false},
+		{"mysql_dsn: example\nwrite_workers: 65\n", false},
+		{"mysql_dsn: example\nmysql_connections: 1\n", false},
+		{"mysql_dsn: example\nmailbox_capacity: 257\n", false},
+		{"", false},
+		{"mysql_dsn: example\nunknown: true\n", false},
+	} {
 		if err := os.WriteFile(path, []byte(base+entry.extra), 0600); err != nil {
 			t.Fatal(err)
 		}
 		config, err := loadSettlementConfig(path)
 		if (err == nil) != entry.valid {
 			t.Fatalf("valid=%v err=%v", entry.valid, err)
+		}
+		if entry.valid && (config.WriteWorkers < 1 || config.ReadWorkers < 1 || config.MySQLConnections != defaultMySQLConnections) {
+			t.Fatal("读写池默认容量无效")
 		}
 		if entry.valid && config.Node.LogDirectory != filepath.Join(directory, "logs") {
 			t.Fatal("relative path changed")

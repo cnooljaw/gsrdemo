@@ -19,7 +19,11 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/model"
 )
 
-const defaultSettlementWorkers = 8
+const (
+	defaultWriteWorkers     = 12
+	defaultReadWorkers      = 2
+	defaultMySQLConnections = 10
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -31,7 +35,8 @@ func main() {
 type settlementConfig struct {
 	Node             model.NodeConfig `yaml:",inline"`
 	MySQLDSN         string           `yaml:"mysql_dsn"`
-	Workers          int              `yaml:"worker_count"`
+	WriteWorkers     int              `yaml:"write_workers"`
+	ReadWorkers      int              `yaml:"read_workers"`
 	MySQLConnections int              `yaml:"mysql_connections"`
 	MailboxCapacity  int              `yaml:"mailbox_capacity"`
 }
@@ -61,14 +66,17 @@ func loadSettlementConfig(path string) (settlementConfig, error) {
 	if config.MailboxCapacity < 1 || config.MailboxCapacity > 256 {
 		return config, errors.New("mailbox_capacity must be 1..256")
 	}
-	if config.Workers == 0 {
-		config.Workers = defaultSettlementWorkers
+	if config.WriteWorkers == 0 {
+		config.WriteWorkers = defaultWriteWorkers
+	}
+	if config.ReadWorkers == 0 {
+		config.ReadWorkers = defaultReadWorkers
 	}
 	if config.MySQLConnections == 0 {
-		config.MySQLConnections = config.Workers + 2
+		config.MySQLConnections = defaultMySQLConnections
 	}
-	if config.Workers < 1 || config.Workers > 64 || config.MySQLConnections < 2 || config.MySQLConnections > 128 {
-		return config, errors.New("worker_count must be 1..64; mysql_connections must be 2..128")
+	if config.WriteWorkers < 1 || config.WriteWorkers > 64 || config.ReadWorkers < 1 || config.ReadWorkers > 64 || config.MySQLConnections < 2 || config.MySQLConnections > 128 {
+		return config, errors.New("write_workers/read_workers must be 1..64; mysql_connections must be 2..128")
 	}
 	return config, nil
 }
@@ -112,7 +120,7 @@ func run() (result error) {
 		Logging: logging.Config{Directory: config.Node.LogDirectory},
 		Runtime: gsr.RuntimeConfig{MailboxCapacity: config.MailboxCapacity},
 		Cluster: gsr.ClusterConfig{Nodes: nodes},
-	}, NewMain(cluster.NodeID(config.Node.Listen), db, config.Workers))
+	}, NewMain(cluster.NodeID(config.Node.Listen), db, config.WriteWorkers, config.ReadWorkers))
 }
 
 // openSettlementDatabase 建立宿主拥有的 MySQL 池；运行入口按配置设置并行上限。

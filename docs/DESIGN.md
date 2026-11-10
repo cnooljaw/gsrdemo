@@ -212,18 +212,18 @@ prepareOperation：固定本局 OperationID 与三人金额
 
 ### 7.1 入口与执行边界
 
-[MainService](../nodes/settlement/main_service.go) 用 `CreateServicePool` 创建写入池，再创建独立查询 Service、开放 Cluster；组装完成后退出，业务 Service 继续运行。
+[MainService](../nodes/settlement/main_service.go) 用 `CreateServicePool` 创建写、读两个池，再开放 Cluster；组装完成后退出，业务 Service 继续运行。
 
 | 入口 | 调用方式与用途 |
 | --- | --- |
 | `settlement-write` | Call 写入，直接返回回执或错误；地鼠按批次提交，斗地主每局提交一笔三人操作 |
-| `settlement-read` | Call 查询钱包、批次或参与者操作；游戏准入及受控核查使用，不逐锤、逐局追加查账 |
+| `settlement-read` | 独立读池；Call 查询钱包、批次或参与者操作；游戏准入及受控核查使用，不逐锤、逐局追加查账 |
 
-**池化的作用是让多个独立 Service 同时处理不同结算请求。** 每个 [settlementService](../nodes/settlement/settlementservice.go) 仍串行执行自己的邮箱；某个成员等待慢 SQL 时，其他成员可以继续处理。调用方始终 Call 同一个池名，不需要自行分配执行者或接收异步回调。单个调用方连续同步 Call 仍是逐笔等待，不会因为目标池化就自动并发。
+**池化的作用是让多个独立 Service 同时处理不同结算请求。** 每个 [settlementWriteService](../nodes/settlement/settlementwriteservice.go) 仍串行执行自己的邮箱；某个写或读成员等待慢 SQL 时，其他成员可以继续处理。调用方始终 Call 同一个池名，不需要自行分配执行者或接收异步回调。单个调用方连续同步 Call 仍是逐笔等待，不会因为目标池化就自动并发。
 
-默认写池 8 个成员、最多 10 个 MySQL 连接、每成员邮箱容量 64，见 [settlement YAML](../configs/settlement-01.yaml)。成员共享宿主创建和关闭的 `sql.DB`，每次结算独立开启事务，不缓存钱包。查询有独立邮箱，但同样受共享连接池和数据库能力限制；增加成员数不保证更快。
+默认写池 12 个成员、读池 2 个成员、共享最多 10 个 MySQL 连接、每成员邮箱容量 64，见 [settlement YAML](../configs/settlement-01.yaml)。成员共享宿主创建和关闭的 `sql.DB`，每次结算独立开启事务，不缓存钱包。[settlementReadService](../nodes/settlement/settlementreadservice.go) 同样由多个独立成员执行，慢查询不阻塞其他读成员；读写仍受共享连接池和数据库能力限制；增加成员数不保证更快。
 
-GSR 轮询选择一次成员，选中邮箱满返回 `ErrMailboxFull`，不扫描其他成员。池不保证跨成员顺序；同一钱包由行锁和幂等记录保护，业务顺序由调用方维护。成员退出后不自动重建。各调用方通过 `settlement_node` 选择节点，多结算节点共用权威库，不自动发现或切换。
+写、读成员分别只注册各自命令，池名由 MainService 统一注册。GSR 在对应池内轮询选择一次成员，选中邮箱满返回 `ErrMailboxFull`，不扫描其他成员。池不保证跨成员顺序；同一钱包由行锁和幂等记录保护，业务顺序由调用方维护。成员退出后不自动重建。各调用方通过 `settlement_node` 选择节点，多结算节点共用权威库，不自动发现或切换。
 
 ### 7.2 调用与超时
 
@@ -248,7 +248,7 @@ Call 等待会占用当前调用方 Service：地鼠由独立 Submission 等待�
 
 结算服只按非负 Debit/Credit 校验并入账，不判断概率、牌型或输赢；业务明细随请求保存，地鼠统计池归 mole。
 
-[事务实现](../nodes/settlement/settlementservice_mysql.go) 为每批开启一个 MySQL 事务：
+[事务实现](../nodes/settlement/settlementstore.go) 为每批开启一个 MySQL 事务：
 
 1. 核对已有 BatchID、OperationID；同 ID 同内容复用原结果，不同内容报冲突。按 UserID 排序，使用 `FOR UPDATE NOWAIT` 锁钱包，锁冲突返回可重试错误。
 2. 按请求顺序检查并计算余额、版本。Single 是一笔单人操作；Batch 中各笔单人操作分别判定；Group 是一笔多人操作，参与者全部通过才一起修改。余额不足会拒绝该操作，不自动扣到 0。
@@ -293,14 +293,18 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
 | 地鼠内存余额、回执、重试与检查点恢复 | [Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
-| 事务、全局幂等、锁冲突与 Call 池并行 | [SQL 用例](../nodes/settlement/settlementservice_mysql_test.go)、[Call 池用例](../nodes/settlement/settlementservice_cluster_test.go)、[真实并发用例](../nodes/settlement/settlementservice_concurrency_live_test.go) |
+| 事务、全局幂等、锁冲突与读写 Call 池并行 | [SQL 用例](../nodes/settlement/settlement_mysql_test.go)、[Call 池用例](../nodes/settlement/settlement_cluster_test.go)、[真实并发用例](../nodes/settlement/settlement_concurrency_live_test.go) |
 | 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
 
 ### 9.2 并行与容量取舍
 
 地鼠采用一个在途批次，减少提交顺序和检查点协调；单个 mole 来源不会同时占满所有结算执行者。结算并行用于不同来源和牌局，执行者与数据库连接数需要配套；单批越大，吞吐和等待延迟的取舍也越明显，因此地鼠按周期/阈值提交，不为凑满 500 项额外等待。
 
-现有 [Online 混合调用测试](../nodes/online/onlineservice_load_test.go) 和[结算 Call 池/批次测试](../nodes/settlement/settlementservice_load_test.go) 提供可复现的短程样本。结算测试使用真实 Cluster Call、独立调用方 Service，每个来源只保留一个在途批次，按原 ID 重试，并逐档核对余额、版本、批次和操作数量；计时排除节点启动，延迟包含重试。参数分阶段比较并行数、连接数、邮箱和批次大小；确认模式对并行数各跑三轮，按吞吐中位数选择后续对比基线，不自动修改业务配置。
+现有 [Online 混合调用测试](../nodes/online/onlineservice_load_test.go) 和[结算 Call 池/批次测试](../nodes/settlement/settlement_load_test.go) 提供可复现的短程样本。结算测试使用真实 Cluster Call、独立调用方 Service，每个来源只保留一个在途批次，按原 ID 重试，并逐档核对余额、版本、批次和操作数量；计时排除节点启动，延迟包含重试。参数分阶段比较并行数、连接数、邮箱和批次大小；确认模式对并行数各跑三轮，按吞吐中位数选择后续对比基线，不自动修改业务配置。
+
+[读写混合测试](../nodes/settlement/settlement_mixed_load_test.go) 固定 64 个独立来源、每档 1,024 次 RPC。常态、入场高峰、核查高峰的写/读请求比例约为 90/10、70/30、50/50；这些是容量压测假设，不是线上采样；按业务请求结构连续提交，不等待真实牌局时长。写请求约九成为地鼠 64 项批次，其余为三人 Group；普通读查余额，核查场景另含少量已完成批次/操作查询，不模拟玩家逐锤查账。读跨来源钱包，校验返回的金额与版本属于某个完整提交快照。
+
+混合测试每个配比运行三轮，先固定 10 个 MySQL 连接比较读写成员配比，再对候选比较 16 个连接；分别记录写入操作数/秒、查询数/秒、读写 P99、重试和连接等待，每档结束后核对全部钱包与唯一操作数，并分块清理本档账务样本（清理不计入吞吐）。不以总 RPC 数直接比较不同场景，避免批量写和廉价读的成本差异掩盖结果。运行命令与 JSON 位置统一见 README。
 
 默认配置是演示起点，不表示生产最优值。压测在本机两个 Runtime、分散钱包、单条 Cluster 连接下进行；连接沿用 GSR 默认最多 32 个入站 Call 等待者，超出时连接暂停读取。样本不能外推为生产在线人数、热点吞吐、长期稳定性或客户端重连能力；运行方式与结果位置见 [README](../README.md)。
 

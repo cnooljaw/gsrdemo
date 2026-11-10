@@ -11,29 +11,35 @@ import (
 )
 
 type mainService struct {
-	node    cluster.NodeID
-	db      *sql.DB
-	workers int
+	node   cluster.NodeID
+	db     *sql.DB
+	writes int
+	reads  int
 }
 
 var _ gsr.Service = (*mainService)(nil)
 
 // NewMain 创建只负责节点启动的 MainService。
-func NewMain(node cluster.NodeID, db *sql.DB, workers int) gsr.Service {
-	return &mainService{node: node, db: db, workers: workers}
+func NewMain(node cluster.NodeID, db *sql.DB, writes, reads int) gsr.Service {
+	return &mainService{node: node, db: db, writes: writes, reads: reads}
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
 	// 池成员各自串行处理，邮箱容量沿用 Runtime 的 YAML 配置；共享数据库由宿主关闭。
 	if err := self.Node().CreateServicePool(ctx, settlementWriteName, gsr.ServicePoolConfig{
-		Size: service.workers,
+		Size: service.writes,
 		NewService: func() gsr.Service {
-			return newSettlementService(service.db)
+			return newSettlementWriteService(service.db)
 		},
 	}); err != nil {
 		return err
 	}
-	if _, err := self.CreateService(ctx, newSettlementQueryService(service.db)); err != nil {
+	if err := self.Node().CreateServicePool(ctx, settlementReadName, gsr.ServicePoolConfig{
+		Size: service.reads,
+		NewService: func() gsr.Service {
+			return newSettlementReadService(service.db)
+		},
+	}); err != nil {
 		return err
 	}
 	if err := self.Node().OpenCluster(service.node); err != nil {

@@ -177,7 +177,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 
 ### 2.6 通用银子结算接口
 
-Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入池](../nodes/settlement/settlementservice.go)与[查询](../nodes/settlement/settlementqueryservice.go)。
+Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入池](../nodes/settlement/settlementwriteservice.go)与[Call 读取池](../nodes/settlement/settlementreadservice.go)。
 
 | Service / Command | 调用方式 | 顺序参数 | 完成结果 |
 | --- | --- | --- | --- |
@@ -227,7 +227,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 地鼠由 Submission 直接 Call 写池并校验 BatchID、逐项结果和全部参与者余额；结果未知按原批次退避重试。有效回执先完成 Redis 检查点，再通过节点内消息交付 Accounting。等待与失败边界见[地鼠检查点设计](DESIGN.md#54-检查点与故障边界)。
 
-写入共用一个池名，由 GSR 选择成员并返回结果，不传回执地址。Call 超时后必须按原 ID 和内容重试；池化作用见[入口与执行边界](DESIGN.md#71-入口与执行边界)，Call 与 SQL 的计时关系见[调用与超时](DESIGN.md#72-调用与超时)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
+写、读分别共用一个池名，由 GSR 在对应池内选择成员并返回结果，不传回执地址。Call 超时后必须按原 ID 和内容重试；池化作用见[入口与执行边界](DESIGN.md#71-入口与执行边界)，Call 与 SQL 的计时关系见[调用与超时](DESIGN.md#72-调用与超时)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
 
 ### 2.7 回调 access：快照、校正与旧登录替换
 

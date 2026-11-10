@@ -29,16 +29,16 @@ var (
 	errWalletNotFound        = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.wallet_not_found", "wallet must be explicitly initialized")
 )
 
-// settlementService 是写入池的独立成员；三个命令共享事务规则，不持有钱包副本。
-type settlementService struct {
+// settlementWriteService 是写入池的独立成员；三个命令共享事务规则，不持有钱包副本。
+type settlementWriteService struct {
 	store      settlementStore
 	dispatcher *gsr.Dispatcher
 }
 
-var _ gsr.Service = (*settlementService)(nil)
+var _ gsr.Service = (*settlementWriteService)(nil)
 
-func newSettlementService(db *sql.DB) *settlementService {
-	service := &settlementService{store: settlementStore{db: db}}
+func newSettlementWriteService(db *sql.DB) *settlementWriteService {
+	service := &settlementWriteService{store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		settleBatchCommand:  service.handleSettleBatch,
 		settleSingleCommand: service.handleSettleSingle,
@@ -47,22 +47,22 @@ func newSettlementService(db *sql.DB) *settlementService {
 	return service
 }
 
-func (service *settlementService) OnStart(context.Context, gsr.ServiceContext) error {
+func (service *settlementWriteService) OnStart(context.Context, gsr.ServiceContext) error {
 	if service.store.db == nil {
 		return errors.New("settlement requires a database")
 	}
 	return nil
 }
 
-func (service *settlementService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
+func (service *settlementWriteService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *settlementService) OnStop(_ context.Context) error {
+func (service *settlementWriteService) OnStop(_ context.Context) error {
 	return nil
 }
 
-func (service *settlementService) handleSettleBatch(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+func (service *settlementWriteService) handleSettleBatch(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeSettlementBatch(request)
 	if err != nil {
 		return nil, err
@@ -70,7 +70,7 @@ func (service *settlementService) handleSettleBatch(self gsr.CommandContext, req
 	return service.commit(self, batch)
 }
 
-func (service *settlementService) handleSettleSingle(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+func (service *settlementWriteService) handleSettleSingle(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeSettlementSingle(request)
 	if err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (service *settlementService) handleSettleSingle(self gsr.CommandContext, re
 	return service.commit(self, batch)
 }
 
-func (service *settlementService) handleSettleGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+func (service *settlementWriteService) handleSettleGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeSettlementGroup(request)
 	if err != nil {
 		return nil, err
@@ -86,7 +86,7 @@ func (service *settlementService) handleSettleGroup(self gsr.CommandContext, req
 	return service.commit(self, batch)
 }
 
-func (service *settlementService) commit(self gsr.ServiceContext, batch settlementBatch) (map[string]any, error) {
+func (service *settlementWriteService) commit(self gsr.ServiceContext, batch settlementBatch) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
 	defer cancel()
 	receipt, err := service.store.settle(ctx, batch)

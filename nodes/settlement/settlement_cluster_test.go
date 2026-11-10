@@ -24,13 +24,14 @@ const settlementMailboxCapacity = 4
 type settlementTestMain struct {
 	db      *sql.DB
 	workers int
+	reads   int
 	ready   chan string
 }
 
 var _ gsr.Service = (*settlementTestMain)(nil)
 
 func (service *settlementTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	if err := NewMain("settlement", service.db, service.workers).OnStart(ctx, self); err != nil {
+	if err := NewMain("settlement", service.db, service.workers, service.reads).OnStart(ctx, self); err != nil {
 		return err
 	}
 	_, port, err := net.SplitHostPort(self.Node().ClusterListenAddress())
@@ -50,12 +51,12 @@ func (service *settlementTestMain) OnStop(context.Context) error {
 
 func startSettlementTestNode(t *testing.T, db *sql.DB) (string, func()) {
 	t.Helper()
-	return startSettlementNode(t, db, defaultSettlementWorkers, settlementMailboxCapacity)
+	return startSettlementNode(t, db, defaultWriteWorkers, defaultReadWorkers, settlementMailboxCapacity)
 }
 
-func startSettlementNode(t *testing.T, db *sql.DB, workers, mailbox int) (string, func()) {
+func startSettlementNode(t *testing.T, db *sql.DB, workers, reads, mailbox int) (string, func()) {
 	t.Helper()
-	main := &settlementTestMain{db: db, workers: workers, ready: make(chan string, 1)}
+	main := &settlementTestMain{db: db, workers: workers, reads: reads, ready: make(chan string, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	directory := t.TempDir()
@@ -283,5 +284,53 @@ func TestSettlementCallPoolSlowSQLIsolation(t *testing.T) {
 	}
 	if elapsed := time.Since(begin); elapsed >= 500*time.Millisecond {
 		t.Fatalf("其他写入或查询等待了慢 SQL: %v", elapsed)
+	}
+}
+
+type settlementReadStarted struct{ started chan struct{} }
+
+func (argument settlementReadStarted) Match(value driver.Value) bool {
+	if value != int64(1) {
+		return false
+	}
+	select {
+	case argument.started <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// TestSettlementReadPoolSlowSQLIsolation 保护一个查询等待 SQL 时，其他查询仍能通过同一公开名称返回。
+func TestSettlementReadPoolSlowSQLIsolation(t *testing.T) {
+	store, mock := mockStore(t)
+	mock.MatchExpectationsInOrder(false)
+	started := make(chan struct{}, 1)
+	mock.ExpectQuery("SELECT amount, version").WithArgs(settlementReadStarted{started}).
+		WillDelayFor(time.Second).WillReturnError(errors.New("injected slow read"))
+	mock.ExpectQuery("SELECT amount, version").WithArgs(uint64(2)).
+		WillReturnRows(sqlmock.NewRows([]string{"amount", "version"}).AddRow(900, 2))
+	address, _ := startSettlementTestNode(t, store.db)
+	slow := make(chan error, 1)
+	go func() {
+		_, err := settlementRPC(t, address, getBalanceCommand, uint64(1))
+		slow <- err
+	}()
+	defer func() {
+		if err := <-slow; !errors.Is(err, errSettlementUnavailable) {
+			t.Errorf("慢查询错误不正确: %v", err)
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("慢查询未进入 SQL")
+	}
+	begin := time.Now()
+	value, err := settlementRPC(t, address, getBalanceCommand, uint64(2))
+	if err != nil || value.(map[string]any)["amount"] != int64(900) {
+		t.Fatalf("查询未返回: %v %v", value, err)
+	}
+	if time.Since(begin) >= 500*time.Millisecond {
+		t.Fatal("其他查询被慢查询阻塞")
 	}
 }

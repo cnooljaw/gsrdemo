@@ -9,16 +9,16 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
-// settlementQueryService 只读，不与写入入口共享 Mailbox，也不拥有余额缓存。
-type settlementQueryService struct {
+// settlementReadService 是读池的独立成员，只查询权威数据库，不持有余额缓存。
+type settlementReadService struct {
 	store      settlementStore
 	dispatcher *gsr.Dispatcher
 }
 
-var _ gsr.Service = (*settlementQueryService)(nil)
+var _ gsr.Service = (*settlementReadService)(nil)
 
-func newSettlementQueryService(db *sql.DB) *settlementQueryService {
-	service := &settlementQueryService{store: settlementStore{db: db}}
+func newSettlementReadService(db *sql.DB) *settlementReadService {
+	service := &settlementReadService{store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		getBatchCommand:     service.handleGetBatch,
 		getOperationCommand: service.handleGetOperation,
@@ -26,18 +26,23 @@ func newSettlementQueryService(db *sql.DB) *settlementQueryService {
 	})
 	return service
 }
-func (service *settlementQueryService) OnStart(_ context.Context, self gsr.ServiceContext) error {
+
+func (service *settlementReadService) OnStart(context.Context, gsr.ServiceContext) error {
 	if service.store.db == nil {
 		return errors.New("settlement requires a database")
 	}
-	return self.Node().RegisterService(settlementReadName, self.Self())
+	return nil
 }
-func (service *settlementQueryService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
+
+func (service *settlementReadService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	return service.dispatcher.Handle(self, command, args...)
 }
-func (service *settlementQueryService) OnStop(context.Context) error { return nil }
 
-func (service *settlementQueryService) handleGetBatch(self gsr.CommandContext, id string) (any, error) {
+func (service *settlementReadService) OnStop(context.Context) error {
+	return nil
+}
+
+func (service *settlementReadService) handleGetBatch(self gsr.CommandContext, id string) (any, error) {
 	if !validSettlementID(id) {
 		return nil, errInvalidSettlement
 	}
@@ -47,7 +52,7 @@ func (service *settlementQueryService) handleGetBatch(self gsr.CommandContext, i
 	return value, settlementError(self, err)
 }
 
-func (service *settlementQueryService) handleGetOperation(self gsr.CommandContext, userID uint64, id string) (any, error) {
+func (service *settlementReadService) handleGetOperation(self gsr.CommandContext, userID uint64, id string) (any, error) {
 	if userID == 0 || !validSettlementID(id) {
 		return nil, errInvalidSettlement
 	}
@@ -57,7 +62,7 @@ func (service *settlementQueryService) handleGetOperation(self gsr.CommandContex
 	return value, settlementError(self, err)
 }
 
-func (service *settlementQueryService) handleGetBalance(self gsr.CommandContext, userID uint64) (map[string]any, error) {
+func (service *settlementReadService) handleGetBalance(self gsr.CommandContext, userID uint64) (map[string]any, error) {
 	if userID == 0 {
 		return nil, errInvalidSettlement
 	}

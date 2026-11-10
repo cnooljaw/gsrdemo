@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 用途：构建、检查项目、前台启动节点或执行结算 Call 池压测。
+# 用途：构建、检查项目、前台启动节点或执行结算 Call 池或读写混合压测。
 # 用法：dev.sh build|check [access|login|online|mole|settlement|landlord]；dev.sh run <节点>；dev.sh load settlement；dev.sh generate access。
 # run 优先读取 configs/<节点>-01.local.yaml，未配置时读取公开模板。
 # 不指定节点时，build/check 包含所有 Go module 和 TypeScript；指定时只处理 common 和该节点。
@@ -66,7 +66,11 @@ if [[ "$action" == "load" ]]; then
     [[ "$node" == "settlement" ]] || { usage >&2; exit 2; }
     export GSRDEMO_SETTLEMENT_POOL_LOAD=1
     export GSRDEMO_SETTLEMENT_MYSQL=1
-    exec go -C "$project_root/nodes/settlement" test -count=1 -run '^TestSettlementPoolLoadLiveMySQL$' -v -timeout=12m .
+    load_test='^TestSettlementPoolLoadLiveMySQL$'
+    if [[ "${GSRDEMO_SETTLEMENT_MIXED_LOAD:-}" == "1" ]]; then
+        load_test='^TestSettlementMixedLoadLiveMySQL$'
+    fi
+    exec go -C "$project_root/nodes/settlement" test -count=1 -run "$load_test" -v -timeout=12m .
 fi
 if [[ "$action" == "run" ]]; then
     [[ -n "$node" ]] || { usage >&2; exit 2; }

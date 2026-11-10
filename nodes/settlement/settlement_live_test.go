@@ -59,34 +59,9 @@ func newLiveSettlementSampleAmount(t *testing.T, store settlementStore, count in
 	t.Helper()
 	sample := &liveSettlementSample{store: store}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		tx, err := store.db.BeginTx(ctx, nil)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		defer tx.Rollback()
-		// 压测样本较多，按有界块删除自有身份，避免逐行清理拖长测试。
-		for _, table := range []struct {
-			name, key string
-			ids       []any
-		}{
-			{"settlement_operations", "operation_id", stringSQLArgs(sample.Operations)},
-			{"settlement_batches", "batch_id", stringSQLArgs(sample.Batches)},
-			{"silver_balances", "user_id", userSQLArgs(sample.Users)},
-		} {
-			for start := 0; start < len(table.ids); start += 500 {
-				end := min(start+500, len(table.ids))
-				if _, err := tx.ExecContext(ctx, "DELETE FROM "+table.name+" WHERE "+table.key+" IN ("+sqlSlots(end-start)+")", table.ids[start:end]...); err != nil {
-					t.Error(err)
-					return
-				}
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			t.Error(err)
-		}
+		sample.deleteRows(t, "settlement_operations", "operation_id", stringSQLArgs(sample.Operations))
+		sample.deleteRows(t, "settlement_batches", "batch_id", stringSQLArgs(sample.Batches))
+		sample.deleteRows(t, "silver_balances", "user_id", userSQLArgs(sample.Users))
 	})
 	for range count {
 		var bytes [8]byte
@@ -112,6 +87,21 @@ func newLiveSettlementSampleAmount(t *testing.T, store settlementStore, count in
 		}
 	}
 	return sample
+}
+
+// deleteRows 只清理样本已登记的身份，分块提交，不为大量独立清理维持一个大事务。
+func (sample *liveSettlementSample) deleteRows(t *testing.T, table, key string, ids []any) {
+	t.Helper()
+	for start := 0; start < len(ids); start += 500 {
+		end := min(start+500, len(ids))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := sample.store.db.ExecContext(ctx, "DELETE FROM "+table+" WHERE "+key+" IN ("+sqlSlots(end-start)+")", ids[start:end]...)
+		cancel()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+	}
 }
 
 func liveCall(t *testing.T, address string, command runtime.CommandID, args ...any) map[string]any {

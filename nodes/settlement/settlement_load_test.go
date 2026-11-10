@@ -23,6 +23,8 @@ import (
 type settlementLoadJob struct {
 	id      string
 	request map[string]any
+	command runtime.CommandID
+	args    []any
 }
 
 type settlementLoadResult struct {
@@ -59,7 +61,14 @@ func (caller *settlementLoadCaller) Handle(self gsr.CommandContext, command runt
 		caller.started = time.Now()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	value, err := self.Cluster().Call(ctx, "settlement", settlementWriteName, settleBatchCommand, job.request)
+	command, args, name := job.command, job.args, settlementReadName
+	if command == 0 {
+		command, args = settleBatchCommand, []any{job.request}
+	}
+	if command == settleBatchCommand || command == settleSingleCommand || command == settleGroupCommand {
+		name = settlementWriteName
+	}
+	value, err := self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
 	cancel()
 	if err != nil && retryableSettlementLoadError(err) && time.Since(caller.started) < 15*time.Second {
 		caller.retries++
@@ -150,9 +159,9 @@ type settlementLoadReport struct {
 	Verified            bool    `json:"verified"`
 }
 
-func settlementLoadNodes(t *testing.T, db *sql.DB, workers, mailbox int, callers []*settlementLoadCaller) (time.Time, func()) {
+func settlementLoadNodes(t *testing.T, db *sql.DB, workers, reads, mailbox int, callers []*settlementLoadCaller) (time.Time, func()) {
 	t.Helper()
-	address, stopTarget := startSettlementNode(t, db, workers, mailbox)
+	address, stopTarget := startSettlementNode(t, db, workers, reads, mailbox)
 	main := &settlementLoadMain{callers: callers, started: make(chan time.Time, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -213,7 +222,7 @@ func runPoolLoadCase(t *testing.T, store settlementStore, sample *liveSettlement
 		}
 		request := testBatch(id, operations...)
 		sample.Batches = append(sample.Batches, id)
-		callers[stream].jobs = append(callers[stream].jobs, settlementLoadJob{id, request})
+		callers[stream].jobs = append(callers[stream].jobs, settlementLoadJob{id: id, request: request})
 	}
 	before := map[uint64]walletBalance{}
 	for uid := range expected {
@@ -226,7 +235,7 @@ func runPoolLoadCase(t *testing.T, store settlementStore, sample *liveSettlement
 		before[uid] = walletBalance{UserID: uid, Amount: fields["amount"].(int64), Version: fields["version"].(uint64)}
 	}
 	stats := store.db.Stats()
-	start, stop := settlementLoadNodes(t, store.db, workers, mailbox, callers)
+	start, stop := settlementLoadNodes(t, store.db, workers, defaultReadWorkers, mailbox, callers)
 	defer stop()
 	report := settlementLoadReport{Sources: streams, Workers: workers, Connections: connections, Mailbox: mailbox, BatchSize: batchSize, RPC: jobs, Operations: jobs * batchSize}
 	samples := make([]time.Duration, 0, jobs)
@@ -339,7 +348,7 @@ func TestSettlementPoolLoadLiveMySQL(t *testing.T) {
 		return best
 	}
 	options := []settlementLoadLimits{}
-	for _, workers := range []int{1, 2, 4, 8, 16} {
+	for _, workers := range []int{1, 2, 4, 8, 12, 16} {
 		options = append(options, settlementLoadLimits{workers, workers + 2, 32})
 	}
 	best := selectLimits(options, rounds)
