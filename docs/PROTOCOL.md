@@ -181,10 +181,10 @@ Node 取配置 `settlement_node`，默认 `settlement`。入口见[异步提交]
 
 | Service / Command | 调用方式 | 顺序参数 | 完成结果 |
 | --- | --- | --- | --- |
-| `settlement-write / 1,6,7` | Call，GSR 池成员处理；地鼠批次用 1 | `request map` | 直接返回完整回执或错误，不传回执地址 |
+| `settlement-write / 1,6,7` | Call，GSR 池成员处理；地鼠用 1、斗地主用 7 | `request map` | 直接返回完整回执或错误，不传回执地址 |
 | `settlement-submit / 1` Batch | 旧 Send | `request map, replyNode string, replyService string` | 稍后回 Command 20，id 为原 BatchID；地鼠已不使用 |
 | `settlement-submit / 6` Single | 旧 Send | 同上 | 稍后回 Command 20，id 为原 OperationID |
-| `settlement-submit / 7` Group | 斗地主 Send | 同上 | 稍后回 Command 20，id 为原 OperationID |
+| `settlement-submit / 7` Group | 旧 Send | 同上 | 稍后回 Command 20，id 为原 OperationID；斗地主已不使用 |
 | `settlement-read / 2` GetBatch | 受控 Call | `batchID string` | 原回执，缺失为 nil；不是提交前置查询 |
 | `settlement-read / 3` GetOperation | 受控 Call | `U, operationID string` | OperationResult；不存在或 U 不是参与用户时为 nil |
 | `settlement-read / 4` GetBalance | 游戏准入/初始化或受控 Call | `U` | map：`user_id uint64, amount int64, version uint64`；钱包缺失报错 |
@@ -219,13 +219,13 @@ Node 取配置 `settlement_node`，默认 `settlement`。入口见[异步提交]
 | Receipt | `batch_id string, results list, balances list` | Single/Group 同样返回此结构，results 只有一项 |
 | OperationResult | `operation_id/status/reason/origin_batch string` | status 为 committed/rejected；origin_batch 为首次保存该操作的批次 |
 | balances 项 | `user_id uint64, amount int64, version uint64` | 本次提交后的余额；原批次重提返回原历史回执，不能覆盖调用方较新的版本 |
-| Command 20（旧 Send 入口） | `id string, receipt map, code string` | 成功时 code 为空；错误时 receipt 为空 map，code 为稳定内部错误码；mole 不再接收 |
+| Command 20（旧 Send 入口） | `id string, receipt map, code string` | 成功时 code 为空；错误时 receipt 为空 map，code 为稳定内部错误码；两个游戏均已不再接收 |
 
 code 为空只表示收到了结算回执，财务结果仍看每项 status。当前 rejected 的 reason 为 insufficient_silver、balance_overflow 或 version_overflow；committed 时为空。业务拒绝是持久终态，与 SQL/提交错误的未知结果不同；同批其他操作可成功，Group 始终整体判定。
 
 OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容复用原终态，不重复扣返；不同内容报 identity_conflict。摘要由规范化内部结构的 JSON 作 SHA-256：明细按 UserID/Reason/Debit/Credit 排序但不合并，批次操作顺序保持有意义。Single/Group 的内部 BatchID 为 `single-/group-` 加 OperationID 的 SHA-256 十六进制。
 
-斗地主 owner 仍注册私有回执服务名，并显式填写 replyNode/replyService；地址不进入账务摘要，不能来自客户端或依赖远程 Source。原请求与内容保持不变，约 5～5.5s 未确认时重提；有效终态只应用一次，其他操作、重复回执和迟到错误不能覆盖已确认结果。Send、路由或回执丢失可能只体现为超时，没有同步远端错误。
+斗地主由本桌直接 Call 写池，校验原 OperationID、终态和三名参与者余额后立即返回/推送最终快照，再清理待记录。结果未知保留原请求，确认后不再调用结算；等待预算、重试及恢复边界见[斗地主恢复设计](DESIGN.md#63-重试清理与恢复)。
 
 地鼠由 Submission 直接 Call 写池并校验 BatchID、逐项结果和全部参与者余额；结果未知按原批次退避重试。有效回执先完成 Redis 检查点，再通过节点内消息交付 Accounting。等待与失败边界见[地鼠检查点设计](DESIGN.md#54-检查点与故障边界)。
 
@@ -328,8 +328,8 @@ Accounting 本地 Send 原批次给 Submission
 1111 Ready → Call RoomName/2 → Call settlement-read/4 准入
 1171 Call / 1181 Rob / 1121 Play → 桌 / 6、7、3（携带当前 Turn）
   → 本桌确定胜负，固定一个 OperationID 与三人金额
-  → 保存 Redis 待请求，Send settlement-submit/7
-  → MySQL 原子判定，Send 本桌私有回执地址 / 20
+  → 保存 Redis 待请求，Call settlement-write/7
+  → 池成员完成 MySQL 原子判定，直接返回回执或错误
   → applyReceipt → Send 三人的当前 Agent/110 → C/S 1161
   → 删除 Redis 待记录；删除失败只重试删除
 ```

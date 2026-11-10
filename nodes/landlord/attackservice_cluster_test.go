@@ -81,24 +81,12 @@ func (backend *landlordTestBackend) Handle(_ gsr.CommandContext, cmd runtime.Com
 
 func startLandlordTestNode(t *testing.T, routes map[cluster.NodeID]string, node string, services map[string]gsr.Service) {
 	t.Helper()
-	for _, name := range []cluster.NodeID{"landlord", "settlement", "access"} {
-		if routes[name] != "" {
-			continue
-		}
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		routes[name] = listener.Addr().String()
-		_ = listener.Close()
-	}
 	nodes := map[cluster.NodeID]string{}
 	for k, v := range routes {
 		nodes[k] = v
 	}
-	if nodes[cluster.NodeID(node)] == "" {
-		nodes[cluster.NodeID(node)] = "127.0.0.1:0"
-	}
+	// Call 沿原连接回复，不再预选回调端口；启动时由系统直接分配。
+	nodes[cluster.NodeID(node)] = "127.0.0.1:0"
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	ready := make(chan string, 1)
@@ -118,7 +106,11 @@ func startLandlordTestNode(t *testing.T, routes map[cluster.NodeID]string, node 
 	})
 	select {
 	case address := <-ready:
-		routes[cluster.NodeID(node)] = address
+		_, port, err := net.SplitHostPort(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		routes[cluster.NodeID(node)] = net.JoinHostPort("127.0.0.1", port)
 	case err := <-done:
 		done <- err
 		t.Fatal(err)
@@ -156,7 +148,7 @@ func (caller *landlordTestCaller) Handle(gsr.CommandContext, runtime.CommandID, 
 
 func landlordTestRPC(t *testing.T, routes map[cluster.NodeID]string, node, name string, cmd runtime.CommandID, args ...any) (any, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	caller := &landlordTestCaller{ctx: ctx, cancel: cancel, node: node, name: name, cmd: cmd, args: args}
 	if err := gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: routes}}, caller); err != nil {

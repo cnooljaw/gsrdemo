@@ -11,19 +11,18 @@ import (
 )
 
 const (
-	roomJoinCommand              runtime.CommandID = 1
-	roomReadyCommand             runtime.CommandID = 2
-	roomPlayCommand              runtime.CommandID = 3
-	roomSnapshotCommand          runtime.CommandID = 4
-	roomLeaveCommand             runtime.CommandID = 5
-	roomBidCommand               runtime.CommandID = 6
-	roomRobCommand               runtime.CommandID = 7
-	roomTickCommand              runtime.CommandID = 10
-	roomSettlementReceiptCommand runtime.CommandID = 20
-	landlordSnapshotPushCommand  runtime.CommandID = 110
+	roomJoinCommand             runtime.CommandID = 1
+	roomReadyCommand            runtime.CommandID = 2
+	roomPlayCommand             runtime.CommandID = 3
+	roomSnapshotCommand         runtime.CommandID = 4
+	roomLeaveCommand            runtime.CommandID = 5
+	roomBidCommand              runtime.CommandID = 6
+	roomRobCommand              runtime.CommandID = 7
+	roomTickCommand             runtime.CommandID = 10
+	landlordSnapshotPushCommand runtime.CommandID = 110
 )
 
-// attackService 独占一桌的状态；结算请求异步提交，回执仍由本桌串行处理。
+// attackService 独占一桌状态；局末直接 Call 结算，确认后推送结果并清理待请求。
 type attackService struct {
 	game       attackGame
 	settlement roundSettlement
@@ -40,23 +39,19 @@ func newAttackService(name string, journal landlordJournal, pending *landlordOpe
 		recovery:   pending != nil,
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		roomJoinCommand:              service.handleJoin,
-		roomReadyCommand:             service.handleReady,
-		roomPlayCommand:              service.handlePlay,
-		roomBidCommand:               service.handleCallLandlord,
-		roomRobCommand:               service.handleRobLandlord,
-		roomSnapshotCommand:          service.handleSnapshot,
-		roomLeaveCommand:             service.handleLeave,
-		roomTickCommand:              service.handleTick,
-		roomSettlementReceiptCommand: service.handleSettlementReceipt,
+		roomJoinCommand:     service.handleJoin,
+		roomReadyCommand:    service.handleReady,
+		roomPlayCommand:     service.handlePlay,
+		roomBidCommand:      service.handleCallLandlord,
+		roomRobCommand:      service.handleRobLandlord,
+		roomSnapshotCommand: service.handleSnapshot,
+		roomLeaveCommand:    service.handleLeave,
+		roomTickCommand:     service.handleTick,
 	})
 	return service
 }
 
 func (service *attackService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	if err := service.registerSettlementReply(self); err != nil {
-		return err
-	}
 	if !service.recovery {
 		if err := self.Node().RegisterService(cluster.ServiceName(service.game.Name), self.Self()); err != nil {
 			return err
@@ -144,22 +139,19 @@ func (service *attackService) releaseRoute(self gsr.ServiceContext, player landl
 	return released, nil
 }
 
-func (service *attackService) registerSettlementReply(self gsr.ServiceContext) error {
-	name, err := identifier("landlord-settle-")
-	if err != nil {
-		return err
-	}
-	service.settlement.replyName = cluster.ServiceName(name)
-	return self.Node().RegisterService(service.settlement.replyName, self.Self())
-}
-
-// retrySettlement 由局末和 Pulse 调用；确认前重提原操作，确认后只重试删除待记录。
+// retrySettlement 由局末和 Pulse 调用；确认后只推送一次结果，后续只重试清理待记录。
 func (service *attackService) retrySettlement(self gsr.ServiceContext) {
 	if service.settlement.pending() {
 		if err := service.settlement.submit(self); err != nil {
 			_ = self.Logger().Error("斗地主待结算保留原操作", "operation_id", service.settlement.operation.ID, "error", err.Error())
+			return
 		}
-		return
+		if service.settlement.pending() {
+			return
+		}
+		if !service.recovery {
+			service.pushSnapshots(self)
+		}
 	}
 	service.deletePendingSettlement(self)
 }
@@ -171,22 +163,6 @@ func (service *attackService) deletePendingSettlement(self gsr.ServiceContext) {
 	if err := service.settlement.deletePending(); err != nil {
 		_ = self.Logger().Error("斗地主结算已确认，待重试清理 Redis", "operation_id", service.settlement.operation.ID, "error", err.Error())
 	}
-}
-
-func (service *attackService) handleSettlementReceipt(self gsr.CommandContext, id string, fields map[string]any, code string) error {
-	applied, err := service.settlement.applyReceipt(id, fields, code)
-	if err != nil {
-		_ = self.Logger().Error("斗地主结算结果未确认，保留原请求", "operation_id", id, "error", err.Error())
-		return err
-	}
-	if !applied {
-		return nil
-	}
-	if !service.recovery {
-		service.pushSnapshots(self)
-	}
-	service.deletePendingSettlement(self)
-	return nil
 }
 
 func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, login, node, agent, membership string) (map[string]any, error) {

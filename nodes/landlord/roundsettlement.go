@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"math/rand/v2"
+	"errors"
 	"time"
 
 	"github.com/cnooljaw/gsr"
@@ -10,12 +10,17 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+const (
+	settlementCallTimeout  = 2 * time.Second
+	settlementRedisTimeout = 250 * time.Millisecond
+	settlementRetryDelay   = time.Second
+)
+
 // roundSettlement 只拥有本桌资金请求和提交进度，由 AttackService 串行调用。
 type roundSettlement struct {
 	node           cluster.NodeID
 	journal        landlordJournal
 	operation      *landlordOperation
-	replyName      cluster.ServiceName
 	retryAt        time.Time
 	fault          error
 	cleanupPending bool // 终态已确认但 Redis 待记录尚未删除，不影响客户端结果。
@@ -121,59 +126,66 @@ func (round *roundSettlement) submit(self gsr.ServiceContext) error {
 	if round.fault != nil || time.Now().Before(round.retryAt) {
 		return nil
 	}
-	// Redis 或本地发送失败也限频；SQL 结果未知时仍保留原请求。
-	round.retryAt = time.Now().Add(time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	// 从本次等待结束后退避，积压的 Pulse 不得立即重提未知结果。
+	defer func() {
+		if round.pending() {
+			round.retryAt = time.Now().Add(settlementRetryDelay)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), settlementRedisTimeout)
 	err := round.journal.save(ctx, round.operation)
 	cancel()
 	if err != nil {
 		return err
 	}
-	if err := self.Cluster().Send(round.node, "settlement-submit", 7, round.operation.wire(), "landlord", string(round.replyName)); err != nil {
-		return err
-	}
-	round.retryAt = time.Now().Add(5*time.Second + rand.N(500*time.Millisecond))
-	return nil
-}
-
-// applyReceipt 只应用当前操作的完整终态；重复或其他牌局回执不改变状态。
-func (round *roundSettlement) applyReceipt(id string, fields map[string]any, code string) (bool, error) {
-	if !round.pending() || round.operation.ID != id || round.fault != nil {
-		return false, nil
-	}
-	if code != "" {
-		err := runtime.NewStatusError(runtime.ErrorClassDomain, runtime.ErrorCode(code), "settlement request did not complete")
-		if code != "settlement.busy" && code != "settlement.store_unavailable" {
+	ctx, cancel = context.WithTimeout(context.Background(), settlementCallTimeout)
+	value, err := self.Cluster().Call(ctx, round.node, "settlement-write", 7, round.operation.wire())
+	cancel()
+	if err != nil {
+		var status *runtime.StatusError
+		if errors.As(err, &status) && status.Class == runtime.ErrorClassDomain && status.Code != "settlement.store_unavailable" {
 			round.fault = err
 		}
-		return false, err
+		return err
+	}
+	return round.applyReceipt(value)
+}
+
+// applyReceipt 只接受当前操作的完整终态；格式错误时保留原请求，不假报已完成。
+func (round *roundSettlement) applyReceipt(value any) error {
+	if !round.pending() || round.fault != nil {
+		return nil
+	}
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return errLandlordInput
 	}
 	operation := round.operation
 	results, ok := fields["results"].([]any)
 	if !ok || len(results) != 1 {
-		return false, errLandlordInput
+		return errLandlordInput
 	}
 	item, ok := results[0].(map[string]any)
 	if !ok || item["operation_id"] != operation.ID {
-		return false, errLandlordInput
+		return errLandlordInput
 	}
 	status, ok := item["status"].(string)
 	if !ok || (status != "committed" && status != "rejected") {
-		return false, errLandlordInput
+		return errLandlordInput
 	}
 	reason, ok := item["reason"].(string)
 	if !ok {
-		return false, errLandlordInput
+		return errLandlordInput
 	}
 	values, ok := fields["balances"].([]any)
 	if !ok || len(values) != 3 {
-		return false, errLandlordInput
+		return errLandlordInput
 	}
 	balances := map[uint64]landlordBalance{}
 	for _, value := range values {
 		row, ok := value.(map[string]any)
 		if !ok {
-			return false, errLandlordInput
+			return errLandlordInput
 		}
 		uid, uidOK := row["user_id"].(uint64)
 		amount, amountOK := row["amount"].(int64)
@@ -183,28 +195,28 @@ func (round *roundSettlement) applyReceipt(id string, fields map[string]any, cod
 			expected = expected || c.UserID == uid
 		}
 		if !uidOK || !amountOK || !versionOK || amount < 0 || !expected {
-			return false, errLandlordInput
+			return errLandlordInput
 		}
 		if _, duplicate := balances[uid]; duplicate {
-			return false, errLandlordInput
+			return errLandlordInput
 		}
 		balances[uid] = landlordBalance{amount, version}
 	}
 	operation.Status, operation.Reason, operation.Balances = status, reason, balances
 	round.cleanupPending = true
 	round.retryAt = time.Time{}
-	return true, nil
+	return nil
 }
 
 func (round *roundSettlement) deletePending() error {
 	if time.Now().Before(round.retryAt) {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), settlementRedisTimeout)
 	defer cancel()
 	if err := round.journal.client.HDel(ctx, round.journal.key, round.operation.ID).Err(); err != nil {
 		// 从本次等待结束后退避，队列中积压的 Tick 只检查时间，不再次等待 Redis。
-		round.retryAt = time.Now().Add(time.Second)
+		round.retryAt = time.Now().Add(settlementRetryDelay)
 		return err
 	}
 	round.cleanupPending = false

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,17 +76,22 @@ func (fault *landlordCleanupFault) ProcessHook(next redis.ProcessHook) redis.Pro
 }
 
 type landlordSettlementBackend struct {
-	journal landlordJournal
-	status  string
-	calls   atomic.Int32
+	journal         landlordJournal
+	status          string
+	calls           atomic.Int32
+	firstError      error
+	firstDelay      time.Duration
+	badFirstReceipt bool
+	started         chan struct{}
+	requests        chan map[string]any
 }
 
 var _ gsr.Service = (*landlordSettlementBackend)(nil)
 
 func (*landlordSettlementBackend) OnStart(context.Context, gsr.ServiceContext) error { return nil }
 func (*landlordSettlementBackend) OnStop(context.Context) error                      { return nil }
-func (backend *landlordSettlementBackend) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
-	if cmd != 7 {
+func (backend *landlordSettlementBackend) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd != 7 || len(args) != 1 {
 		return nil, runtime.ErrUnknownCommand
 	}
 	request := args[0].(map[string]any)
@@ -93,13 +99,33 @@ func (backend *landlordSettlementBackend) Handle(self gsr.CommandContext, cmd ru
 	if !backend.journal.client.HExists(context.Background(), backend.journal.key, id).Val() {
 		return nil, errors.New("settlement called before journal saved")
 	}
-	backend.calls.Add(1)
+	call := backend.calls.Add(1)
+	if backend.requests != nil {
+		select {
+		case backend.requests <- request:
+		default:
+		}
+	}
+	if call == 1 {
+		if backend.started != nil {
+			close(backend.started)
+		}
+		if backend.firstDelay != 0 {
+			time.Sleep(backend.firstDelay)
+		}
+		if backend.firstError != nil {
+			return nil, backend.firstError
+		}
+		if backend.badFirstReceipt {
+			return map[string]any{}, nil
+		}
+	}
 	balances := []any{}
 	for _, change := range request["changes"].([]any) {
 		balances = append(balances, map[string]any{"user_id": change.(map[string]any)["user_id"], "amount": int64(10000), "version": uint64(2)})
 	}
 	receipt := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": backend.status, "reason": ""}}, "balances": balances}
-	return nil, self.Cluster().Send(cluster.NodeID(args[1].(string)), cluster.ServiceName(args[2].(string)), roomSettlementReceiptCommand, id, receipt, "")
+	return receipt, nil
 }
 
 // landlordResultPushRecorder 观察真实 Cluster 推送；只统计局末消息。
@@ -132,10 +158,7 @@ func (recorder *landlordResultPushRecorder) Handle(_ gsr.CommandContext, cmd run
 type landlordSettlementProbe struct{ *attackService }
 
 func (probe *landlordSettlementProbe) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	// 测试 Main 已负责注册桌名，回执地址和 Pulse 使用生产组装。
-	if err := probe.registerSettlementReply(self); err != nil {
-		return err
-	}
+	// 测试 Main 注册桌名；周期推进使用生产 Pulse。
 	_, err := self.CreateService(ctx, &landlordPulse{target: self.Self()})
 	return err
 }
@@ -166,7 +189,7 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 			journal.client.AddHook(fault)
 			backend := &landlordSettlementBackend{journal: journal, status: status}
 			routes := map[cluster.NodeID]string{}
-			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-submit": backend})
+			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-write": backend})
 			startLandlordTestNode(t, routes, "access", map[string]gsr.Service{"agent": &landlordResultPushRecorder{}})
 			game := testLandlordGame(t)
 			for i := range game.Players {
@@ -197,14 +220,6 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 				}
 			} else {
 				view = landlordTestValue(t, routes, "landlord", game.Name, roomPlayCommand, uid, "login", turn, []any{int64(3)}).(map[string]any)
-			}
-			resultDeadline := time.Now().Add(2 * time.Second)
-			for view["settlement"].(map[string]any)["status"] == "pending" {
-				if time.Now().After(resultDeadline) {
-					t.Fatal("异步结算回执未到达")
-				}
-				time.Sleep(10 * time.Millisecond)
-				view = landlordTestValue(t, routes, "landlord", game.Name, roomSnapshotCommand, uid, "login").(map[string]any)
 			}
 			if receipt := view["settlement"].(map[string]any); receipt["status"] != status || receipt["balance"] != int64(10000) {
 				t.Fatalf("有效回执被 Redis 清理失败掩盖: %v", receipt)
@@ -272,5 +287,133 @@ func TestSlowCleanupKeepsSnapshotResponsive(t *testing.T) {
 	_, err := landlordTestRPC(t, routes, "landlord", game.Name, roomSnapshotCommand, uint64(1), "login")
 	if err != nil {
 		t.Fatalf("Redis 清理每秒超时，250ms Tick 积压导致本桌快照超时: %v", err)
+	}
+}
+
+// TestLandlordUnconfirmedCallRetriesOriginalOperation 保护临时错误和坏回执只重提原请求，永久错误保留 Redis 并停止自动提交。
+func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
+	for _, scenario := range []struct {
+		name                 string
+		err                  error
+		malformed, permanent bool
+	}{
+		{"database_unavailable", runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.store_unavailable", "test SQL outage"), false, false},
+		{"mailbox_full", runtime.ErrMailboxFull, false, false},
+		{"malformed_receipt", nil, true, false},
+		{"identity_conflict", runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.identity_conflict", "test identity conflict"), false, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			journal := landlordJournal{client: startLandlordRedis(t), key: "test:landlord:pending"}
+			backend := &landlordSettlementBackend{journal: journal, status: "committed", firstError: scenario.err,
+				badFirstReceipt: scenario.malformed, requests: make(chan map[string]any, 2)}
+			routes := map[cluster.NodeID]string{}
+			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-write": backend})
+			game := testLandlordGame(t)
+			for i := range game.Players {
+				game.Players[i].AccessNode, game.Players[i].AgentName = "access", "agent"
+			}
+			game.Players[game.Seat].Hand = []int64{3}
+			service := newAttackService(game.Name, journal, nil, "settlement")
+			service.game = *game
+			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
+			view := landlordTestValue(t, routes, "landlord", game.Name, roomPlayCommand,
+				game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)}).(map[string]any)
+			if view["settlement"].(map[string]any)["status"] != "pending" || !journal.client.HExists(context.Background(), journal.key, "landlord-"+game.Name).Val() {
+				t.Fatal("未确认结果被当作终态或丢失原请求")
+			}
+			if scenario.permanent {
+				time.Sleep(1500 * time.Millisecond)
+				if backend.calls.Load() != 1 || journal.client.HLen(context.Background(), journal.key).Val() != 1 {
+					t.Fatal("永久错误仍重复提交或丢失原请求")
+				}
+				return
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				view = landlordTestValue(t, routes, "landlord", game.Name, roomSnapshotCommand, uint64(1), "login").(map[string]any)
+				if view["settlement"].(map[string]any)["status"] == "committed" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("原请求未恢复")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if backend.calls.Load() != 2 || journal.client.HLen(context.Background(), journal.key).Val() != 0 {
+				t.Fatal("重试次数或终态清理错误")
+			}
+			if !reflect.DeepEqual(<-backend.requests, <-backend.requests) {
+				t.Fatal("重试改变了原 ID 或内容")
+			}
+		})
+	}
+}
+
+// TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive 保护局末 Call 的超时小于接入等待，等待期间其他桌可工作，之后按原请求恢复。
+func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
+	journal := landlordJournal{client: startLandlordRedis(t), key: "test:landlord:pending"}
+	backend := &landlordSettlementBackend{journal: journal, status: "committed", firstDelay: 2100 * time.Millisecond,
+		started: make(chan struct{}), requests: make(chan map[string]any, 2)}
+	routes := map[cluster.NodeID]string{}
+	startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-write": backend})
+	game := testLandlordGame(t)
+	for i := range game.Players {
+		game.Players[i].AccessNode, game.Players[i].AgentName = "access", "agent"
+	}
+	game.Players[game.Seat].Hand = []int64{3}
+	service := newAttackService(game.Name, journal, nil, "settlement")
+	service.game = *game
+	other := newAttackService("other-table", journal, nil, "settlement")
+	other.game = *testLandlordGame(t)
+	other.game.Name = "other-table"
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
+		game.Name: &landlordSettlementProbe{service}, other.game.Name: &landlordSettlementProbe{other},
+	})
+	type response struct {
+		value any
+		err   error
+	}
+	done := make(chan response, 1)
+	go func() {
+		defer close(done)
+		value, err := landlordTestRPC(t, routes, "landlord", game.Name, roomPlayCommand,
+			game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)})
+		done <- response{value, err}
+	}()
+	defer func() {
+		for range done {
+		}
+	}()
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("局末 Call 未到达结算")
+	}
+	begin := time.Now()
+	landlordTestValue(t, routes, "landlord", other.game.Name, roomSnapshotCommand, uint64(1), "login")
+	if time.Since(begin) >= 500*time.Millisecond {
+		t.Fatal("其他桌被结算等待阻塞")
+	}
+	select {
+	case result := <-done:
+		if result.err != nil || result.value == nil || result.value.(map[string]any)["settlement"].(map[string]any)["status"] != "pending" {
+			t.Fatalf("接入等待先于内层超时或丢失待结果: %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("局末 Call 未有限返回")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		view := landlordTestValue(t, routes, "landlord", game.Name, roomSnapshotCommand, uint64(1), "login").(map[string]any)
+		if view["settlement"].(map[string]any)["status"] == "committed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("超时后未恢复原请求")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if backend.calls.Load() != 2 || !reflect.DeepEqual(<-backend.requests, <-backend.requests) {
+		t.Fatal("超时重试改变了请求或发生额外提交")
 	}
 }

@@ -55,7 +55,7 @@ func TestRoundPreparationKeepsOriginalRequest(t *testing.T) {
 	}
 }
 
-// TestRoundReceiptAppliesOnce 保护异步回执只确认原牌局一次，重复终态、旧错误和其他牌局结果不能覆盖已确认账务。
+// TestRoundReceiptAppliesOnce 保护 Call 回执只确认原牌局一次，错误内容不改变待请求，重复确认不覆盖终态。
 func TestRoundReceiptAppliesOnce(t *testing.T) {
 	game := testLandlordGame(t)
 	game.Phase, game.Winner = "finished", game.Landlord
@@ -67,17 +67,22 @@ func TestRoundReceiptAppliesOnce(t *testing.T) {
 		balances = append(balances, map[string]any{"user_id": change.UserID, "amount": int64(1000), "version": uint64(2)})
 	}
 	fields := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": ""}}, "balances": balances}
-	if applied, err := round.applyReceipt("other-round", fields, ""); applied || err != nil || !round.pending() {
-		t.Fatal("其他牌局结果改变了当前账务")
+	for _, malformed := range []any{
+		nil,
+		map[string]any{},
+		map[string]any{"results": []any{map[string]any{"operation_id": "other-round", "status": "committed", "reason": ""}}, "balances": balances},
+		map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "pending", "reason": ""}}, "balances": balances},
+		map[string]any{"results": fields["results"], "balances": balances[:2]},
+		map[string]any{"results": fields["results"], "balances": []any{balances[0], balances[0], balances[2]}},
+		map[string]any{"results": fields["results"], "balances": []any{map[string]any{"user_id": uint64(99), "amount": int64(1000), "version": uint64(2)}, balances[1], balances[2]}},
+		map[string]any{"results": fields["results"], "balances": []any{map[string]any{"user_id": uint64(1), "amount": int64(-1), "version": uint64(2)}, balances[1], balances[2]}},
+	} {
+		if err := round.applyReceipt(malformed); err == nil || !round.pending() || round.cleanupPending || len(round.operation.Balances) != 0 {
+			t.Fatalf("非法回执改变了账务: %v", malformed)
+		}
 	}
-	if applied, err := round.applyReceipt(id, fields, "settlement.busy"); applied || err == nil || round.fault != nil || !round.pending() {
-		t.Fatal("临时错误被当成终态")
-	}
-	if applied, err := round.applyReceipt(id, map[string]any{}, ""); applied || err == nil || !round.pending() {
-		t.Fatal("非法回执改变了账务")
-	}
-	if applied, err := round.applyReceipt(id, fields, ""); !applied || err != nil || round.pending() || !round.cleanupPending {
-		t.Fatalf("有效回执未确认: %v %v", applied, err)
+	if err := round.applyReceipt(fields); err != nil || round.pending() || !round.cleanupPending {
+		t.Fatalf("有效回执未确认: %v", err)
 	}
 	for _, change := range round.operation.Changes {
 		snapshot := round.snapshotFor(change.UserID)
@@ -91,9 +96,7 @@ func TestRoundReceiptAppliesOnce(t *testing.T) {
 			t.Fatal("修改快照影响了本桌确认结果")
 		}
 	}
-	for _, code := range []string{"", "settlement.store_unavailable", "settlement.identity_conflict"} {
-		if applied, err := round.applyReceipt(id, fields, code); applied || err != nil || round.operation.Status != "committed" || round.fault != nil {
-			t.Fatal("重复回执或迟到错误覆盖了终态")
-		}
+	if err := round.applyReceipt(map[string]any{}); err != nil || round.operation.Status != "committed" || round.fault != nil {
+		t.Fatal("重复确认覆盖了终态")
 	}
 }

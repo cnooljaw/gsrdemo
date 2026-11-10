@@ -192,21 +192,19 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 
 ```text
 prepareOperation：固定本局 OperationID 与三人金额
-  → submit：保存 Redis 待请求，再 Send settlement-submit / 7
-  → 当前回调返回，继续处理快照和其他消息
-
-handleSettlementReceipt：核对原 ID、终态和三人余额
-  → applyReceipt：确认本桌财务终态
+  → submit：保存 Redis 待请求，Call settlement-write / 7
+  → applyReceipt：校验返回的原 ID、终态和三人余额，确认本桌财务终态
   → pushSnapshots：向三人的当前连接发起推送
   → deletePendingSettlement：删除 Redis 待记录
 ```
 
-[roundSettlement](../nodes/landlord/roundsettlement.go) 用 `operation *landlordOperation` 保存固定请求及确认结果，`snapshotFor` 组装本人扣返、状态、余额与版本；[landlordJournal](../nodes/landlord/landlordjournal.go) 只持久化请求字段。正常局末不先广播 finished + pending；客户端以终态快照为结算结果，不再追加查账。主动查快照仍可能看到未确认状态。
+[roundSettlement](../nodes/landlord/roundsettlement.go) 用 `operation *landlordOperation` 保存固定请求及确认结果，`snapshotFor` 组装本人扣返、状态、余额与版本；[landlordJournal](../nodes/landlord/landlordjournal.go) 只持久化请求字段。正常局末不先广播 finished + pending；当前出牌回调拿到合法回执后直接返回终态快照，并向三人的当前连接发起推送，不再追加查账。临时故障返回或主动查询快照时仍可能看到未确认状态。
 
 ### 6.3 重试、清理与恢复
 
-- 每桌注册私有回执地址。请求未知时约 5～5.5 秒后按原操作重提，保存或本地发送失败至少间隔 1 秒；非临时远端错误保留请求并停止自动提交。原始 OperationID 和金额不变。
-- 有效回执只应用一次，过滤其他牌局、重复回执和迟到错误。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，从本次等待结束后至少退避 1 秒再清理；等待期间的 Tick 不访问 Redis，也不重新调用结算。
+- 本桌直接 Call 写池，不注册私有回执地址或 Command 20。结算 Call 等待 2 秒，保存/删除 Redis 各 250ms，与 access 的 3 秒外层等待留出余量；这些预算不包含桌邮箱中的先前排队。等待只占用本桌，其他桌继续工作。
+- 超时、满邮箱、临时远端错误或坏回执保留原请求，从本次等待结束后至少退避 1 秒再重提；非临时远端错误保留请求并停止自动提交。原始 OperationID 和金额不变，Call 超时不表示未入账。
+- 有效回执只确认当前操作的完整终态，确认后不重复调用结算。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，从本次等待结束后至少退避 1 秒再清理；等待期间的 Tick 不访问 Redis，也不重新调用结算。
 - 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。结算确认后或全不叫回到 waiting 时，桌通过本地 Call 请求目录释放已离开成员；目录确认无同桌新预留才移除座位。空桌在待记录清理完成后退出；刚创建等待首次 Join 的桌不提前退出。
 - 启动时加载 Redis 待请求，为各请求创建恢复专用 AttackService；不发布可加入桌名，也不向旧连接广播，确认并清理后退出。只恢复已保存的局末账务，不恢复进行中手牌。清理前崩溃会再次按原 ID 幂等补交。
 
@@ -214,13 +212,13 @@ handleSettlementReceipt：核对原 ID、终态和三人余额
 
 ### 7.1 入口与执行边界
 
-[MainService](../nodes/settlement/main_service.go) 创建 `settlement-write` 服务池，并组装独立查询与现有游戏使用的异步入口：
+[MainService](../nodes/settlement/main_service.go) 创建 `settlement-write` 服务池，并组装独立查询和仍保留的旧异步入口：
 
 | 入口 | 调用方式与用途 |
 | --- | --- |
-| `settlement-submit` | 旧 Send 写入，1=Batch、6=Single、7=Group；当前斗地主仍用 7，参数带回执节点与服务名 |
+| `settlement-submit` | 旧 Send 写入，1=Batch、6=Single、7=Group；带回执地址，两个游戏均已不使用，待清理 |
 | `settlement-read` | Call 查询批次、参与者操作或钱包；余额初始化及受控核查使用 |
-| `settlement-write` | GSR 服务池；Call 1=Batch、6=Single、7=Group，地鼠用 1，直接返回回执或错误 |
+| `settlement-write` | GSR 服务池；Call 1=Batch、6=Single、7=Group，地鼠用 1、斗地主用 7，直接返回回执或错误 |
 
 写入池由 GSR v1.0.3 `CreateServicePool` 创建，每个成员是独立的 [settlementService](../nodes/settlement/settlementservice.go)，各自串行执行，多个成员可并行处理不同调用。MainService 统一注册池名，成员不再自行注册名称。名称路由轮询选择一次成员，选中邮箱满即返回 ErrMailboxFull，不扫描其他成员；同步 Call 仍阻塞调用方 Service，超时不撤销目标请求。SQL 保持独立的 2 秒预算，Call 路径没有旧异步任务的 2 秒排队期限。
 
@@ -282,7 +280,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 认证不等于登录、失败回包后关闭 | [agent_auth_test.go](../nodes/access/agent_auth_test.go)、[tokenservice_test.go](../nodes/login/tokenservice_test.go)、[token_redis_test.go](../nodes/login/token_redis_test.go) |
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
 | 地鼠内存余额、回执、重试与检查点恢复 | [Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
-| 斗地主规则、终态一次应用、删除失败继续清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[回执集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
+| 斗地主规则、Call 终态、超时隔离、原请求重试与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
 | 事务、全局幂等、锁冲突、Call 池与异步并行 | [SQL 用例](../nodes/settlement/settlementservice_mysql_test.go)、[Call 池用例](../nodes/settlement/settlementservice_cluster_test.go)、[真实并发用例](../nodes/settlement/settlementservice_concurrency_live_test.go)、[异步用例](../nodes/settlement/settlementsubmitservice_test.go) |
 | 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
 
@@ -298,7 +296,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
-| 游戏结算改用 Call | settlement-write 已池化，mole 已改用 Call；landlord 的桌仍使用原 Send/Command 20。后续切换 landlord 并核对外层等待预算，再删除 settlement-submit、自建执行者、回调地址和过期测试，完成教程与压测入口调整。现有异步压测不代表新 Call 池的性能。 |
+| 旧结算入口与压测清理 | settlement-write 已池化，两个游戏均已改用 Call。后续删除已无游戏调用者的 settlement-submit、自建执行者及旧异步测试，调整压测入口，并比较 Call 池的执行者数、连接数和邮箱容量；现有异步压测不代表新 Call 池的性能。 |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
 | 斗地主输光封顶 | 当前余额不足整笔拒绝。后续实扣不超过可结算余额，账户最低为 0，赢家收益按实扣同步调整；多人分配、取整和限制生命周期仍需确认。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |
