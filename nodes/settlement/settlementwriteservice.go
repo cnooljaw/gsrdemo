@@ -10,18 +10,18 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// 写池对外共用一个逻辑名称；所有成员实现同一套命令。
+//
+//rpc:service settlementwrite public name=settlementWriteName
 const (
 	settlementWriteName                          = "settlement-write"
-	settlementReadName                           = "settlement-read"
 	settleBatchCommand         runtime.CommandID = 1
-	getBatchCommand            runtime.CommandID = 2
-	getOperationCommand        runtime.CommandID = 3
-	getBalanceCommand          runtime.CommandID = 4
 	settleSingleCommand        runtime.CommandID = 6
 	settleEqualGroupCommand    runtime.CommandID = 7
 	settleTransferGroupCommand runtime.CommandID = 8
-	settlementSQLTimeout                         = 2 * time.Second
 )
+
+const settlementSQLTimeout = 2 * time.Second
 
 var (
 	errInvalidSettlement     = runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.invalid_request", "invalid settlement request")

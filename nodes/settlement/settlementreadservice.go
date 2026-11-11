@@ -9,6 +9,16 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// 读池与写池各自维护命令编号；5 号旧汇总查询已停用，不复用。
+//
+//rpc:service settlementread public name=settlementReadName
+const (
+	settlementReadName                    = "settlement-read"
+	getBatchCommand     runtime.CommandID = 2
+	getOperationCommand runtime.CommandID = 3
+	getBalanceCommand   runtime.CommandID = 4
+)
+
 // settlementReadService 是读池的独立成员，只查询权威数据库，不持有余额缓存。
 type settlementReadService struct {
 	store      settlementStore

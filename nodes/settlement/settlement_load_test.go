@@ -18,6 +18,8 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 type settlementLoadJob struct {
@@ -61,12 +63,12 @@ func (caller *settlementLoadCaller) Handle(self gsr.CommandContext, command runt
 		caller.started = time.Now()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	command, args, name := job.command, job.args, settlementReadName
+	command, args, name := job.command, job.args, settlementread.ServiceName
 	if command == 0 {
-		command, args = settleBatchCommand, []any{job.request}
+		command, args = settlementwrite.SettleBatchCommand, []any{job.request}
 	}
-	if command == settleBatchCommand || command == settleSingleCommand || command == settleEqualGroupCommand {
-		name = settlementWriteName
+	if command == settlementwrite.SettleBatchCommand || command == settlementwrite.SettleSingleCommand || command == settlementwrite.SettleEqualGroupCommand {
+		name = settlementwrite.ServiceName
 	}
 	value, err := self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
 	cancel()

@@ -8,6 +8,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
 const (
@@ -199,7 +200,7 @@ func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, l
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	balance, err := self.Cluster().Call(ctx, service.settlement.node, "settlement-read", 4, uid)
+	balance, err := self.Cluster().Call(ctx, service.settlement.node, settlementread.ServiceName, settlementread.GetBalanceCommand, uid)
 	cancel()
 	if err != nil {
 		return nil, err

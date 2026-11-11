@@ -16,6 +16,8 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 // 功能用例使用小邮箱；生产入口容量由 YAML 指定，压测按档位设置。
@@ -127,9 +129,9 @@ func settlementRPC(t *testing.T, address string, command runtime.CommandID, args
 
 // settlementCall 供功能测试和压测直达固定公开入口；未知命令交由读入口验证拒绝契约。
 func settlementCall(ctx context.Context, self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
-	name := settlementReadName
-	if command == settleBatchCommand || command == settleSingleCommand || command == settleEqualGroupCommand {
-		name = settlementWriteName
+	name := settlementread.ServiceName
+	if command == settlementwrite.SettleBatchCommand || command == settlementwrite.SettleSingleCommand || command == settlementwrite.SettleEqualGroupCommand {
+		name = settlementwrite.ServiceName
 	}
 	return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
 }
@@ -155,10 +157,10 @@ func businessRPC(t *testing.T, routes map[cluster.NodeID]string, node, name stri
 func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 	store, mock := mockStore(t)
 	address, _ := startSettlementTestNode(t, store.db)
-	if _, err := settlementRPC(t, address, settleBatchCommand, testBatch("bad", map[string]any{"changes": []any{}})); !errors.Is(err, errInvalidSettlement) {
+	if _, err := settlementRPC(t, address, settlementwrite.SettleBatchCommand, testBatch("bad", map[string]any{"changes": []any{}})); !errors.Is(err, errInvalidSettlement) {
 		t.Fatalf("invalid batch: %v", err)
 	}
-	if _, err := settlementRPC(t, address, settleSingleCommand, testSingle("op", 1, 100, 0)); !errors.Is(err, errInvalidSettlement) {
+	if _, err := settlementRPC(t, address, settlementwrite.SettleSingleCommand, testSingle("op", 1, 100, 0)); !errors.Is(err, errInvalidSettlement) {
 		t.Fatalf("single requires version: %v", err)
 	}
 	single := testSingle("single", 1, 100, 0)
@@ -168,7 +170,7 @@ func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 	for _, entry := range []struct {
 		command runtime.CommandID
 		request map[string]any
-	}{{settleSingleCommand, single}, {settleEqualGroupCommand, group}} {
+	}{{settlementwrite.SettleSingleCommand, single}, {settlementwrite.SettleEqualGroupCommand, group}} {
 		mock.ExpectBegin().WillReturnError(errors.New("injected SQL outage"))
 		if _, err := settlementRPC(t, address, entry.command, entry.request); !errors.Is(err, errSettlementUnavailable) {
 			t.Fatalf("write command %d did not reach its transaction: %v", entry.command, err)
@@ -176,16 +178,16 @@ func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT amount, version").WithArgs(uint64(1)).WillReturnRows(sqlmock.NewRows([]string{"amount", "version"}).AddRow(1000, 1))
-	value, err := settlementRPC(t, address, getBalanceCommand, uint64(1))
+	value, err := settlementRPC(t, address, settlementread.GetBalanceCommand, uint64(1))
 	if err != nil || value.(map[string]any)["amount"] != int64(1000) || value.(map[string]any)["version"] != uint64(1) {
 		t.Fatalf("wire balance: %v %v", value, err)
 	}
 	mock.ExpectQuery("SELECT amount, version").WillReturnError(errors.New("private SQL diagnostic"))
-	if _, err := settlementRPC(t, address, getBalanceCommand, uint64(1)); !errors.Is(err, errSettlementUnavailable) {
+	if _, err := settlementRPC(t, address, settlementread.GetBalanceCommand, uint64(1)); !errors.Is(err, errSettlementUnavailable) {
 		t.Fatalf("database error escaped: %v", err)
 	}
 	mock.ExpectQuery("SELECT amount, version").WillReturnRows(sqlmock.NewRows([]string{"amount", "version"}))
-	if _, err := settlementRPC(t, address, getBalanceCommand, uint64(99)); !errors.Is(err, errWalletNotFound) {
+	if _, err := settlementRPC(t, address, settlementread.GetBalanceCommand, uint64(99)); !errors.Is(err, errWalletNotFound) {
 		t.Fatalf("missing wallet was auto-funded: %v", err)
 	}
 	if _, err := settlementRPC(t, address, runtime.CommandID(5), "demo"); !errors.Is(err, runtime.ErrUnknownCommand) {
@@ -198,16 +200,16 @@ func TestSettlementReadWriteBoundaries(t *testing.T) {
 	store, _ := mockStore(t)
 	address, _ := startSettlementTestNode(t, store.db)
 	routes := map[cluster.NodeID]string{"settlement": address}
-	if _, err := businessRPC(t, routes, "settlement", "settlement-read", settleBatchCommand, testBatch("bad", testSingle("op", 1, 100, 0))); !errors.Is(err, runtime.ErrUnknownCommand) {
+	if _, err := businessRPC(t, routes, "settlement", settlementread.ServiceName, settlementwrite.SettleBatchCommand, testBatch("bad", testSingle("op", 1, 100, 0))); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatal(err)
 	}
-	if _, err := businessRPC(t, routes, "settlement", "settlement-write", getBalanceCommand, uint64(1)); !errors.Is(err, runtime.ErrUnknownCommand) {
+	if _, err := businessRPC(t, routes, "settlement", settlementwrite.ServiceName, settlementread.GetBalanceCommand, uint64(1)); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatal(err)
 	}
-	if _, err := businessRPC(t, routes, "settlement", "settlement-write", runtime.CommandID(9), map[string]any{}); !errors.Is(err, runtime.ErrUnknownCommand) {
+	if _, err := businessRPC(t, routes, "settlement", settlementwrite.ServiceName, runtime.CommandID(9), map[string]any{}); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatalf("移除后的旧编号仍可调用: %v", err)
 	}
-	if _, err := businessRPC(t, routes, "settlement", "settlement-submit", settleBatchCommand, map[string]any{}); !errors.Is(err, runtime.ErrServiceNotFound) {
+	if _, err := businessRPC(t, routes, "settlement", "settlement-submit", settlementwrite.SettleBatchCommand, map[string]any{}); !errors.Is(err, runtime.ErrServiceNotFound) {
 		t.Fatalf("旧 Send 入口仍存在: %v", err)
 	}
 }
@@ -262,7 +264,7 @@ func TestSettlementCallPoolSlowSQLIsolation(t *testing.T) {
 	slow := make(chan error, 1)
 	go func() {
 		defer close(slow)
-		_, err := settlementRPC(t, address, settleBatchCommand, testBatch("slow", testSingle("op-slow", 1, 10, 0)))
+		_, err := settlementRPC(t, address, settlementwrite.SettleBatchCommand, testBatch("slow", testSingle("op-slow", 1, 10, 0)))
 		slow <- err
 	}()
 	// 即使前面的断言失败，也等当前调用结束后再关闭节点与数据库。
@@ -277,11 +279,11 @@ func TestSettlementCallPoolSlowSQLIsolation(t *testing.T) {
 		t.Fatal("慢请求未进入 SQL")
 	}
 	begin := time.Now()
-	value, err := settlementRPC(t, address, settleBatchCommand, request)
+	value, err := settlementRPC(t, address, settlementwrite.SettleBatchCommand, request)
 	if err != nil || value.(map[string]any)["batch_id"] != "fast" {
 		t.Fatalf("快速写入未返回原回执: %v %v", value, err)
 	}
-	value, err = settlementRPC(t, address, getBalanceCommand, uint64(3))
+	value, err = settlementRPC(t, address, settlementread.GetBalanceCommand, uint64(3))
 	if err != nil || value.(map[string]any)["amount"] != int64(1000) {
 		t.Fatalf("独立查询被阻塞: %v %v", value, err)
 	}
@@ -315,7 +317,7 @@ func TestSettlementReadPoolSlowSQLIsolation(t *testing.T) {
 	address, _ := startSettlementTestNode(t, store.db)
 	slow := make(chan error, 1)
 	go func() {
-		_, err := settlementRPC(t, address, getBalanceCommand, uint64(1))
+		_, err := settlementRPC(t, address, settlementread.GetBalanceCommand, uint64(1))
 		slow <- err
 	}()
 	defer func() {
@@ -329,7 +331,7 @@ func TestSettlementReadPoolSlowSQLIsolation(t *testing.T) {
 		t.Fatal("慢查询未进入 SQL")
 	}
 	begin := time.Now()
-	value, err := settlementRPC(t, address, getBalanceCommand, uint64(2))
+	value, err := settlementRPC(t, address, settlementread.GetBalanceCommand, uint64(2))
 	if err != nil || value.(map[string]any)["amount"] != int64(900) {
 		t.Fatalf("查询未返回: %v %v", value, err)
 	}

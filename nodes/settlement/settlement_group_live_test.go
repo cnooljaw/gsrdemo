@@ -12,6 +12,8 @@ import (
 
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 // TestSettlementGroupPoliciesLiveMySQL 保护两个真实 Call 接口原子入账、实际回执持久化、并发原 ID 重试和历史回执不随余额变化。
@@ -31,7 +33,7 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	address, stop := startSettlementTestNode(t, store.db)
 	call := func(cmd runtime.CommandID, request map[string]any) map[string]any {
 		t.Helper()
-		value, err := retryLiveSettlement(t, address, settlementWriteName, cmd, request)
+		value, err := retryLiveSettlement(t, address, settlementwrite.ServiceName, cmd, request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +63,7 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			receipt, err := retryLiveSettlement(t, address, settlementWriteName, settleEqualGroupCommand, request)
+			receipt, err := retryLiveSettlement(t, address, settlementwrite.ServiceName, settlementwrite.SettleEqualGroupCommand, request)
 			responses <- result{receipt, err}
 		}()
 	}
@@ -107,10 +109,10 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	sample.Batches = append(sample.Batches, derivedBatchID("single", singleID))
 	single := testSingle(singleID, sample.Users[0], 0, 100)
 	single["version"] = uint64(2)
-	call(settleSingleCommand, single)
+	call(settlementwrite.SettleSingleCommand, single)
 	stop()
 	address, _ = startSettlementTestNode(t, store.db)
-	if again := call(settleEqualGroupCommand, request); !reflect.DeepEqual(first, again) {
+	if again := call(settlementwrite.SettleEqualGroupCommand, request); !reflect.DeepEqual(first, again) {
 		t.Fatal("重启重试改变了原回执")
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), settlementSQLTimeout)
@@ -135,7 +137,7 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementWriteName, settleEqualGroupCommand, request); !errors.Is(err, errSettlementUnavailable) {
+	if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementwrite.ServiceName, settlementwrite.SettleEqualGroupCommand, request); !errors.Is(err, errSettlementUnavailable) {
 		t.Fatalf("损坏回执被当成成功: %v", err)
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), settlementSQLTimeout)
@@ -152,7 +154,7 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 		map[string]any{"from_user_id": sample.Users[0], "to_user_id": sample.Users[2], "amount": int64(150)},
 		map[string]any{"from_user_id": sample.Users[0], "to_user_id": sample.Users[3], "amount": int64(50)},
 	}}
-	receipt := call(settleTransferGroupCommand, transfer)
+	receipt := call(settlementwrite.SettleTransferGroupCommand, transfer)
 	row := receipt["results"].([]any)[0].(map[string]any)
 	edges := row["actual_transfers"].([]any)
 	got := map[uint64]int64{}
@@ -163,12 +165,12 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	if row["status"] != "committed" || got[sample.Users[2]] != 75 || got[sample.Users[3]] != 25 {
 		t.Fatalf("按明细分配错误: %v", row)
 	}
-	if again := call(settleTransferGroupCommand, transfer); !reflect.DeepEqual(receipt, again) {
+	if again := call(settlementwrite.SettleTransferGroupCommand, transfer); !reflect.DeepEqual(receipt, again) {
 		t.Fatal("明细重复提交改变回执")
 	}
 	// 已有全局 OperationID 不能切换到另一种结算策略。
 	transfer["operation_id"], transfer["business_ref"] = id, id
-	if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementWriteName, settleTransferGroupCommand, transfer); !errors.Is(err, errSettlementConflict) {
+	if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementwrite.ServiceName, settlementwrite.SettleTransferGroupCommand, transfer); !errors.Is(err, errSettlementConflict) {
 		t.Fatal("跨策略复用身份被接受")
 	}
 
@@ -186,7 +188,7 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	zero.Operations = append(zero.Operations, zeroID)
 	zero.Batches = append(zero.Batches, derivedBatchID("group-equal", zeroID))
 	zeroRequest := liveGroupRequest(zeroID, "cards", zero.Users[0], zero.Users[1], 10)
-	zeroReceipt := call(settleEqualGroupCommand, zeroRequest)
+	zeroReceipt := call(settlementwrite.SettleEqualGroupCommand, zeroRequest)
 	zeroResult := zeroReceipt["results"].([]any)[0].(map[string]any)
 	if zeroResult["status"] != "committed" {
 		t.Fatalf("全零结算未完成: %v", zeroResult)
@@ -202,7 +204,7 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 			t.Fatal("未变化的钱包版本发生变化")
 		}
 	}
-	queried, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementReadName, getOperationCommand, zero.Users[0], zeroID)
+	queried, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementread.ServiceName, settlementread.GetOperationCommand, zero.Users[0], zeroID)
 	if err != nil || queried.(map[string]any)["actual_changes"] != nil {
 		t.Fatalf("参与者查询泄漏了整组明细: %v %v", queried, err)
 	}
@@ -218,10 +220,10 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	zero.Operations = append(zero.Operations, overflowID)
 	zero.Batches = append(zero.Batches, derivedBatchID("group-equal", overflowID))
 	overflowRequest := liveGroupRequest(overflowID, "cards", zero.Users[0], zero.Users[1], 1)
-	if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementWriteName, settleEqualGroupCommand, overflowRequest); !errors.Is(err, errBalanceOverflow) {
+	if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementwrite.ServiceName, settlementwrite.SettleEqualGroupCommand, overflowRequest); !errors.Is(err, errBalanceOverflow) {
 		t.Fatalf("溢出未返回确定性错误: %v", err)
 	}
-	if previous, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementReadName, getBatchCommand, derivedBatchID("group-equal", overflowID)); err != nil || previous != nil {
+	if previous, err := businessRPC(t, map[cluster.NodeID]string{"settlement": address}, "settlement", settlementread.ServiceName, settlementread.GetBatchCommand, derivedBatchID("group-equal", overflowID)); err != nil || previous != nil {
 		t.Fatalf("溢出写入了终态: %v %v", previous, err)
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), settlementSQLTimeout)
@@ -230,7 +232,7 @@ func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := call(settleEqualGroupCommand, overflowRequest)["results"].([]any)[0].(map[string]any); result["status"] != "committed" {
+	if result := call(settlementwrite.SettleEqualGroupCommand, overflowRequest)["results"].([]any)[0].(map[string]any); result["status"] != "committed" {
 		t.Fatalf("异常修复后原请求不能重试: %v", result)
 	}
 }

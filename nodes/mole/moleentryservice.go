@@ -7,6 +7,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
 const (
@@ -107,7 +108,7 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 		return cached, err
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
-	value, err := self.Cluster().Call(ctx, service.settlementNode, "settlement-read", 4, userID)
+	value, err := self.Cluster().Call(ctx, service.settlementNode, settlementread.ServiceName, settlementread.GetBalanceCommand, userID)
 	cancel()
 	if err != nil {
 		return nil, errAccountingUnavailable

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 	"github.com/go-sql-driver/mysql"
 )
 
@@ -134,7 +136,7 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	single["version"] = uint64(2)
 	sample.Operations = append(sample.Operations, prefix+"-single")
 	sample.Batches = append(sample.Batches, derivedBatchID("single", prefix+"-single"))
-	result := liveCall(t, address, settleSingleCommand, single)
+	result := liveCall(t, address, settlementwrite.SettleSingleCommand, single)
 	if result["results"].([]any)[0].(map[string]any)["status"] != "committed" {
 		t.Fatal("single failed")
 	}
@@ -154,7 +156,7 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	}
 	batchID := prefix + "-batch"
 	sample.Batches = append(sample.Batches, batchID)
-	result = liveCall(t, address, settleBatchCommand, testBatch(batchID, batchOps...))
+	result = liveCall(t, address, settlementwrite.SettleBatchCommand, testBatch(batchID, batchOps...))
 	statuses := result["results"].([]any)
 	if statuses[0].(map[string]any)["status"] != "committed" || statuses[1].(map[string]any)["status"] != "rejected" || statuses[2].(map[string]any)["status"] != "committed" {
 		t.Fatal("independent batch outcomes lost")
@@ -165,7 +167,7 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	repeated["business"] = business
 	repeated["items"] = single["items"]
 	sample.Batches = append(sample.Batches, prefix+"-repeat")
-	result = liveCall(t, address, settleBatchCommand, testBatch(prefix+"-repeat", repeated))
+	result = liveCall(t, address, settlementwrite.SettleBatchCommand, testBatch(prefix+"-repeat", repeated))
 	if result["results"].([]any)[0].(map[string]any)["origin_batch"] != derivedBatchID("single", prefix+"-single") {
 		t.Fatal("cross-interface duplicate lost origin")
 	}
@@ -177,7 +179,7 @@ func TestSettlementLiveMySQL(t *testing.T) {
 		t.Fatalf("summary duplicated money: %v", summary)
 	}
 	for i, want := range []int64{98, 1000, 1050} {
-		balance := liveCall(t, address, getBalanceCommand, users[i])
+		balance := liveCall(t, address, settlementread.GetBalanceCommand, users[i])
 		if balance["amount"] != want || balance["version"] != []uint64{3, 1, 2}[i] {
 			t.Fatalf("wallet %d: %v want amount %d", i, balance, want)
 		}
@@ -189,12 +191,12 @@ func TestSettlementLiveMySQL(t *testing.T) {
 		t.Fatal("invalid archive succeeded")
 	}
 	cancel()
-	if liveCall(t, address, getBalanceCommand, users[1])["amount"] != int64(1000) {
+	if liveCall(t, address, settlementread.GetBalanceCommand, users[1])["amount"] != int64(1000) {
 		t.Fatal("archive failure did not roll back wallet")
 	}
 	stop()
 	address, _ = startSettlementTestNode(t, store.db)
-	operation := liveCall(t, address, getOperationCommand, users[2], prefix+"-b")
+	operation := liveCall(t, address, settlementread.GetOperationCommand, users[2], prefix+"-b")
 	if operation["status"] != "committed" {
 		t.Fatal("restart lost financial result")
 	}

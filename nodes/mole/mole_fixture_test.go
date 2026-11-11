@@ -14,6 +14,8 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 // 测试后端按公开 wire 协议注册命令；游戏业务不持有这些编号。
@@ -261,7 +263,7 @@ func (service *moleTestPeer) OnStart(ctx context.Context, self gsr.ServiceContex
 		return err
 	}
 	if service.name == "settlement" {
-		for _, name := range []string{"settlement-write", "settlement-read"} {
+		for _, name := range []string{settlementwrite.ServiceName, settlementread.ServiceName} {
 			if err := self.Node().RegisterService(cluster.ServiceName(name), id); err != nil {
 				return err
 			}

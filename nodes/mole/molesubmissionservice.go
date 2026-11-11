@@ -9,6 +9,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 const (
@@ -154,7 +155,7 @@ func (service *moleSubmissionService) submitBatch(self gsr.ServiceContext) error
 		return err
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), moleSettlementTimeout)
-	value, err := self.Cluster().Call(ctx, service.settlementNode, "settlement-write", 1, service.batch.wire())
+	value, err := self.Cluster().Call(ctx, service.settlementNode, settlementwrite.ServiceName, settlementwrite.SettleBatchCommand, service.batch.wire())
 	cancel()
 	if err != nil {
 		return err

@@ -199,11 +199,14 @@ unset demo_password
 | 全部 Go test/vet 与 TS 编译/单测 | `./scripts/dev.sh check` |
 | 仅检查或构建一个节点 | `./scripts/dev.sh check access` / `./scripts/dev.sh build access` |
 | 重新生成 Go / TS 业务协议 | `./scripts/dev.sh generate access` |
+| 重新生成 Service RPC 契约 | `./scripts/dev.sh generate rpc` |
 | TS 客户端单测 | `npm --prefix typeclient test` |
 
 测试按行为归属组织：纯规则用例就近放在被测文件对应的 `*_test.go`，`*_cluster_test.go` 验证节点调用契约，`*_live_test.go` / `*_process_test.go` 验证真实存储或进程协作，`*_load_test.go` 提供显式启用的容量样本。共享启动与后端替身放在 `*_fixture_test.go`。不同层只保留各自特有的失败边界，避免重复验证同一成功流程。
 
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
+
+结算 RPC 的名称与命令在对应 Service 文件中维护，生成到 `common/rpc/<service>/commands.gen.go` 并入库；修改源定义后执行 `generate rpc`。`check` 会只读核对生成结果，缺失、过期或多余的生成文件都会报错。定义方式见 [Service 命令与共享契约](docs/GO-CODE-STYLE.md#331-service-命令与共享契约)。
 
 单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）。此验收执行外部节点二进制，使用 `-count=1` 确保本次实际启动进程：
 

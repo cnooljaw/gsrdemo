@@ -9,6 +9,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 const (
@@ -140,7 +141,7 @@ func (round *roundSettlement) submit(self gsr.ServiceContext) error {
 		return err
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), settlementCallTimeout)
-	value, err := self.Cluster().Call(ctx, round.node, "settlement-write", 7, round.operation.wire())
+	value, err := self.Cluster().Call(ctx, round.node, settlementwrite.ServiceName, settlementwrite.SettleEqualGroupCommand, round.operation.wire())
 	cancel()
 	if err != nil {
 		var status *runtime.StatusError

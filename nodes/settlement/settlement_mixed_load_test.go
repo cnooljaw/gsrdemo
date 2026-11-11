@@ -9,6 +9,9 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 type settlementMixedLimits struct{ writes, reads, connections int }
@@ -83,7 +86,7 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 		if (index*37)%100 < scenario.writePercent {
 			report.WriteRPC++
 			if report.WriteRPC%10 == 0 {
-				job.command = settleEqualGroupCommand
+				job.command = settlementwrite.SettleEqualGroupCommand
 				changes := []any{}
 				for i, delta := range []int64{-1, -1, 2} {
 					debit, credit := int64(0), int64(0)
@@ -116,16 +119,16 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 			}
 		} else {
 			report.ReadRPC++
-			job.command = getBalanceCommand
+			job.command = settlementread.GetBalanceCommand
 			// 与当前来源错开，读取正在被其他来源更新的钱包。
 			job.args = []any{sample.Users[((stream+17)%sources)*8+index%8]}
 			if scenario.audit {
 				switch report.ReadRPC % 10 {
 				case 0:
-					job.command = getBatchCommand
+					job.command = settlementread.GetBatchCommand
 					job.args = []any{seed}
 				case 1:
-					job.command = getOperationCommand
+					job.command = settlementread.GetOperationCommand
 					job.args = []any{sample.Users[sources*8], seed + "-op"}
 				}
 			}
@@ -145,11 +148,11 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 				continue
 			}
 			cmd := result.job.command
-			if cmd == 0 || cmd == settleEqualGroupCommand {
+			if cmd == 0 || cmd == settlementwrite.SettleEqualGroupCommand {
 				writeLatency = append(writeLatency, result.elapsed)
 				expectedBatch := result.job.id
 				count := batchSize
-				if cmd == settleEqualGroupCommand {
+				if cmd == settlementwrite.SettleEqualGroupCommand {
 					expectedBatch = derivedBatchID("group-equal", result.job.id)
 					count = 1
 				}
@@ -170,13 +173,13 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 			} else {
 				readLatency = append(readLatency, result.elapsed)
 				switch cmd {
-				case getBalanceCommand:
+				case settlementread.GetBalanceCommand:
 					uid := result.job.args[0].(uint64)
 					amount, found := snapshots[uid][result.receipt["version"].(uint64)]
 					if !found || result.receipt["user_id"] != uid || result.receipt["amount"] != amount {
 						t.Fatalf("查询读到不完整的钱包版本: %v", result.receipt)
 					}
-				case getBatchCommand:
+				case settlementread.GetBatchCommand:
 					if result.receipt["batch_id"] != seed {
 						t.Fatal("核查批次身份错误")
 					}
@@ -184,7 +187,7 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 					if len(rows) != 1 || rows[0].(map[string]any)["status"] != "committed" {
 						t.Fatal("核查批次终态错误")
 					}
-				case getOperationCommand:
+				case settlementread.GetOperationCommand:
 					if result.receipt["operation_id"] != seed+"-op" || result.receipt["status"] != "committed" || result.receipt["origin_batch"] != seed {
 						t.Fatal("核查操作终态错误")
 					}

@@ -15,6 +15,7 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -217,7 +218,7 @@ func applyAccessPreparedBatch(t *testing.T, ctx context.Context, address string,
 		})
 	}
 	request := map[string]any{"version": uint64(2), "batch_id": batch.ID, "operations": operations}
-	result := accessSettlementWrite(t, ctx, address, 1, request)
+	result := accessSettlementWrite(t, ctx, address, settlementwrite.SettleBatchCommand, request)
 	receipt, ok := result.(map[string]any)
 	if !ok || receipt["batch_id"] != batch.ID {
 		t.Fatalf("原批次提交结果不匹配: %v", result)
@@ -231,7 +232,7 @@ func accessSettlementWrite(t *testing.T, ctx context.Context, address string, co
 	var result any
 	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
 		var err error
-		result, err = self.Cluster().Call(wait, "settlement", "settlement-write", command, request)
+		result, err = self.Cluster().Call(wait, "settlement", settlementwrite.ServiceName, command, request)
 		return err
 	}}
 	if err := gsr.Run(wait, gsr.Config{

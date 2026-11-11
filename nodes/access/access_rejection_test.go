@@ -7,6 +7,7 @@ import (
 	"time"
 
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -31,7 +32,7 @@ func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddr
 	}
 	drainID := "access-drain-" + suffix
 	*operationIDs = append(*operationIDs, drainID)
-	result := accessSettlementWrite(t, ctx, settlementAddress, 6, map[string]any{
+	result := accessSettlementWrite(t, ctx, settlementAddress, settlementwrite.SettleSingleCommand, map[string]any{
 		"version": uint64(2), "operation_id": drainID, "business": "test", "business_ref": "other-business",
 		"user_id": player.id, "detail": map[string]any{"case": "cached-balance"},
 		"items": []any{map[string]any{"reason": "test_debit", "debit": amount, "credit": int64(0)}},

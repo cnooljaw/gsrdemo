@@ -12,6 +12,7 @@ import (
 	"time"
 
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -248,7 +249,7 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 				changes = append(changes, map[string]any{"user_id": c.UserID, "reason": "game_win_loss", "debit": c.Debit, "credit": c.Credit})
 			}
 			// 使用真实原请求构造已提交/游戏未确认边界，不直接修改账本。
-			accessSettlementWrite(t, ctx, settlement.address, 7, map[string]any{
+			accessSettlementWrite(t, ctx, settlement.address, settlementwrite.SettleEqualGroupCommand, map[string]any{
 				"version": uint64(2), "operation_id": operationID, "business": "landlord", "business_ref": operationID, "changes": changes,
 				"detail": map[string]any{"rule": "landlord-demo-v1", "base": int64(10), "multiplier": saved.Multiplier, "landlord_user_id": saved.Changes[saved.Landlord].UserID, "winner_user_id": saved.Changes[saved.Winner].UserID},
 			})

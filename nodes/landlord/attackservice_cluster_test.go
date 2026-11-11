@@ -11,6 +11,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
 type landlordTestMain struct {
@@ -71,7 +72,7 @@ func (backend *landlordTestBackend) Handle(_ gsr.CommandContext, cmd runtime.Com
 			login = "login"
 		}
 		return map[string]any{"login_id": login, "access_node": "access-01", "agent_name": "agent"}, nil
-	case 4:
+	case settlementread.GetBalanceCommand:
 		return map[string]any{"user_id": uid, "amount": int64(10000), "version": uint64(1)}, nil
 	case releaseCommand:
 		return true, nil
@@ -178,7 +179,7 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 	routes := map[cluster.NodeID]string{}
 	startLandlordTestNode(t, routes, "online", map[string]gsr.Service{"online": &landlordTestBackend{logins: map[uint64]string{}}})
 	reads := map[string]gsr.Service{}
-	for _, name := range []string{"settlement-read"} {
+	for _, name := range []string{settlementread.ServiceName} {
 		reads[name] = &landlordTestBackend{}
 	}
 	startLandlordTestNode(t, routes, "settlement-02", reads)

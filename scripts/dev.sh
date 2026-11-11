@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 用途：构建、检查项目、前台启动节点或执行结算 Call 池或读写混合压测。
-# 用法：dev.sh build|check [access|login|online|mole|settlement|landlord]；dev.sh run <节点>；dev.sh load settlement；dev.sh generate access。
+# 用途：构建、检查项目、生成协议/契约、前台启动节点或执行结算 Call 池及读写混合压测。
+# 用法：dev.sh build|check [access|login|online|mole|settlement|landlord]；dev.sh run <节点>；dev.sh load settlement；dev.sh generate access|rpc。
 # run 优先读取 configs/<节点>-01.local.yaml，未配置时读取公开模板。
 # 不指定节点时，build/check 包含所有 Go module 和 TypeScript；指定时只处理 common 和该节点。
 # 执行范围：仅 gsrdemo；GOWORK=off，复用 .cache/go-build，构建输出到 bin/ 和 typeclient/dist/。
@@ -11,7 +11,7 @@ export GOCACHE="${GOCACHE:-$project_root/.cache/go-build}"
 export GOWORK=off
 
 usage() {
-    echo "用法：$0 build|check [access|login|online|mole|settlement|landlord] | run <节点> | load settlement | generate access"
+    echo "用法：$0 build|check [access|login|online|mole|settlement|landlord] | run <节点> | load settlement | generate access|rpc"
 }
 
 action="${1:-}"
@@ -30,10 +30,14 @@ case "$action" in
 esac
 case "$node" in
     ""|access|login|online|mole|settlement|landlord) ;;
+    rpc) [[ "$action" == "generate" ]] || { usage >&2; exit 2; } ;;
     *) usage >&2; exit 2 ;;
 esac
 
 if [[ "$action" == "generate" ]]; then
+    if [[ "$node" == "rpc" ]]; then
+        exec go -C "$project_root/common" run ./tools/rpcgen -root "$project_root"
+    fi
     [[ "$node" == "access" ]] || { usage >&2; exit 2; }
     # 只读发布模块的 schema；临时输入和全部生成产物均归本项目。
     mkdir -p "$project_root/.cache"
@@ -84,6 +88,11 @@ fi
 if [[ -z "$node" && ! -d "$project_root/typeclient/node_modules" ]]; then
     echo "缺少 TypeScript 依赖，请执行 npm --prefix typeclient ci。" >&2
     exit 1
+fi
+
+# 生成契约纳入版本管理；检查时只核对，不悄悄更新调用方正在使用的契约。
+if [[ "$action" == "check" ]]; then
+    go -C "$project_root/common" run ./tools/rpcgen -root "$project_root" -check
 fi
 
 modules=("$project_root/common")

@@ -15,6 +15,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -91,7 +92,7 @@ var _ gsr.Service = (*landlordSettlementBackend)(nil)
 func (*landlordSettlementBackend) OnStart(context.Context, gsr.ServiceContext) error { return nil }
 func (*landlordSettlementBackend) OnStop(context.Context) error                      { return nil }
 func (backend *landlordSettlementBackend) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
-	if cmd != 7 || len(args) != 1 {
+	if cmd != settlementwrite.SettleEqualGroupCommand || len(args) != 1 {
 		return nil, runtime.ErrUnknownCommand
 	}
 	request := args[0].(map[string]any)
@@ -190,7 +191,7 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 			journal.client.AddHook(fault)
 			backend := &landlordSettlementBackend{journal: journal, status: status}
 			routes := map[cluster.NodeID]string{}
-			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-write": backend})
+			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{settlementwrite.ServiceName: backend})
 			startLandlordTestNode(t, routes, "access", map[string]gsr.Service{"agent": &landlordResultPushRecorder{}})
 			game := testLandlordGame(t)
 			for i := range game.Players {
@@ -308,7 +309,7 @@ func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 			backend := &landlordSettlementBackend{journal: journal, status: "committed", firstError: scenario.err,
 				badFirstReceipt: scenario.malformed, requests: make(chan map[string]any, 2)}
 			routes := map[cluster.NodeID]string{}
-			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-write": backend})
+			startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{settlementwrite.ServiceName: backend})
 			game := testLandlordGame(t)
 			for i := range game.Players {
 				game.Players[i].AccessNode, game.Players[i].AgentName = "access", "agent"
@@ -356,7 +357,7 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 	backend := &landlordSettlementBackend{journal: journal, status: "committed", firstDelay: 2100 * time.Millisecond,
 		started: make(chan struct{}), requests: make(chan map[string]any, 2)}
 	routes := map[cluster.NodeID]string{}
-	startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{"settlement-write": backend})
+	startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{settlementwrite.ServiceName: backend})
 	game := testLandlordGame(t)
 	for i := range game.Players {
 		game.Players[i].AccessNode, game.Players[i].AgentName = "access", "agent"

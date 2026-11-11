@@ -80,7 +80,7 @@ if player.Disabled {
 - Service 显式实现 `Handle`；有业务命令时具名持有 Dispatcher 并转发，无业务命令的 MainService 返回 `ErrUnknownCommand`。客户端 Agent 另显式实现 `HandleClientMessage`，不依靠匿名嵌入提升入口方法。
 - 不同业务消息使用独立 CommandID，直接绑定具体处理方法；不在通用 Handler 中用 `kind/type` 字符串建立第二套命令路由。普通玩法规则内部的条件分支不受此限制。
 - 注册表每行一个“ID → 方法”，由 `gofmt` 对齐。CommandID 在同一 Service 合并后的表中唯一，不同 Service 可以复用；客户端 MsgID 属于另一个编号空间。重复注册和占用框架保留编号在组装时拒绝，不能按顺序覆盖。
-- Service 名称、CommandID 等契约就近定义。有真实共享调用需求时才提取共享契约，不为少量常量新建通用层；节点不导入彼此实现。
+- Service 名称、CommandID 等契约在对应 Service 文件或同目录的命令文件中定义；共享方式见下一节。节点不导入彼此实现。
 - 固定组件显式组装，不按每条消息重建，也不引入自动发现框架。access 的通用协议与各游戏分别提供注册表，由同一份组件清单汇总注册、进入互斥和断线清理；新增协议仍需同步定义、生成产物与客户端。
 
 ```go
@@ -98,6 +98,28 @@ func (mole *Mole) ProtocolHandlers() map[uint32]any {
 	}
 }
 ```
+
+#### 3.3.1 Service 命令与共享契约
+
+- 以 Service 为公开/私有边界，命令不再逐条区分公私。公开 Service 的命令块整体生成共享契约；私有 Service 的命令留在节点内部。未标记的命令块不参与生成，已有节点按实际迁移范围接入。
+- 每个 Service 使用独立命令块，和 Dispatcher 就近维护；块内所有命令都显式赋值。同一 Service 编号唯一，不同 Service 可以复用编号；停用编号按协议约定保留，不通过重排或 `iota` 改变既有编号。
+- 标记格式为 `//rpc:service <契约包名> public|private [name=<本地名称常量>]`。包名使用小写字母，公开契约包名在仓库中唯一。`name=` 引用同一块内显式定义的非空字符串，生成固定 `ServiceName`；其他项为 uint32 范围的显式整数，首字母大写后导出。生成器只提取常量，不生成 Handler、参数编解码、调用包装或重试策略。
+- 固定单实例和服务池生成固定逻辑名称；池成员共享一份契约，数量和成员 ID 不进入生成文件。动态房间省略 `name=`，只生成命令，调用使用业务返回的实例名称。节点地址从配置取得。
+- 源定义由对应节点维护，`common/rpc/<service>/commands.gen.go` 由工具生成并纳入 Git。提供方注册使用源常量，跨节点调用方引用生成常量；禁止手改生成文件或另抄一份编号。工程生成与同步检查命令见 [README](../README.md#开发与验证)。
+- 公开/私有标记控制契约生成，不是 GSR 的访问控制。节点组装决定是否对外发布名称；需要限制本地来源的 Handler 继续执行来源检查，不能依赖常量是否导出。
+
+例如结算写 Service 的源定义：
+
+```go
+//rpc:service settlementwrite public name=settlementWriteName
+const (
+	settlementWriteName = "settlement-write"
+	settleBatchCommand runtime.CommandID = 1
+	settleEqualGroupCommand runtime.CommandID = 7
+)
+```
+
+生成后调用方引用 `settlementwrite.ServiceName`、`settlementwrite.SettleBatchCommand` 等。当前已接入结算读/写 Service，其余节点的契约迁移见 [后续工作](DESIGN.md#10-后续工作)。
 
 ### 3.4 调用、超时与失败
 

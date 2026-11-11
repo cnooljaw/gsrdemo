@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/cluster"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
 func freeBusinessAddress(t *testing.T) string {
@@ -123,7 +125,7 @@ func TestSettlementTwoNodesShareWalletLiveMySQL(t *testing.T) {
 	request["version"], request["business"] = uint64(2), sample.Business
 	var original any
 	for _, node := range []string{"settlement-01", "settlement-02"} {
-		value, err := businessRPC(t, routes, node, settlementWriteName, settleSingleCommand, request)
+		value, err := businessRPC(t, routes, node, settlementwrite.ServiceName, settlementwrite.SettleSingleCommand, request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +134,7 @@ func TestSettlementTwoNodesShareWalletLiveMySQL(t *testing.T) {
 		} else if !reflect.DeepEqual(value, original) {
 			t.Fatalf("跨节点重复提交改变历史回执: %v %v", original, value)
 		}
-		value, err = businessRPC(t, routes, node, settlementReadName, getBalanceCommand, sample.Users[0])
+		value, err = businessRPC(t, routes, node, settlementread.ServiceName, settlementread.GetBalanceCommand, sample.Users[0])
 		if err != nil || value.(map[string]any)["amount"] != int64(900) || value.(map[string]any)["version"] != uint64(2) {
 			t.Fatalf("%s 重复扣款或未共享余额: %v %v", node, value, err)
 		}
