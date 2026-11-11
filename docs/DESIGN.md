@@ -75,9 +75,11 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 
 ### 3.4 多游戏组合与客户端行为
 
-Agent 通过唯一 `games` 清单组装 [Mole](../nodes/access/gameagent/mole.go) 和 [Landlord](../nodes/access/gameagent/landlord.go) 组件。组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。
+Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go) 和 [comLandlord](../nodes/access/comlandlord.go) 组件。组件与 Agent 同属 access 根目录的 `package main`，通过文件和类型组织职责；组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。
 
-组件通过 [Dependencies](../nodes/access/gameagent/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主快照 110；101 用于旧登录替换，不使用 kind 字符串二次分发。
+组件通过 [componentDependencies](../nodes/access/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主快照 110；101 用于旧登录替换，不使用 kind 字符串二次分发。
+
+这些业务命令同属一个 Agent Service，统一在 [agent.go](../nodes/access/agent.go) 定义；Agent 与游戏组件直接引用同包源常量，远端节点引用生成的 `accessagent` 契约。Agent 名称由连接启动时生成，契约不包含固定 ServiceName。Gate 断线事件使用框架命令，私有 `loginFailureCloser` 的计时命令不生成共享契约。
 
 TypeScript CLI 完成密码认证再 Token 登录，也可显式保存 0600 Token 文件，后续直接 Token 登录。银子和身份使用 bigint；地鼠按绝对余额与 revision 接受更新。只有明确的 `target_unavailable` 拒绝会触发重新选目标；超时、繁忙、断线等未知结果停止操作并保留 ActionID，不自动重发命中。地鼠客户端收到 accepted 即继续玩法，斗地主等待终态快照；两者都不追加逐笔查账。
 
@@ -334,7 +336,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
-| RPC 契约迁移 | 结算读/写、Online、Login 的 Auth/Token Service 已使用就近定义与自动生成契约；access、mole、landlord 自身的命令尚未迁移，后续逐节点确认公开 Service、动态名称及本地来源限制。 |
+| RPC 契约迁移 | 结算读/写、Online、Login 的 Auth/Token、access 的 Agent Service 已使用就近定义与自动生成契约；mole、landlord 自身的命令尚未迁移，后续逐节点确认公开 Service、动态名称及本地来源限制。 |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
 | 麻将接入 | 结算服已提供按付款明细比例封顶的通用 Group；具体玩法的应付关系、事件时序及客户端尚未实现或验收。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |

@@ -17,7 +17,6 @@ import (
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
-	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -31,7 +30,7 @@ type fixtureGame struct {
 	disconnect func(gsr.ServiceContext) error
 }
 
-var _ gameagent.Component = (*fixtureGame)(nil)
+var _ gameComponent = (*fixtureGame)(nil)
 
 func (game *fixtureGame) Name() string {
 	return game.name
@@ -75,9 +74,9 @@ func TestAgentGameListAdmissionAndDispatch(t *testing.T) {
 			return reply.Response(uint32(demopb.MsgId_S2C_ENTER), &demopb.EnterResponse{})
 		},
 	}}
-	agent := &agent{client: &testClientSession{}, games: []gameagent.Component{first, &fixtureGame{name: "second"}, third}}
+	agent := &agent{client: &testClientSession{}, games: []gameComponent{first, &fixtureGame{name: "second"}, third}}
 	agent.mustBindHandlers(registry)
-	if err := agent.allowEnter(third.Name()); !errors.Is(err, gameagent.ErrLoginRequired) {
+	if err := agent.allowEnter(third.Name()); !errors.Is(err, errLoginRequired) {
 		t.Fatal(err)
 	}
 	agent.session.userID, agent.session.loginID = 7, "current-login"
@@ -85,7 +84,7 @@ func TestAgentGameListAdmissionAndDispatch(t *testing.T) {
 	if err := agent.allowEnter(third.Name()); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.allowEnter(first.Name()); !errors.Is(err, gameagent.ErrEnterRequired) {
+	if err := agent.allowEnter(first.Name()); !errors.Is(err, errEnterRequired) {
 		t.Fatal(err)
 	}
 	if err := agent.onLogin(nil, protocol.Context{}, &demopb.LoginRequest{}); !errors.Is(err, errAlreadyLoggedIn) {
@@ -109,19 +108,19 @@ func TestAgentGameListAdmissionAndDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent.session.userID, agent.session.loginID = 0, ""
-	if err := agent.allowEnter(third.Name()); !errors.Is(err, gameagent.ErrLoginRequired) {
+	if err := agent.allowEnter(third.Name()); !errors.Is(err, errLoginRequired) {
 		t.Fatal(err)
 	}
 }
 
 // TestAgentGameListRejectsConflicts 保护空名称、重名游戏和通用/游戏编号冲突在组装时失败。
 func TestAgentGameListRejectsConflicts(t *testing.T) {
-	for name, games := range map[string][]gameagent.Component{
+	for name, games := range map[string][]gameComponent{
 		"reserved command": {&fixtureGame{name: "third", commands: map[runtime.CommandID]any{gate.ClientDisconnectedCommand: nil}}},
 		"empty name":       {&fixtureGame{}},
 		"duplicate name":   {&fixtureGame{name: "same"}, &fixtureGame{name: "same"}},
 		"common protocol":  {&fixtureGame{name: "third", protocols: map[uint32]any{uint32(demopb.MsgId_C2S_LOGIN): nil}}},
-		"common command":   {&fixtureGame{name: "third", commands: map[runtime.CommandID]any{agentReplacedCommand: nil}}},
+		"common command":   {&fixtureGame{name: "third", commands: map[runtime.CommandID]any{replacedCommand: nil}}},
 		"game protocol":    {&fixtureGame{name: "one", protocols: map[uint32]any{123: nil}}, &fixtureGame{name: "two", protocols: map[uint32]any{123: nil}}},
 		"game command":     {&fixtureGame{name: "one", commands: map[runtime.CommandID]any{123: nil}}, &fixtureGame{name: "two", commands: map[runtime.CommandID]any{123: nil}}},
 	} {

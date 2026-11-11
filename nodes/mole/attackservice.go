@@ -8,6 +8,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 )
 
 const (
@@ -17,9 +18,6 @@ const (
 	attackLeaveCommand    runtime.CommandID = 4
 	attackTickCommand     runtime.CommandID = 10
 	attackBalanceCommand  runtime.CommandID = 11
-	// 接入 Agent 按独立 CommandID 接收快照与余额校正。
-	moleSnapshotPushCommand          runtime.CommandID = 100
-	moleBalanceCorrectionPushCommand runtime.CommandID = 102
 )
 
 type attackMember struct {
@@ -181,7 +179,7 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 func (service *attackService) handleBalanceCorrection(self gsr.CommandContext, userID uint64, loginID string, view map[string]any) error {
 	member, err := service.member(userID, loginID)
 	if err == nil {
-		service.push(self, member, moleBalanceCorrectionPushCommand, view)
+		service.push(self, member, accessagent.MoleBalanceCorrectionPushCommand, view)
 	}
 	return nil
 }
@@ -206,7 +204,7 @@ func (service *attackService) view(userID uint64) map[string]any {
 
 func (service *attackService) broadcastSnapshot(self gsr.ServiceContext) {
 	for _, member := range service.members {
-		service.push(self, member, moleSnapshotPushCommand, service.view(member.UserID))
+		service.push(self, member, accessagent.MoleSnapshotPushCommand, service.view(member.UserID))
 	}
 }
 

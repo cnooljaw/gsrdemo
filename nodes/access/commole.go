@@ -1,4 +1,4 @@
-package gameagent
+package main
 
 import (
 	"errors"
@@ -10,37 +10,35 @@ import (
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
-// Mole 处理本游戏接入协议，只持有路由，由所属 Agent 串行调用。
-type Mole struct {
-	deps       Dependencies
+// comMole 处理本游戏接入协议，只持有路由，由所属 Agent 串行调用。
+type comMole struct {
+	deps       componentDependencies
 	attackName cluster.ServiceName
 }
 
-var _ Component = (*Mole)(nil)
+var _ gameComponent = (*comMole)(nil)
 
-// NewMole 创建每连接独立的游戏接入组件，构造时不调用注入能力。
-func NewMole(deps Dependencies) *Mole {
-	return &Mole{deps: deps}
+// newComMole 创建每连接独立的游戏接入组件，构造时不调用注入能力。
+func newComMole(deps componentDependencies) *comMole {
+	return &comMole{deps: deps}
 }
 
 // Name 返回用于接入互斥与日志的游戏名称。
-func (mole *Mole) Name() string {
+func (mole *comMole) Name() string {
 	return "mole"
 }
 
 var errMoleTargetUnavailable = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.target_unavailable", "target is unavailable")
 
 const (
-	moleResolveEntryCommand          runtime.CommandID = 1
-	moleEnterCommand                 runtime.CommandID = 1
-	moleHitCommand                   runtime.CommandID = 2
-	moleSnapshotCommand              runtime.CommandID = 3
-	moleLeaveCommand                 runtime.CommandID = 4
-	moleSnapshotPushCommand          runtime.CommandID = 100
-	moleBalanceCorrectionPushCommand runtime.CommandID = 102
+	moleResolveEntryCommand runtime.CommandID = 1
+	moleEnterCommand        runtime.CommandID = 1
+	moleHitCommand          runtime.CommandID = 2
+	moleSnapshotCommand     runtime.CommandID = 3
+	moleLeaveCommand        runtime.CommandID = 4
 )
 
-func (mole *Mole) onEnter(self gsr.CommandContext, reply protocol.Context, _ *demopb.EnterRequest) error {
+func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ *demopb.EnterRequest) error {
 	identity := mole.deps.Identity()
 	if err := mole.deps.AllowEnter(mole.Name()); err != nil {
 		return err
@@ -52,11 +50,11 @@ func (mole *Mole) onEnter(self gsr.CommandContext, reply protocol.Context, _ *de
 	}
 	fields, ok := value.(map[string]any)
 	if !ok {
-		return ErrInvalidBackendReply
+		return errInvalidBackendReply
 	}
 	entry, ok := fields["entry_name"].(string)
 	if !ok || entry == "" {
-		return ErrInvalidBackendReply
+		return errInvalidBackendReply
 	}
 	value, err = mole.deps.Call(self, "mole", cluster.ServiceName(entry), moleEnterCommand, args...)
 	if err != nil {
@@ -75,23 +73,23 @@ func (mole *Mole) onEnter(self gsr.CommandContext, reply protocol.Context, _ *de
 	return reply.Response(uint32(demopb.MsgId_S2C_ENTER), &demopb.EnterResponse{Snapshot: snapshot, Silver: silver})
 }
 
-func (mole *Mole) requireGame() error {
+func (mole *comMole) requireGame() error {
 	identity := mole.deps.Identity()
 	if err := identity.RequireLogin(); err != nil {
 		return err
 	}
 	if mole.attackName == "" {
-		return ErrEnterRequired
+		return errEnterRequired
 	}
 	return nil
 }
 
 // Entered 从本游戏路由判断是否已进入，不另存状态。
-func (mole *Mole) Entered() bool {
+func (mole *comMole) Entered() bool {
 	return mole.attackName != ""
 }
 
-func (mole *Mole) onHit(self gsr.CommandContext, reply protocol.Context, request *demopb.HitRequest) error {
+func (mole *comMole) onHit(self gsr.CommandContext, reply protocol.Context, request *demopb.HitRequest) error {
 	identity := mole.deps.Identity()
 	if err := mole.requireGame(); err != nil {
 		return err
@@ -100,7 +98,7 @@ func (mole *Mole) onHit(self gsr.CommandContext, reply protocol.Context, request
 	value, err := mole.deps.Call(self, "mole", mole.attackName, moleHitCommand, identity.UserID, identity.LoginID,
 		request.GetActionId(), request.GetSpawnSeq(), request.GetHole())
 	if errors.Is(err, errMoleTargetUnavailable) {
-		// 该拒绝发生在 Mole 接纳记账之前；不伪造 HitID、奖励或余额。
+		// 该拒绝发生在 comMole 接纳记账之前；不伪造 HitID、奖励或余额。
 		return reply.Response(uint32(demopb.MsgId_S2C_HIT), &demopb.HitResponse{Rejection: "target_unavailable"})
 	}
 	if err != nil {
@@ -120,7 +118,7 @@ func (mole *Mole) onHit(self gsr.CommandContext, reply protocol.Context, request
 	return reply.Response(uint32(demopb.MsgId_S2C_HIT), &demopb.HitResponse{Hit: hit, Silver: silver})
 }
 
-func (mole *Mole) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.SnapshotRequest) error {
+func (mole *comMole) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.SnapshotRequest) error {
 	identity := mole.deps.Identity()
 	if err := mole.requireGame(); err != nil {
 		return err
@@ -136,7 +134,7 @@ func (mole *Mole) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ 
 	return reply.Response(uint32(demopb.MsgId_S2C_SNAPSHOT), &demopb.SnapshotResponse{Snapshot: snapshot})
 }
 
-func (mole *Mole) onLeave(self gsr.CommandContext, reply protocol.Context, _ *demopb.LeaveRequest) error {
+func (mole *comMole) onLeave(self gsr.CommandContext, reply protocol.Context, _ *demopb.LeaveRequest) error {
 	identity := mole.deps.Identity()
 	if err := mole.requireGame(); err != nil {
 		return err
@@ -147,13 +145,13 @@ func (mole *Mole) onLeave(self gsr.CommandContext, reply protocol.Context, _ *de
 	}
 	left, ok := value.(bool)
 	if !ok {
-		return ErrInvalidBackendReply
+		return errInvalidBackendReply
 	}
 	mole.attackName = ""
 	return reply.Response(uint32(demopb.MsgId_S2C_LEAVE), &demopb.LeaveResponse{Left: left})
 }
 
-func (mole *Mole) handleSnapshotPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
+func (mole *comMole) handleSnapshotPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
 	identity := mole.deps.Identity()
 	if identity.UserID == 0 || loginID != identity.LoginID || mole.attackName == "" {
 		return nil
@@ -169,7 +167,7 @@ func (mole *Mole) handleSnapshotPush(_ gsr.CommandContext, loginID string, paylo
 	return mole.deps.Push(uint32(demopb.MsgId_S2C_SNAPSHOT_PUSH), &demopb.SnapshotPush{Snapshot: snapshot})
 }
 
-func (mole *Mole) handleBalanceCorrectionPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
+func (mole *comMole) handleBalanceCorrectionPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
 	identity := mole.deps.Identity()
 	if identity.UserID == 0 || loginID != identity.LoginID || mole.attackName == "" {
 		return nil
@@ -182,7 +180,7 @@ func (mole *Mole) handleBalanceCorrectionPush(_ gsr.CommandContext, loginID stri
 }
 
 // ProtocolHandlers 返回本游戏的客户端协议入口。
-func (mole *Mole) ProtocolHandlers() map[uint32]any {
+func (mole *comMole) ProtocolHandlers() map[uint32]any {
 	return map[uint32]any{
 		uint32(demopb.MsgId_C2S_ENTER):    mole.onEnter,
 		uint32(demopb.MsgId_C2S_HIT):      mole.onHit,
@@ -192,7 +190,7 @@ func (mole *Mole) ProtocolHandlers() map[uint32]any {
 }
 
 // CommandHandlers 返回本游戏的节点推送入口。
-func (mole *Mole) CommandHandlers() map[runtime.CommandID]any {
+func (mole *comMole) CommandHandlers() map[runtime.CommandID]any {
 	return map[runtime.CommandID]any{
 		moleSnapshotPushCommand:          mole.handleSnapshotPush,
 		moleBalanceCorrectionPushCommand: mole.handleBalanceCorrectionPush,
@@ -200,7 +198,7 @@ func (mole *Mole) CommandHandlers() map[runtime.CommandID]any {
 }
 
 // Disconnect 尽力离开并清空路由；失败由所属 Agent 记录，组件不关闭连接。
-func (mole *Mole) Disconnect(self gsr.ServiceContext) error {
+func (mole *comMole) Disconnect(self gsr.ServiceContext) error {
 	defer func() { mole.attackName = "" }()
 	if mole.attackName == "" {
 		return nil

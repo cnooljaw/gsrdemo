@@ -14,6 +14,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
@@ -488,8 +489,8 @@ var _ gsr.Service = (*moleAgentFixture)(nil)
 func newMoleAgentFixture() *moleAgentFixture {
 	service := &moleAgentFixture{messages: make(chan moleAgentMessage, 32)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		moleSnapshotPushCommand:          service.handleSnapshotPush,
-		moleBalanceCorrectionPushCommand: service.handleBalanceCorrectionPush,
+		accessagent.MoleSnapshotPushCommand:          service.handleSnapshotPush,
+		accessagent.MoleBalanceCorrectionPushCommand: service.handleBalanceCorrectionPush,
 	})
 	return service
 }
@@ -507,11 +508,11 @@ func (service *moleAgentFixture) Handle(self gsr.CommandContext, command runtime
 }
 
 func (service *moleAgentFixture) handleSnapshotPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
-	return service.recordPush(moleSnapshotPushCommand, loginID, payload)
+	return service.recordPush(accessagent.MoleSnapshotPushCommand, loginID, payload)
 }
 
 func (service *moleAgentFixture) handleBalanceCorrectionPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
-	return service.recordPush(moleBalanceCorrectionPushCommand, loginID, payload)
+	return service.recordPush(accessagent.MoleBalanceCorrectionPushCommand, loginID, payload)
 }
 
 func (service *moleAgentFixture) recordPush(command runtime.CommandID, loginID string, payload map[string]any) error {

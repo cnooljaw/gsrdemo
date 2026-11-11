@@ -84,14 +84,14 @@ if player.Disabled {
 - 固定组件显式组装，不按每条消息重建，也不引入自动发现框架。access 的通用协议与各游戏分别提供注册表，由同一份组件清单汇总注册、进入互斥和断线清理；新增协议仍需同步定义、生成产物与客户端。
 
 ```go
-func (mole *Mole) CommandHandlers() map[runtime.CommandID]any {
+func (mole *comMole) CommandHandlers() map[runtime.CommandID]any {
 	return map[runtime.CommandID]any{
 		moleSnapshotPushCommand:          mole.handleSnapshotPush,
 		moleBalanceCorrectionPushCommand: mole.handleBalanceCorrectionPush,
 	}
 }
 
-func (mole *Mole) ProtocolHandlers() map[uint32]any {
+func (mole *comMole) ProtocolHandlers() map[uint32]any {
 	return map[uint32]any{
 		uint32(demopb.MsgId_C2S_ENTER): mole.onEnter,
 		uint32(demopb.MsgId_C2S_HIT):   mole.onHit,
@@ -105,7 +105,7 @@ func (mole *Mole) ProtocolHandlers() map[uint32]any {
 - 每个 Service 使用独立命令块，和 Dispatcher 就近维护；块内所有命令都显式赋值。同一 Service 编号唯一，不同 Service 可以复用编号；停用编号按协议约定保留，不通过重排或 `iota` 改变既有编号。
 - 标记格式为 `//rpc:service <契约包名> public|private [name=<本地名称常量>]`。包名使用小写字母，公开契约包名在仓库中唯一。`name=` 引用同一块内显式定义的非空字符串，生成固定 `ServiceName`；其他项为 uint32 范围的显式整数，首字母大写后导出。生成器只提取常量，不生成 Handler、参数编解码、调用包装或重试策略。
 - 固定单实例和服务池生成固定逻辑名称；池成员共享一份契约，数量和成员 ID 不进入生成文件。动态房间省略 `name=`，只生成命令，调用使用业务返回的实例名称。节点地址从配置取得。
-- 源定义由对应节点维护，`common/rpc/<service>/commands.gen.go` 由工具生成并纳入 Git。提供方注册使用源常量，跨节点调用方引用生成常量；禁止手改生成文件或另抄一份编号。工程生成与同步检查命令见 [README](../README.md#开发与验证)。
+- 源定义由对应节点维护，`common/rpc/<service>/commands.gen.go` 由工具生成并纳入 Git。所属节点内部优先引用源定义，跨节点调用方引用生成常量；禁止手改生成文件或另抄一份编号。Agent 与游戏接入组件在同包内通过文件和类型组织，直接共享 Agent 命令，不为共享常量增加独立包。工程生成与同步检查命令见 [README](../README.md#开发与验证)。
 - 公开/私有标记控制契约生成，不是 GSR 的访问控制。节点组装决定是否对外发布名称；需要限制本地来源的 Handler 继续执行来源检查，不能依赖常量是否导出。
 
 例如结算写 Service 的源定义：

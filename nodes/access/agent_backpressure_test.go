@@ -14,7 +14,7 @@ import (
 	"github.com/cnooljaw/gsr/protocol"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -73,18 +73,18 @@ func TestAgentPushFailureIsLocal(t *testing.T) {
 					return err
 				}
 				for revision := uint64(1); revision <= 2; revision++ {
-					_, err := self.Call(ctx, failedID, 102, "current-login",
+					_, err := self.Call(ctx, failedID, accessagent.MoleBalanceCorrectionPushCommand, "current-login",
 						map[string]any{"balance": int64(1), "revision": revision})
 					// GSR 将未分类的 Gate 错误归一化，不将底层错误原文暴露给 Call 方。
 					if !errors.Is(err, runtime.ErrHandlerFailed) {
 						return fmt.Errorf("push failure: got %v want %v", err, runtime.ErrHandlerFailed)
 					}
-					if _, err := self.Call(ctx, healthyID, 102, "current-login",
+					if _, err := self.Call(ctx, healthyID, accessagent.MoleBalanceCorrectionPushCommand, "current-login",
 						map[string]any{"balance": int64(1000) - int64(revision)*100, "revision": revision}); err != nil {
 						return fmt.Errorf("healthy push: %w", err)
 					}
 				}
-				_, err = self.Call(ctx, failedID, 102, "old-login",
+				_, err = self.Call(ctx, failedID, accessagent.MoleBalanceCorrectionPushCommand, "old-login",
 					map[string]any{"balance": int64(0), "revision": uint64(99)})
 				return err
 			}}
@@ -115,7 +115,7 @@ func TestAgentPushFailureIsLocal(t *testing.T) {
 func enteredMoleAgent(t *testing.T, client *accessPushClient, registry *protocol.Registry, userID uint64) *agent {
 	t.Helper()
 	agent := &agent{client: client, session: agentSession{userID: userID, loginID: "current-login"}}
-	mole := gameagent.NewMole(gameagent.Dependencies{
+	mole := newComMole(componentDependencies{
 		Identity:   agent.session.snapshot,
 		AllowEnter: agent.allowEnter,
 		Push:       agent.push,
@@ -128,7 +128,7 @@ func enteredMoleAgent(t *testing.T, client *accessPushClient, registry *protocol
 			return snapshot, nil
 		},
 	})
-	agent.games = []gameagent.Component{mole}
+	agent.games = []gameComponent{mole}
 	agent.mustBindHandlers(registry)
 	frame, err := proto.Marshal(&commonv1.Envelope{MsgId: uint32(demopb.MsgId_C2S_ENTER), RequestId: 1})
 	if err != nil {

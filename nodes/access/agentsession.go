@@ -7,7 +7,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 )
 
 const agentCallTimeout = 3 * time.Second
@@ -20,8 +19,8 @@ type agentSession struct {
 	loginID string
 }
 
-func (session *agentSession) snapshot() gameagent.Identity {
-	return gameagent.Identity{
+func (session *agentSession) snapshot() agentIdentity {
+	return agentIdentity{
 		UserID: session.userID, LoginID: session.loginID,
 		AccessNode: session.node, AgentName: session.name,
 	}

@@ -8,20 +8,20 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
 const (
-	roomJoinCommand             runtime.CommandID = 1
-	roomReadyCommand            runtime.CommandID = 2
-	roomPlayCommand             runtime.CommandID = 3
-	roomSnapshotCommand         runtime.CommandID = 4
-	roomLeaveCommand            runtime.CommandID = 5
-	roomBidCommand              runtime.CommandID = 6
-	roomRobCommand              runtime.CommandID = 7
-	roomTickCommand             runtime.CommandID = 10
-	landlordSnapshotPushCommand runtime.CommandID = 110
+	roomJoinCommand     runtime.CommandID = 1
+	roomReadyCommand    runtime.CommandID = 2
+	roomPlayCommand     runtime.CommandID = 3
+	roomSnapshotCommand runtime.CommandID = 4
+	roomLeaveCommand    runtime.CommandID = 5
+	roomBidCommand      runtime.CommandID = 6
+	roomRobCommand      runtime.CommandID = 7
+	roomTickCommand     runtime.CommandID = 10
 )
 
 // attackService 独占一桌状态；局末直接 Call 结算，确认后推送结果并清理待请求。
@@ -338,7 +338,7 @@ func (service *attackService) pushSnapshots(self gsr.ServiceContext) {
 		if p.UserID == 0 || p.AccessNode == "" {
 			continue
 		}
-		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), landlordSnapshotPushCommand, p.LoginID, service.snapshotFor(p.UserID)); err != nil {
+		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), accessagent.LandlordSnapshotPushCommand, p.LoginID, service.snapshotFor(p.UserID)); err != nil {
 			_ = self.Logger().Error("斗地主推送未接纳，客户端可查询快照", "error", err.Error())
 		}
 	}

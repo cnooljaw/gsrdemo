@@ -34,7 +34,7 @@
 
 ### 1.3 地鼠协议
 
-处理入口：[gameagent.Mole](../nodes/access/gameagent/mole.go)。
+处理入口：[comMole](../nodes/access/commole.go)。
 
 | 接口 | 请求 ID → 响应 ID | 请求字段 | 当前成功响应 |
 | --- | --- | --- | --- |
@@ -60,7 +60,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 
 ### 1.4 斗地主协议
 
-处理入口：[gameagent.Landlord](../nodes/access/gameagent/landlord.go)。下表的快照均为本人可见的 `LandlordSnapshot`。
+处理入口：[comLandlord](../nodes/access/comlandlord.go)。下表的快照均为本人可见的 `LandlordSnapshot`。
 
 | 接口 | 请求 ID → 响应 ID | 请求字段 | 当前成功响应 |
 | --- | --- | --- | --- |
@@ -241,7 +241,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 ### 2.7 回调 access：快照、校正与旧登录替换
 
-目标均为对应玩家的 `AccessNode / AgentName`，以 Cluster.Send 调用。Agent 先核对当前 LoginID，游戏组件另核对自身路由。
+目标均为对应玩家的 `AccessNode / AgentName`，以 Cluster.Send 调用。四个业务命令同属动态 Agent Service，共享常量见 [Agent 契约](../common/rpc/accessagent/commands.gen.go)，不包含固定 ServiceName。Agent 先核对当前 LoginID，游戏组件另核对自身路由。
 
 | 来源 / Command | 顺序参数 | 接收行为 | 对应 C/S 消息 |
 | --- | --- | --- | --- |

@@ -222,7 +222,7 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
 每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，客户端在 `typeclient`；节点间直接使用 GSR Call/Send。构建依赖发布的 GSR v1.0.3。
 
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)。
-- 结算与推送：见 [结算池组装](nodes/settlement/main_service.go)、[结算池成员](nodes/settlement/settlementwriteservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/gameagent/mole.go)。
+- 结算与推送：见 [结算池组装](nodes/settlement/main_service.go)、[结算池成员](nodes/settlement/settlementwriteservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/commole.go)。
 - [业务协议](docs/PROTOCOL.md)、[设计与恢复边界](docs/DESIGN.md)、[Go 代码规范](docs/GO-CODE-STYLE.md)、[工作规则](AGENTS.md)。
 - [GSR 游戏业务教程（21 页 HTML）](docs/gsr-game-business.html)：在浏览器中离线打开，支持分步讲解、讲者备注、打印 PDF 和新游戏开发清单。
 - 容量测试入口及适用边界见 [并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)，不属于运行 Demo 的必需步骤。

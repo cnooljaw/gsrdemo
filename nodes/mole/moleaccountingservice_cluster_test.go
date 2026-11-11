@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/cluster"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
@@ -23,7 +24,7 @@ func TestMoleMatchingSettlementDoesNotRepeatReward(t *testing.T) {
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
 	for len(agent.messages) > 0 {
 		message := <-agent.messages
-		if message.Command != moleSnapshotPushCommand {
+		if message.Command != accessagent.MoleSnapshotPushCommand {
 			t.Fatalf("matching settlement emitted another result: %+v", message)
 		}
 	}
@@ -75,10 +76,10 @@ func TestMoleCorrectionUsesCurrentLogin(t *testing.T) {
 	for {
 		select {
 		case message := <-agent.messages:
-			if message.Command == moleSnapshotPushCommand {
+			if message.Command == accessagent.MoleSnapshotPushCommand {
 				continue
 			}
-			if message.Command != moleBalanceCorrectionPushCommand || message.LoginID != "new-login" || message.Payload["balance"] != int64(0) {
+			if message.Command != accessagent.MoleBalanceCorrectionPushCommand || message.LoginID != "new-login" || message.Payload["balance"] != int64(0) {
 				t.Fatalf("invalid account correction: %+v", message)
 			}
 			current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), attackSnapshotCommand, uint64(1), "new-login")

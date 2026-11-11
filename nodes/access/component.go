@@ -1,4 +1,4 @@
-package gameagent
+package main
 
 import (
 	"github.com/cnooljaw/gsr"
@@ -7,9 +7,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Component 是连接内游戏接入组件的最小契约，由所属 Agent 串行调用。
+// gameComponent 是连接内游戏接入组件的最小契约，由所属 Agent 串行调用。
 // 注册表在构造时提供；Disconnect 报错不会阻止其他组件及 Online 的清理。
-type Component interface {
+type gameComponent interface {
 	Name() string
 	ProtocolHandlers() map[uint32]any
 	CommandHandlers() map[runtime.CommandID]any
@@ -17,8 +17,8 @@ type Component interface {
 	Disconnect(gsr.ServiceContext) error
 }
 
-// Identity 是当前连接身份的独立值快照，唯一写入者仍是所属 Agent。
-type Identity struct {
+// agentIdentity 是当前连接身份的独立值快照，唯一写入者仍是所属 Agent。
+type agentIdentity struct {
 	UserID     uint64
 	LoginID    string
 	AccessNode cluster.NodeID
@@ -26,18 +26,18 @@ type Identity struct {
 }
 
 // RequireLogin 拒绝未登录的游戏请求。
-func (identity Identity) RequireLogin() error {
+func (identity agentIdentity) RequireLogin() error {
 	if identity.UserID == 0 {
-		return ErrLoginRequired
+		return errLoginRequired
 	}
 	return nil
 }
 
-// Dependencies 只注入组件实际需要的能力，构造后不能变更。
+// componentDependencies 只注入组件实际需要的能力，构造后不能变更。
 // Call 必须有限等待；self 仅在当前回调中使用，不能由依赖保存或异步使用。
 // Identity 每次读取当前快照，AllowEnter 由连接 owner 统一判断互斥。
-type Dependencies struct {
-	Identity   func() Identity
+type componentDependencies struct {
+	Identity   func() agentIdentity
 	AllowEnter func(string) error
 	Call       func(self gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error)
 	// SettlementNode 是配置中的目标节点名；服务名和命令由公开协议规定。
@@ -46,10 +46,10 @@ type Dependencies struct {
 }
 
 var (
-	// ErrLoginRequired 表示当前连接尚未登录。
-	ErrLoginRequired = runtime.NewStatusError(runtime.ErrorClassDomain, "access.login_required", "login required")
-	// ErrEnterRequired 表示缺少所需游戏路由，或需要先离开当前游戏。
-	ErrEnterRequired = runtime.NewStatusError(runtime.ErrorClassDomain, "access.enter_required", "enter mole first")
-	// ErrInvalidBackendReply 表示内部响应不满足当前协议契约。
-	ErrInvalidBackendReply = runtime.NewStatusError(runtime.ErrorClassDomain, "access.invalid_backend_reply", "invalid backend reply")
+	// errLoginRequired 表示当前连接尚未登录。
+	errLoginRequired = runtime.NewStatusError(runtime.ErrorClassDomain, "access.login_required", "login required")
+	// errEnterRequired 表示缺少所需游戏路由，或需要先离开当前游戏。
+	errEnterRequired = runtime.NewStatusError(runtime.ErrorClassDomain, "access.enter_required", "enter mole first")
+	// errInvalidBackendReply 表示内部响应不满足当前协议契约。
+	errInvalidBackendReply = runtime.NewStatusError(runtime.ErrorClassDomain, "access.invalid_backend_reply", "invalid backend reply")
 )

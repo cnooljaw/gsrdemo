@@ -11,9 +11,18 @@ import (
 	"github.com/cnooljaw/gsr/protocol"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
+)
+
+// Agent 的全部业务命令属于同一个 Service；连接实例名称由运行时生成。
+//
+//rpc:service accessagent public
+const (
+	moleSnapshotPushCommand          runtime.CommandID = 100
+	replacedCommand                  runtime.CommandID = 101
+	moleBalanceCorrectionPushCommand runtime.CommandID = 102
+	landlordSnapshotPushCommand      runtime.CommandID = 110
 )
 
 // agent 独占当前连接身份和路由，不持有权威游戏状态或钱包。
@@ -22,7 +31,7 @@ type agent struct {
 	protocolDispatcher *protocol.Dispatcher[gsr.CommandContext]
 	commandDispatcher  *gsr.Dispatcher
 	session            agentSession
-	games              []gameagent.Component
+	games              []gameComponent
 	closing            bool
 }
 
@@ -33,7 +42,7 @@ var (
 
 func newAgent(client gate.ClientSession, registry *protocol.Registry, settlementNode cluster.NodeID) *agent {
 	agent := &agent{client: client}
-	deps := gameagent.Dependencies{
+	deps := componentDependencies{
 		Identity:       agent.session.snapshot,
 		AllowEnter:     agent.allowEnter,
 		Call:           callBackend,
@@ -41,9 +50,9 @@ func newAgent(client gate.ClientSession, registry *protocol.Registry, settlement
 		Push:           agent.push,
 	}
 	// 新增游戏的接入接线只需在此追加一项；其他入口均遍历此清单。
-	agent.games = []gameagent.Component{
-		gameagent.NewMole(deps),
-		gameagent.NewLandlord(deps),
+	agent.games = []gameComponent{
+		newComMole(deps),
+		newComLandlord(deps),
 	}
 	agent.mustBindHandlers(registry)
 	return agent
@@ -100,7 +109,7 @@ func (agent *agent) allowEnter(game string) error {
 	}
 	for _, candidate := range agent.games {
 		if candidate.Name() != game && candidate.Entered() {
-			return gameagent.ErrEnterRequired
+			return errEnterRequired
 		}
 	}
 	return nil

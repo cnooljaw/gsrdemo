@@ -6,6 +6,7 @@ import (
 	"time"
 
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -37,8 +38,8 @@ func TestAccessMoleRequestsUseCurrentIdentityAndPush(t *testing.T) {
 	if err := proto.Unmarshal(rejected.Payload, &rejectedHit); err != nil || rejected.MsgId != uint32(demopb.MsgId_S2C_HIT) || rejectedHit.GetHit().GetStatus() != "rejected" || rejectedHit.Silver != nil {
 		t.Fatalf("拒绝重试不能伪造余额: %v %v", &rejectedHit, err)
 	}
-	accessFixtureRPC(t, backend, 98, uint64(102), "old-login", map[string]any{"balance": int64(1), "revision": uint64(99)})
-	accessFixtureRPC(t, backend, 98, uint64(102), location["login_id"], map[string]any{"balance": int64(900), "revision": uint64(3)})
+	accessFixtureRPC(t, backend, 98, uint64(accessagent.MoleBalanceCorrectionPushCommand), "old-login", map[string]any{"balance": int64(1), "revision": uint64(99)})
+	accessFixtureRPC(t, backend, 98, uint64(accessagent.MoleBalanceCorrectionPushCommand), location["login_id"], map[string]any{"balance": int64(900), "revision": uint64(3)})
 	response := readAccessEnvelope(t, client)
 	var push demopb.BalancePush
 	if response.RequestId != 0 || response.MsgId != uint32(demopb.MsgId_S2C_BALANCE_PUSH) {

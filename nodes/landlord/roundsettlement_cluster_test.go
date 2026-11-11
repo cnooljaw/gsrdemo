@@ -15,6 +15,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 	"github.com/redis/go-redis/v9"
 )
@@ -143,7 +144,7 @@ func (recorder *landlordResultPushRecorder) Handle(_ gsr.CommandContext, cmd run
 	if cmd == 99 {
 		return map[string]any{"pending": recorder.pending, "terminal": recorder.terminal}, nil
 	}
-	if cmd != landlordSnapshotPushCommand {
+	if cmd != accessagent.LandlordSnapshotPushCommand {
 		return nil, runtime.ErrUnknownCommand
 	}
 	view := args[1].(map[string]any)
