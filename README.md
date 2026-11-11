@@ -206,7 +206,7 @@ unset demo_password
 
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 
-结算 RPC 的名称与命令在对应 Service 文件中维护，生成到 `common/rpc/<service>/commands.gen.go` 并入库；修改源定义后执行 `generate rpc`。`check` 会只读核对生成结果，缺失、过期或多余的生成文件都会报错。定义方式见 [Service 命令与共享契约](docs/GO-CODE-STYLE.md#331-service-命令与共享契约)。
+已接入生成流程的 RPC 名称与命令在对应 Service 文件中维护，生成到 `common/rpc/<service>/commands.gen.go` 并入库；修改源定义后执行 `generate rpc`。`check` 会只读核对生成结果，缺失、过期或多余的生成文件都会报错。定义方式见 [Service 命令与共享契约](docs/GO-CODE-STYLE.md#331-service-命令与共享契约)，迁移范围见 [后续工作](docs/DESIGN.md#10-后续工作)。
 
 单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）。此验收执行外部节点二进制，使用 `-count=1` 确保本次实际启动进程：
 

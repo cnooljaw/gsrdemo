@@ -14,6 +14,7 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -47,9 +48,9 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			return nil, errors.New("invalid token")
 		}
 		return uint64(7), nil
-	case "online":
+	case onlinerpc.ServiceName:
 		switch command {
-		case 1:
+		case onlinerpc.BindCommand:
 			if service.failBind {
 				return nil, errors.New("online unavailable")
 			}
@@ -59,7 +60,7 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 				return nil, nil
 			}
 			return previous, nil
-		case 3:
+		case onlinerpc.UnbindCommand:
 			if service.current != nil && service.current["login_id"] == args[1] {
 				service.current = nil
 				return true, nil
@@ -138,7 +139,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{"auth", "token", "online", "mole", "entry", "attack"} {
+	for _, role := range []string{"auth", "token", onlinerpc.ServiceName, "mole", "entry", "attack"} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
 		if err != nil {
 			return err
@@ -285,7 +286,7 @@ func accessFixtureRPC(t *testing.T, address string, command runtime.CommandID, a
 	var value any
 	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
 		var err error
-		value, err = self.Cluster().Call(ctx, "backend", "online", command, args...)
+		value, err = self.Cluster().Call(ctx, "backend", onlinerpc.ServiceName, command, args...)
 		return err
 	}}
 	err := gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"backend": address}}}, main)

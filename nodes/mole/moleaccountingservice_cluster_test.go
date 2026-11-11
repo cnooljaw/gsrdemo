@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/cluster"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
 // TestMoleMatchingSettlementDoesNotRepeatReward 保护内存结果一致时不补发逐锤奖励，已消耗目标也不恢复。
 func TestMoleMatchingSettlementDoesNotRepeatReward(t *testing.T) {
 	fixture := newSettlementFixture()
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: fixture})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	agent := newMoleAgentFixture()
 	access, _ := startMoleTestNode(t, "access-01", nil, &moleTestPeer{node: "access-01", name: "agent", service: agent})
 	routes := map[cluster.NodeID]string{"settlement": settlement, "online": online, "access-01": access}
@@ -50,7 +51,7 @@ func TestMoleCorrectionUsesCurrentLogin(t *testing.T) {
 	fixture := newSettlementFixture()
 	fixture.hideReceipts = true
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: fixture})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	agent := newMoleAgentFixture()
 	access, _ := startMoleTestNode(t, "access-02", nil, &moleTestPeer{node: "access-02", name: "agent", service: agent})
 	routes := map[cluster.NodeID]string{"settlement": settlement, "online": online, "access-02": access}

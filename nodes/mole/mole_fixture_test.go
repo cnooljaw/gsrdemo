@@ -14,6 +14,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
@@ -210,9 +211,9 @@ var _ gsr.Service = (*onlineFixture)(nil)
 func newOnlineFixture() *onlineFixture {
 	service := &onlineFixture{locations: make(map[uint64]map[string]any)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		1:  service.handleBind,
-		2:  service.handleLookup,
-		99: service.handleHalt,
+		onlinerpc.BindCommand:   service.handleBind,
+		onlinerpc.LookupCommand: service.handleLookup,
+		99:                      service.handleHalt,
 	})
 	return service
 }
@@ -403,7 +404,7 @@ func newMoleTestMain(t *testing.T, fixture *settlementFixture) gsr.Service {
 func prepareMoleCluster(t *testing.T, fixture *settlementFixture) (map[cluster.NodeID]string, func()) {
 	t.Helper()
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: fixture})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
 	mole, stop := startMoleTestNode(t, "mole", routes, newMoleTestMain(t, fixture))
 	routes["mole"] = mole
@@ -429,7 +430,7 @@ func callMoleEnter(t *testing.T, routes map[cluster.NodeID]string, args ...any) 
 
 func enterMoleTestUser(t *testing.T, routes map[cluster.NodeID]string, userID uint64, login, access string) map[string]any {
 	t.Helper()
-	if _, err := moleRPC(t, routes, "online", "online", 1, userID, login, access, "agent"); err != nil {
+	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, userID, login, access, "agent"); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(moleTestWait)

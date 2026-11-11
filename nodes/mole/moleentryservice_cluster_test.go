@@ -10,6 +10,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
 // TestMoleEntryDoesNotExposeOperationQuery 保护旧 Entry 查询命令明确拒绝，内部结算查询不再从进入入口转发。
@@ -99,13 +100,13 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 // TestMoleSlowJoinDoesNotBlockDirectoryOrRooms 保护单入口的慢 Join 有限等待，不占住目录和已进入房间。
 func TestMoleSlowJoinDoesNotBlockDirectoryOrRooms(t *testing.T) {
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: newSettlementFixture()})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
 	started := make(chan struct{})
 	address, _ := startMoleTestNode(t, "mole", routes, &seededMoleFixture{checkpoint: testMoleCheckpoint(t), slowStarted: started})
 	routes["mole"] = address
 	for _, userID := range []uint64{1, 5} {
-		if _, err := moleRPC(t, routes, "online", "online", 1, userID, "login", "access-01", "agent"); err != nil {
+		if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, userID, "login", "access-01", "agent"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -155,7 +156,7 @@ func (service *seededMoleFixture) OnStop(context.Context) error {
 // TestMoleJoinTimeoutKeepsOneReservedRoute 保护 Join 超时后仍保留座位目录，其他用户去别组，重试不重复分组。
 func TestMoleJoinTimeoutKeepsOneReservedRoute(t *testing.T) {
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: newSettlementFixture()})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
 	address, _ := startMoleTestNode(t, "mole", routes, &seededMoleFixture{checkpoint: testMoleCheckpoint(t)})
 	routes["mole"] = address
@@ -170,7 +171,7 @@ func TestMoleJoinTimeoutKeepsOneReservedRoute(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, err := moleRPC(t, routes, "online", "online", 1, uint64(1), "login", "access-01", "agent"); err != nil {
+	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(1), "login", "access-01", "agent"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := callMoleEnter(t, routes, uint64(1), "login", "access-01", "agent")
@@ -223,7 +224,7 @@ func TestMoleSharedGroupsAndReconnect(t *testing.T) {
 func TestMoleOnlineFailureOnlyBlocksEntry(t *testing.T) {
 	routes, _ := prepareMoleCluster(t, newSettlementFixture())
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
-	if _, err := moleRPC(t, routes, "online", "online", 99); err != nil {
+	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, 99); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := callMoleEnter(t, routes, uint64(2), "login-2", "access-02", "agent"); !errors.Is(err, errMoleOnlineUnavailable) {
@@ -238,7 +239,7 @@ func TestMoleUsesConfiguredSettlementNode(t *testing.T) {
 	fixture := newSettlementFixture()
 	fixture.checkpoint = testMoleCheckpoint(t)
 	address, _ := startMoleTestNode(t, "settlement-02", nil, &moleTestPeer{node: "settlement-02", name: "settlement", service: fixture})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"settlement-02": address, "online": online}
 	mole, _ := startMoleTestNode(t, "mole", routes, NewMain("mole", "settlement-02", fixture.checkpoint, nil))
 	routes["mole"] = mole
@@ -308,13 +309,13 @@ func (main *resumeBarrierMain) Handle(self gsr.CommandContext, cmd runtime.Comma
 func TestMoleReplacedLoginKeepsReenteredAccount(t *testing.T) {
 	fixture := newSettlementFixture()
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: fixture})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
 	probe := &resumeBarrier{resumed: make(chan struct{}), release: make(chan struct{})}
 	address, _ := startMoleTestNode(t, "mole", routes, &resumeBarrierMain{newMoleTestMain(t, fixture), probe})
 	routes["mole"] = address
 	old := enterMoleTestUser(t, routes, 1, "old-login", "access-01")
-	if _, err := moleRPC(t, routes, "online", "online", 1, uint64(1), "new-login", "access-02", "agent"); err != nil {
+	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(1), "new-login", "access-02", "agent"); err != nil {
 		t.Fatal(err)
 	}
 	// 新接入先取得 Entry 地址，随后进入已通过 Online 校验并停在 Resume 回包。

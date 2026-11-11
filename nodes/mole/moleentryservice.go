@@ -7,6 +7,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
@@ -42,7 +43,7 @@ func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uin
 		return nil, errInvalidMoleInput
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
-	location, err := self.Cluster().Call(ctx, "online", "online", 2, userID)
+	location, err := self.Cluster().Call(ctx, "online", onlinerpc.ServiceName, onlinerpc.LookupCommand, userID)
 	cancel()
 	if err != nil {
 		return nil, errMoleOnlineUnavailable

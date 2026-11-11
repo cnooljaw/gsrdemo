@@ -14,6 +14,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
 // onlineObservedMain 保留真实 MainService 接线，只报告启动地址。
@@ -127,7 +128,7 @@ func runOnlineAccess(ctx context.Context, address, node, directory string, work 
 func callOnline(self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return self.Cluster().Call(ctx, "online", onlineServiceName, command, args...)
+	return self.Cluster().Call(ctx, "online", onlinerpc.ServiceName, command, args...)
 }
 
 func expectOnlineCall(self gsr.ServiceContext, command runtime.CommandID, want any, args ...any) error {
@@ -169,7 +170,7 @@ func TestOnlineConcurrentBindsHaveOneWinner(t *testing.T) {
 					return err
 				}
 				var err error
-				previous, err = callOnline(self, bindCommand, uint64(7), "login-"+node, node, "agent-1")
+				previous, err = callOnline(self, onlinerpc.BindCommand, uint64(7), "login-"+node, node, "agent-1")
 				return err
 			})
 			results <- outcome{node: node, previous: previous, err: err}
@@ -206,10 +207,10 @@ func TestOnlineConcurrentBindsHaveOneWinner(t *testing.T) {
 		t.Fatalf("expected one winner and one loser: %q %q", winner, loser)
 	}
 	err := runOnlineAccess(ctx, address, "access-check", t.TempDir(), func(self gsr.ServiceContext) error {
-		if err := expectOnlineCall(self, unbindCommand, false, uint64(7), "login-"+loser); err != nil {
+		if err := expectOnlineCall(self, onlinerpc.UnbindCommand, false, uint64(7), "login-"+loser); err != nil {
 			return err
 		}
-		return expectOnlineCall(self, lookupCommand, wantLocation("login-"+winner, winner, "agent-1"), uint64(7))
+		return expectOnlineCall(self, onlinerpc.LookupCommand, wantLocation("login-"+winner, winner, "agent-1"), uint64(7))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -222,13 +223,13 @@ func TestOnlineClusterContractAndRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := runOnlineAccess(ctx, address, "access-01", t.TempDir(), func(self gsr.ServiceContext) error {
-		if err := expectOnlineCall(self, lookupCommand, nil, uint64(7)); err != nil {
+		if err := expectOnlineCall(self, onlinerpc.LookupCommand, nil, uint64(7)); err != nil {
 			return err
 		}
-		if err := expectOnlineCall(self, bindCommand, nil, uint64(7), "login-1", "access-01", "agent-1"); err != nil {
+		if err := expectOnlineCall(self, onlinerpc.BindCommand, nil, uint64(7), "login-1", "access-01", "agent-1"); err != nil {
 			return err
 		}
-		if err := expectOnlineCall(self, bindCommand, nil, uint64(7), "login-1", "access-01", "agent-1"); err != nil {
+		if err := expectOnlineCall(self, onlinerpc.BindCommand, nil, uint64(7), "login-1", "access-01", "agent-1"); err != nil {
 			return err
 		}
 		for _, entry := range []struct {
@@ -236,19 +237,19 @@ func TestOnlineClusterContractAndRestart(t *testing.T) {
 			args    []any
 			want    error
 		}{
-			{bindCommand, []any{uint64(7), "login-1", "access-02", "agent-1"}, errLoginIDConflict},
-			{bindCommand, []any{uint64(7), "", "access-02", "agent-1"}, errInvalidOnlineInput},
-			{lookupCommand, []any{uint64(0)}, errInvalidOnlineInput},
-			{unbindCommand, []any{uint64(7), ""}, errInvalidOnlineInput},
-			{lookupCommand, []any{int64(7)}, runtime.ErrInvalidCommandArguments},
-			{bindCommand, []any{uint64(7)}, runtime.ErrInvalidCommandArguments},
+			{onlinerpc.BindCommand, []any{uint64(7), "login-1", "access-02", "agent-1"}, errLoginIDConflict},
+			{onlinerpc.BindCommand, []any{uint64(7), "", "access-02", "agent-1"}, errInvalidOnlineInput},
+			{onlinerpc.LookupCommand, []any{uint64(0)}, errInvalidOnlineInput},
+			{onlinerpc.UnbindCommand, []any{uint64(7), ""}, errInvalidOnlineInput},
+			{onlinerpc.LookupCommand, []any{int64(7)}, runtime.ErrInvalidCommandArguments},
+			{onlinerpc.BindCommand, []any{uint64(7)}, runtime.ErrInvalidCommandArguments},
 			{999, nil, runtime.ErrUnknownCommand},
 		} {
 			if _, err := callOnline(self, entry.command, entry.args...); !errors.Is(err, entry.want) {
 				return fmt.Errorf("command %d: err=%v want=%v", entry.command, err, entry.want)
 			}
 		}
-		return expectOnlineCall(self, lookupCommand, wantLocation("login-1", "access-01", "agent-1"), uint64(7))
+		return expectOnlineCall(self, onlinerpc.LookupCommand, wantLocation("login-1", "access-01", "agent-1"), uint64(7))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +257,7 @@ func TestOnlineClusterContractAndRestart(t *testing.T) {
 	stop()
 	address, _ = startOnline(t)
 	if err := runOnlineAccess(ctx, address, "access-02", t.TempDir(), func(self gsr.ServiceContext) error {
-		return expectOnlineCall(self, lookupCommand, nil, uint64(7))
+		return expectOnlineCall(self, onlinerpc.LookupCommand, nil, uint64(7))
 	}); err != nil {
 		t.Fatal(err)
 	}

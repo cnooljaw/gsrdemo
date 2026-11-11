@@ -9,6 +9,7 @@ import (
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
@@ -16,8 +17,6 @@ import (
 const (
 	passwordAuthenticateCommand runtime.CommandID = 1
 	tokenVerifyCommand          runtime.CommandID = 2
-	onlineBindCommand           runtime.CommandID = 1
-	onlineUnbindCommand         runtime.CommandID = 3
 	agentReplacedCommand        runtime.CommandID = 101
 )
 
@@ -62,10 +61,10 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 	if err != nil {
 		return err
 	}
-	previous, err := callBackend(self, "online", "online", onlineBindCommand, userID, loginID, string(agent.session.node), string(agent.session.name))
+	previous, err := callBackend(self, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, userID, loginID, string(agent.session.node), string(agent.session.name))
 	if err != nil {
 		// Bind 超时可能已经执行；不重发 Bind，只尝试清理该候选身份并结束连接。
-		if cleanupErr := self.Cluster().Send("online", "online", onlineUnbindCommand, userID, loginID); cleanupErr != nil {
+		if cleanupErr := self.Cluster().Send("online", onlinerpc.ServiceName, onlinerpc.UnbindCommand, userID, loginID); cleanupErr != nil {
 			_ = self.Logger().Error("未确认登录的清理未接纳", "error", cleanupErr.Error())
 		}
 		return err
@@ -111,7 +110,7 @@ func (agent *agent) disconnect(self gsr.ServiceContext) {
 			_ = self.Logger().Error("断线离开游戏未确认", "game", game.Name(), "error", err.Error())
 		}
 	}
-	if _, err := callBackend(self, "online", "online", onlineUnbindCommand, agent.session.userID, agent.session.loginID); err != nil {
+	if _, err := callBackend(self, "online", onlinerpc.ServiceName, onlinerpc.UnbindCommand, agent.session.userID, agent.session.loginID); err != nil {
 		_ = self.Logger().Error("断线解绑未确认", "error", err.Error())
 	}
 	agent.session.userID, agent.session.loginID = 0, ""

@@ -119,7 +119,7 @@ const (
 )
 ```
 
-生成后调用方引用 `settlementwrite.ServiceName`、`settlementwrite.SettleBatchCommand` 等。当前已接入结算读/写 Service，其余节点的契约迁移见 [后续工作](DESIGN.md#10-后续工作)。
+生成后调用方引用 `settlementwrite.ServiceName`、`settlementwrite.SettleBatchCommand` 等。当前迁移范围见 [后续工作](DESIGN.md#10-后续工作)。
 
 ### 3.4 调用、超时与失败
 

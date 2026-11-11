@@ -8,6 +8,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
@@ -170,7 +171,7 @@ func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, lo
 	if uid == 0 || !validIdentity(login) || !validIdentity(node) || !validIdentity(agent) || !validIdentity(membership) {
 		return nil, errLandlordInput
 	}
-	value, err := remote(self, "online", "online", 2, uid)
+	value, err := remote(self, "online", onlinerpc.ServiceName, onlinerpc.LookupCommand, uid)
 	if err != nil {
 		return nil, err
 	}

@@ -107,7 +107,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 | 项目 | 约定 |
 | --- | --- |
 | 定位 | `Node + ServiceName + CommandID`；节点来自 [nodes.yaml](../configs/nodes.yaml)，动态组名/桌名使用后端返回值，不自行拼接 |
-| 命令归属 | CommandID 从属于 Service，不同 Service 可重复；结算读/写命令由各自 Service 文件生成到 `common/rpc/settlementread`、`common/rpc/settlementwrite`，维护约定见 [Go 代码规范](GO-CODE-STYLE.md#331-service-命令与共享契约) |
+| 命令归属 | CommandID 从属于 Service，不同 Service 可重复；已迁移的公开命令由各自 Service 文件生成到 `common/rpc/<service>`，维护约定见 [Go 代码规范](GO-CODE-STYLE.md#331-service-命令与共享契约)，迁移范围见 [后续工作](DESIGN.md#10-后续工作) |
 | 编码 | 直接使用 GSR Cluster ValueCodec；整数为规范 int64/uint64，集合为 map/list，不额外包装内部 Protobuf |
 | 调用者 | 受信任内部节点/管理工具；Cluster Source 不充当用户身份 |
 | Call | 有限等待，返回结果或错误；超时后远端可能已执行，不能盲目新建身份重试 |
@@ -130,7 +130,7 @@ Verify 不续期，Revoke 不踢已登录连接。账号不存在和密码错误
 
 ### 2.3 online：当前位置
 
-Node/Service 均为 `online`，见 [OnlineService](../nodes/online/onlineservice.go)。
+Node/Service 均为 `online`，见 [OnlineService](../nodes/online/onlineservice.go)，共享命令见 [生成契约](../common/rpc/online/commands.gen.go)。
 
 | Command | 调用方与方式 | 顺序参数 | 成功结果与边界 |
 | --- | --- | --- | --- |

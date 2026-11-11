@@ -15,6 +15,7 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,7 +43,7 @@ func accessOnlineRPC(t *testing.T, address string, command runtime.CommandID, ar
 	var result any
 	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
 		var err error
-		result, err = self.Cluster().Call(ctx, "online", "online", command, args...)
+		result, err = self.Cluster().Call(ctx, "online", onlinerpc.ServiceName, command, args...)
 		return err
 	}}
 	err := gsr.Run(ctx, gsr.Config{
@@ -202,7 +203,7 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 		t.Fatal(err)
 	}
 	old, snapshot := accessLoginAndEnter(t, gates[0], player)
-	previous := accessOnlineRPC(t, routes["online"], 2, player.id).(map[string]any)
+	previous := accessOnlineRPC(t, routes["online"], onlinerpc.LookupCommand, player.id).(map[string]any)
 	if previous["access_node"] != "access-01" {
 		t.Fatalf("旧接入路由错误: %v", previous)
 	}
@@ -212,12 +213,12 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 	current, snapshot := accessLoginAndEnter(t, gates[1], player)
 	accessExpectClosed(t, old)
 
-	location := accessOnlineRPC(t, routes["online"], 2, player.id).(map[string]any)
+	location := accessOnlineRPC(t, routes["online"], onlinerpc.LookupCommand, player.id).(map[string]any)
 	if location["access_node"] != "access-02" || location["login_id"] == previous["login_id"] {
 		t.Fatalf("新接入绑定错误: %v", location)
 	}
 	// 主动注入旧 LoginID 的迟到断线，验证真实 Online 不会清理新绑定。
-	if removed := accessOnlineRPC(t, routes["online"], 3, player.id, previous["login_id"]); removed != false {
+	if removed := accessOnlineRPC(t, routes["online"], onlinerpc.UnbindCommand, player.id, previous["login_id"]); removed != false {
 		t.Fatalf("旧 LoginID 清理了新绑定: %v", removed)
 	}
 	accessNextSnapshot(t, current, snapshot.AttackName)
@@ -226,10 +227,10 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 	// 客户端直接断开，再从第一接入登录；不增加自动重连或未知命中重试逻辑。
 	_ = current.Close()
 	reconnected, snapshot := accessLoginAndEnter(t, gates[0], player)
-	if removed := accessOnlineRPC(t, routes["online"], 3, player.id, location["login_id"]); removed != false {
+	if removed := accessOnlineRPC(t, routes["online"], onlinerpc.UnbindCommand, player.id, location["login_id"]); removed != false {
 		t.Fatalf("断开连接的迟到清理删除了重连身份: %v", removed)
 	}
-	rebuilt := accessOnlineRPC(t, routes["online"], 2, player.id).(map[string]any)
+	rebuilt := accessOnlineRPC(t, routes["online"], onlinerpc.LookupCommand, player.id).(map[string]any)
 	if rebuilt["access_node"] != "access-01" || rebuilt["login_id"] == location["login_id"] {
 		t.Fatalf("重连绑定错误: %v", rebuilt)
 	}
@@ -272,7 +273,7 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 	}
 	crashed, snapshot := accessLoginAndEnter(t, gates[0], &players[0])
 	originalAttack, originalSeat := snapshot.AttackName, snapshot.Seat
-	previous := accessOnlineRPC(t, routes["online"], 2, players[0].id).(map[string]any)
+	previous := accessOnlineRPC(t, routes["online"], onlinerpc.LookupCommand, players[0].id).(map[string]any)
 	peer, _ := accessLoginAndEnter(t, gates[1], &players[1])
 	// 先完成内存命中响应，随后直接 SIGKILL，跳过 Agent 的 Leave/Unbind 清理。
 	crashHit := accessHitTarget(t, crashed, snapshot, "before-access-crash")
@@ -281,7 +282,7 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 		t.Fatal(err)
 	}
 	accessExpectClosed(t, crashed)
-	stale := accessOnlineRPC(t, routes["online"], 2, players[0].id).(map[string]any)
+	stale := accessOnlineRPC(t, routes["online"], onlinerpc.LookupCommand, players[0].id).(map[string]any)
 	if stale["login_id"] != previous["login_id"] || stale["access_node"] != "access-01" {
 		t.Fatalf("骤停演练未保留待覆盖的旧目录: %v", stale)
 	}
@@ -297,11 +298,11 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 	if snapshot.AttackName != originalAttack || snapshot.Seat != originalSeat {
 		t.Fatalf("跨接入恢复未沿用原组和座位: attack=%s seat=%d snapshot=%v", originalAttack, originalSeat, snapshot)
 	}
-	location := accessOnlineRPC(t, routes["online"], 2, players[0].id).(map[string]any)
+	location := accessOnlineRPC(t, routes["online"], onlinerpc.LookupCommand, players[0].id).(map[string]any)
 	if location["access_node"] != "access-02" || location["login_id"] == previous["login_id"] {
 		t.Fatalf("骤停后未覆盖旧位置: %v", location)
 	}
-	if removed := accessOnlineRPC(t, routes["online"], 3, players[0].id, previous["login_id"]); removed != false {
+	if removed := accessOnlineRPC(t, routes["online"], onlinerpc.UnbindCommand, players[0].id, previous["login_id"]); removed != false {
 		t.Fatalf("骤停旧身份清理了恢复连接: %v", removed)
 	}
 	memberCount := 0

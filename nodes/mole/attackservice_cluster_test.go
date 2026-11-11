@@ -8,6 +8,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
 type moleFaultMain struct {
@@ -37,7 +38,7 @@ func (service *moleFaultMain) OnStop(ctx context.Context) error {
 // TestMolePanickedGroupDoesNotStopOtherGroups 保护一个真实 AttackService panic 后，其他组继续响应和记账。
 func TestMolePanickedGroupDoesNotStopOtherGroups(t *testing.T) {
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: newSettlementFixture()})
-	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: "online", service: newOnlineFixture()})
+	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
 	main := &moleFaultMain{main: NewMain("mole", "settlement", testMoleCheckpoint(t), nil)}
 	address, _ := startMoleTestNode(t, "mole", routes, main)

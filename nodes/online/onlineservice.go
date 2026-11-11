@@ -7,6 +7,9 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// onlineService 对外提供当前位置目录，所有命令共享同一固定入口。
+//
+//rpc:service online public name=onlineServiceName
 const (
 	// onlineServiceName 是 online 节点内的位置目录名称。
 	onlineServiceName = "online"

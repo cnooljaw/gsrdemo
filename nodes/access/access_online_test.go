@@ -9,6 +9,7 @@ import (
 	"time"
 
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -25,7 +26,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 		t.Fatal(err)
 	}
 	bound, snapshot := accessLoginAndEnter(t, gateAddress, &players[0])
-	previous := accessOnlineRPC(t, online.address, 2, players[0].id).(map[string]any)
+	previous := accessOnlineRPC(t, online.address, onlinerpc.LookupCommand, players[0].id).(map[string]any)
 	if err := online.process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -68,18 +69,18 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 
 	// Online 不持久化目录；只恢复本测试节点，再由客户端重新登录建立新身份。
 	startAccessProcess(t, online.binary, []string{"-config", online.config}, online.address)
-	if location := accessOnlineRPC(t, online.address, 2, players[0].id); location != nil {
+	if location := accessOnlineRPC(t, online.address, onlinerpc.LookupCommand, players[0].id); location != nil {
 		t.Fatalf("Online 重启不应保留旧目录: %v", location)
 	}
 	recovered, snapshot := accessLoginAndEnter(t, gateAddress, &players[0])
-	location := accessOnlineRPC(t, online.address, 2, players[0].id).(map[string]any)
+	location := accessOnlineRPC(t, online.address, onlinerpc.LookupCommand, players[0].id).(map[string]any)
 	if location["access_node"] != "access-02" || location["login_id"] == previous["login_id"] {
 		t.Fatalf("Online 重启后未建立新绑定: %v", location)
 	}
-	if removed := accessOnlineRPC(t, online.address, 3, players[0].id, previous["login_id"]); removed != false {
+	if removed := accessOnlineRPC(t, online.address, onlinerpc.UnbindCommand, players[0].id, previous["login_id"]); removed != false {
 		t.Fatal("Online 重启后旧 LoginID 删除了新绑定")
 	}
-	current := accessOnlineRPC(t, online.address, 2, players[0].id).(map[string]any)
+	current := accessOnlineRPC(t, online.address, onlinerpc.LookupCommand, players[0].id).(map[string]any)
 	if current["login_id"] != location["login_id"] || current["agent_name"] != location["agent_name"] {
 		t.Fatalf("迟到解绑改变了恢复绑定: %v", current)
 	}

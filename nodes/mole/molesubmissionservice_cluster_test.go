@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
 // TestMolePoisonBatchPausesSubmission 保护永久错误保留原批次并停止新记账，不持续冲击结算节点。
@@ -108,7 +109,7 @@ func TestMoleDamagedCheckpointBlocksAccounting(t *testing.T) {
 	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("损坏检查点被当作可用统计: %v", err)
 	}
-	if _, err := moleRPC(t, routes, "online", "online", 1, uint64(4), "login-4", "access-02", "agent"); err != nil {
+	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(4), "login-4", "access-02", "agent"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := callMoleEnter(t, routes, uint64(4), "login-4", "access-02", "agent"); !errors.Is(err, errAccountingUnavailable) {

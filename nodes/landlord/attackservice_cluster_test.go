@@ -11,6 +11,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
@@ -63,10 +64,10 @@ func (backend *landlordTestBackend) OnStop(context.Context) error {
 func (backend *landlordTestBackend) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
 	uid := args[0].(uint64)
 	switch cmd {
-	case 1:
+	case onlinerpc.BindCommand:
 		backend.logins[uid] = args[1].(string)
 		return nil, nil
-	case 2:
+	case onlinerpc.LookupCommand:
 		login := backend.logins[uid]
 		if login == "" {
 			login = "login"
@@ -169,7 +170,7 @@ func landlordTestValue(t *testing.T, routes map[cluster.NodeID]string, node, nam
 
 func joinLandlordTest(t *testing.T, routes map[cluster.NodeID]string, uid uint64, login string) map[string]any {
 	t.Helper()
-	landlordTestValue(t, routes, "online", "online", 1, uid, login)
+	landlordTestValue(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uid, login)
 	route := landlordTestValue(t, routes, "landlord", landlordName, resolveCommand, uid, login).(map[string]any)
 	return landlordTestValue(t, routes, "landlord", route["room_name"].(string), roomJoinCommand, uid, login, "access-01", "agent", route["membership"]).(map[string]any)
 }
@@ -177,7 +178,7 @@ func joinLandlordTest(t *testing.T, routes map[cluster.NodeID]string, uid uint64
 // TestAttackRejoinAndPulse 保护随机凑桌、叫抢中的原手牌重连、旧身份清理隔离及真实 Pulse 超时推进，其他桌仍可准备。
 func TestAttackRejoinAndPulse(t *testing.T) {
 	routes := map[cluster.NodeID]string{}
-	startLandlordTestNode(t, routes, "online", map[string]gsr.Service{"online": &landlordTestBackend{logins: map[uint64]string{}}})
+	startLandlordTestNode(t, routes, "online", map[string]gsr.Service{onlinerpc.ServiceName: &landlordTestBackend{logins: map[uint64]string{}}})
 	reads := map[string]gsr.Service{}
 	for _, name := range []string{settlementread.ServiceName} {
 		reads[name] = &landlordTestBackend{}

@@ -16,6 +16,7 @@ import (
 	"github.com/cnooljaw/gsr/protocol"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
@@ -168,11 +169,11 @@ func TestAgentDisconnectContinuesAfterGameError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
-		if _, err := callBackend(self, "online", "online", onlineBindCommand, uint64(7), "current-login", "access-01", "agent-test"); err != nil {
+		if _, err := callBackend(self, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(7), "current-login", "access-01", "agent-test"); err != nil {
 			return err
 		}
 		agent.disconnect(self)
-		value, err := callBackend(self, "online", "online", 99)
+		value, err := callBackend(self, "online", onlinerpc.ServiceName, 99)
 		if err != nil {
 			return err
 		}

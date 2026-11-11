@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr"
+	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
 // TestOnlineClusterLoad 测量真实 TCP 多接入调用汇聚下两档目录规模的处理率和尾延迟，默认不运行容量测试。
@@ -55,7 +56,7 @@ func measureOnlineLoad(t *testing.T, population, rate int) {
 				// 每个调用节点负责一组不重叠用户；全部走实际 Cluster，预装数据不计入定速样本。
 				for index := peer; index < population; index += peers {
 					agentName := fmt.Sprintf("agent-%d", index+1)
-					if err := expectOnlineCall(self, bindCommand, nil, uint64(index+1), "seed", node, agentName); err != nil {
+					if err := expectOnlineCall(self, onlinerpc.BindCommand, nil, uint64(index+1), "seed", node, agentName); err != nil {
 						return err
 					}
 				}
@@ -85,12 +86,12 @@ func measureOnlineLoad(t *testing.T, population, rate int) {
 						switch operation % 3 {
 						case 0:
 							loginID := fmt.Sprintf("load-%d-%d", peer, operation)
-							err = expectOnlineCall(self, bindCommand, wantLocation(currentLogins[index], node, agentName), userID, loginID, node, agentName)
+							err = expectOnlineCall(self, onlinerpc.BindCommand, wantLocation(currentLogins[index], node, agentName), userID, loginID, node, agentName)
 							currentLogins[index] = loginID
 						case 1:
-							err = expectOnlineCall(self, lookupCommand, wantLocation(currentLogins[index], node, agentName), userID)
+							err = expectOnlineCall(self, onlinerpc.LookupCommand, wantLocation(currentLogins[index], node, agentName), userID)
 						case 2:
-							err = expectOnlineCall(self, unbindCommand, false, userID, "stale-login")
+							err = expectOnlineCall(self, onlinerpc.UnbindCommand, false, userID, "stale-login")
 						}
 						if err != nil {
 							return err
@@ -107,13 +108,13 @@ func measureOnlineLoad(t *testing.T, population, rate int) {
 				for index, loginID := range currentLogins {
 					userID := uint64(index*peers + peer + 1)
 					agentName := fmt.Sprintf("agent-%d", userID)
-					if err := expectOnlineCall(self, lookupCommand, wantLocation(loginID, node, agentName), userID); err != nil {
+					if err := expectOnlineCall(self, onlinerpc.LookupCommand, wantLocation(loginID, node, agentName), userID); err != nil {
 						return err
 					}
-					if err := expectOnlineCall(self, unbindCommand, true, userID, loginID); err != nil {
+					if err := expectOnlineCall(self, onlinerpc.UnbindCommand, true, userID, loginID); err != nil {
 						return err
 					}
-					if err := expectOnlineCall(self, unbindCommand, false, userID, loginID); err != nil {
+					if err := expectOnlineCall(self, onlinerpc.UnbindCommand, false, userID, loginID); err != nil {
 						return err
 					}
 				}
