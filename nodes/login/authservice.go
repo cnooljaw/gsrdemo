@@ -11,6 +11,9 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// authService 公开密码认证入口，成功后由本地 Token Service 签发平台凭据。
+//
+//rpc:service auth public name=authServiceName
 const (
 	// authServiceName 是 login 节点内发布的认证 Service 名称。
 	authServiceName = "auth"
@@ -80,7 +83,7 @@ func (service *authService) handleAuthenticate(self gsr.CommandContext, username
 	}
 	wait, stop := context.WithTimeout(context.Background(), tokenCallTimeout)
 	defer stop()
-	value, err := self.CallName(wait, tokenServiceName, tokenIssueCommand, userID)
+	value, err := self.CallName(wait, tokenServiceName, issueCommand, userID)
 	if err != nil {
 		return nil, err
 	}

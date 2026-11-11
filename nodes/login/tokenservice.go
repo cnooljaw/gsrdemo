@@ -9,13 +9,17 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// tokenService 的签发、校验、撤销共用固定逻辑入口。
+//
+//rpc:service token public name=tokenServiceName
 const (
-	tokenServiceName                     = "token"
-	tokenIssueCommand  runtime.CommandID = 1
-	tokenVerifyCommand runtime.CommandID = 2
-	tokenRevokeCommand runtime.CommandID = 3
-	tokenCallTimeout                     = 500 * time.Millisecond
+	tokenServiceName                   = "token"
+	issueCommand     runtime.CommandID = 1
+	verifyCommand    runtime.CommandID = 2
+	revokeCommand    runtime.CommandID = 3
 )
+
+const tokenCallTimeout = 500 * time.Millisecond
 
 // tokenService 只处理 Redis 凭据，不等待密码 SQL、渠道认证或 Online。
 type tokenService struct {
@@ -29,9 +33,9 @@ var _ gsr.Service = (*tokenService)(nil)
 func newTokenService(store tokenStore, ttl time.Duration) *tokenService {
 	service := &tokenService{store: store, ttl: ttl}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		tokenIssueCommand:  service.handleIssue,
-		tokenVerifyCommand: service.handleVerify,
-		tokenRevokeCommand: service.handleRevoke,
+		issueCommand:  service.handleIssue,
+		verifyCommand: service.handleVerify,
+		revokeCommand: service.handleRevoke,
 	})
 	return service
 }

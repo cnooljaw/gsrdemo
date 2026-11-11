@@ -13,6 +13,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
 )
 
 // observedMain 只观察真实 MainService 的启动结果，保留实际创建和命名流程。
@@ -120,7 +121,7 @@ func (service *loginCaller) OnStop(_ context.Context) error {
 
 func callLogin(t *testing.T, address string, args ...any) (any, error) {
 	t.Helper()
-	return callLoginCommand(t, address, authServiceName, authenticateCommand, args...)
+	return callLoginCommand(t, address, authrpc.ServiceName, authrpc.AuthenticateCommand, args...)
 }
 
 func callLoginCommand(t *testing.T, address, name string, command runtime.CommandID, args ...any) (any, error) {

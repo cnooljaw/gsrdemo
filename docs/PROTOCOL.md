@@ -117,7 +117,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 
 ### 2.2 login：认证与凭据
 
-Node 为 `login`，入口见 [AuthService](../nodes/login/authservice.go)、[TokenService](../nodes/login/tokenservice.go)。
+Node 为 `login`，入口见 [AuthService](../nodes/login/authservice.go)、[TokenService](../nodes/login/tokenservice.go)，共享命令分别见 [Auth 契约](../common/rpc/auth/commands.gen.go)、[Token 契约](../common/rpc/token/commands.gen.go)。
 
 | Service / Command | 正常调用方与方式 | 顺序参数 | 成功结果 |
 | --- | --- | --- | --- |

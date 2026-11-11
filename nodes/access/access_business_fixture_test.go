@@ -14,7 +14,9 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
+	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
+	tokenrpc "github.com/cnooljaw/gsrdemo/common/rpc/token"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -38,13 +40,13 @@ func (service *accessBackendFixture) OnStop(context.Context) error { return nil 
 
 func (service *accessBackendFixture) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	switch service.role {
-	case "auth":
+	case authrpc.ServiceName:
 		if args[0] != "alice" || args[1] != "password" {
 			return nil, errors.New("invalid credentials")
 		}
 		return map[string]any{"user_id": uint64(7), "access_token": strings.Repeat("A", 43), "expires_at_ms": time.Now().Add(time.Hour).UnixMilli()}, nil
-	case "token":
-		if command != 2 || args[0] != strings.Repeat("A", 43) {
+	case tokenrpc.ServiceName:
+		if command != tokenrpc.VerifyCommand || args[0] != strings.Repeat("A", 43) {
 			return nil, errors.New("invalid token")
 		}
 		return uint64(7), nil
@@ -139,7 +141,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{"auth", "token", onlinerpc.ServiceName, "mole", "entry", "attack"} {
+	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, "mole", "entry", "attack"} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
 		if err != nil {
 			return err

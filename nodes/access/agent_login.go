@@ -9,16 +9,14 @@ import (
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
+	tokenrpc "github.com/cnooljaw/gsrdemo/common/rpc/token"
 	"github.com/cnooljaw/gsrdemo/nodes/access/gameagent"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
-const (
-	passwordAuthenticateCommand runtime.CommandID = 1
-	tokenVerifyCommand          runtime.CommandID = 2
-	agentReplacedCommand        runtime.CommandID = 101
-)
+const agentReplacedCommand runtime.CommandID = 101
 
 var errAlreadyLoggedIn = runtime.NewStatusError(runtime.ErrorClassDomain, "access.already_logged_in", "use a new connection to login again")
 
@@ -27,7 +25,7 @@ func (agent *agent) onPasswordAuth(self gsr.CommandContext, reply protocol.Conte
 	if agent.session.userID != 0 {
 		return errAlreadyLoggedIn
 	}
-	value, err := callBackend(self, "login", "auth", passwordAuthenticateCommand, request.GetUsername(), request.GetPassword())
+	value, err := callBackend(self, "login", authrpc.ServiceName, authrpc.AuthenticateCommand, request.GetUsername(), request.GetPassword())
 	if err != nil {
 		return err
 	}
@@ -49,7 +47,7 @@ func (agent *agent) onLogin(self gsr.CommandContext, reply protocol.Context, req
 	if agent.session.userID != 0 {
 		return errAlreadyLoggedIn
 	}
-	value, err := callBackend(self, "login", "token", tokenVerifyCommand, request.GetAccessToken())
+	value, err := callBackend(self, "login", tokenrpc.ServiceName, tokenrpc.VerifyCommand, request.GetAccessToken())
 	if err != nil {
 		return err
 	}

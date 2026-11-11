@@ -8,6 +8,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/cnooljaw/gsr/runtime"
+	tokenrpc "github.com/cnooljaw/gsrdemo/common/rpc/token"
 )
 
 // TestTokenServiceSurvivesAuthRestart 保护认证返回凭据，Token 远程校验/撤销不查 SQL，相同 Redis 在节点重建后仍可校验。
@@ -30,21 +31,21 @@ func TestTokenServiceSurvivesAuthRestart(t *testing.T) {
 	stop()
 	rebuilt := startLoginWithStore(t, db, store)
 	for _, target := range []string{rebuilt} {
-		uid, err := callLoginCommand(t, target, tokenServiceName, tokenVerifyCommand, token)
+		uid, err := callLoginCommand(t, target, tokenrpc.ServiceName, tokenrpc.VerifyCommand, token)
 		if err != nil || uid != uint64(7) {
 			t.Fatalf("重建校验: uid=%v err=%v", uid, err)
 		}
 	}
-	if _, err := callLoginCommand(t, rebuilt, tokenServiceName, tokenVerifyCommand, uint64(7)); !errors.Is(err, runtime.ErrInvalidCommandArguments) {
+	if _, err := callLoginCommand(t, rebuilt, tokenrpc.ServiceName, tokenrpc.VerifyCommand, uint64(7)); !errors.Is(err, runtime.ErrInvalidCommandArguments) {
 		t.Fatal("错误参数未拒绝", err)
 	}
-	if _, err := callLoginCommand(t, rebuilt, tokenServiceName, 99); !errors.Is(err, runtime.ErrUnknownCommand) {
+	if _, err := callLoginCommand(t, rebuilt, tokenrpc.ServiceName, 99); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatal("未知命令未拒绝", err)
 	}
-	if removed, err := callLoginCommand(t, rebuilt, tokenServiceName, tokenRevokeCommand, token); err != nil || removed != true {
+	if removed, err := callLoginCommand(t, rebuilt, tokenrpc.ServiceName, tokenrpc.RevokeCommand, token); err != nil || removed != true {
 		t.Fatal("撤销失败", err)
 	}
-	if _, err := callLoginCommand(t, rebuilt, tokenServiceName, tokenVerifyCommand, token); !errors.Is(err, errInvalidToken) {
+	if _, err := callLoginCommand(t, rebuilt, tokenrpc.ServiceName, tokenrpc.VerifyCommand, token); !errors.Is(err, errInvalidToken) {
 		t.Fatal("撤销后仍可登录", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -60,7 +61,7 @@ func TestSlowPasswordAuthDoesNotBlockTokenLogin(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	address := startLogin(t, db)
-	issued, err := callLoginCommand(t, address, tokenServiceName, tokenIssueCommand, uint64(7))
+	issued, err := callLoginCommand(t, address, tokenrpc.ServiceName, tokenrpc.IssueCommand, uint64(7))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestSlowPasswordAuthDoesNotBlockTokenLogin(t *testing.T) {
 	go func() { _, err := callLogin(t, address, "alice", "password"); done <- err }()
 	time.Sleep(30 * time.Millisecond)
 	started := time.Now()
-	uid, err := callLoginCommand(t, address, tokenServiceName, tokenVerifyCommand, token)
+	uid, err := callLoginCommand(t, address, tokenrpc.ServiceName, tokenrpc.VerifyCommand, token)
 	if err != nil || uid != uint64(7) || time.Since(started) > 200*time.Millisecond {
 		t.Fatalf("Token 校验被 SQL 阻塞: uid=%v err=%v", uid, err)
 	}
