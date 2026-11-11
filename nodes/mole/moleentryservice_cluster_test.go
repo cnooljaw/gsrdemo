@@ -10,13 +10,16 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
 // TestMoleEntryDoesNotExposeOperationQuery 保护旧 Entry 查询命令明确拒绝，内部结算查询不再从进入入口转发。
 func TestMoleEntryDoesNotExposeOperationQuery(t *testing.T) {
 	routes, _ := prepareMoleCluster(t, newSettlementFixture())
-	if _, err := moleRPC(t, routes, "mole", moleEntryName, 3, uint64(1), "old-hit"); !errors.Is(err, runtime.ErrUnknownCommand) {
+	if _, err := moleRPC(t, routes, "mole", moleentry.ServiceName, 3, uint64(1), "old-hit"); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatalf("旧账务查询命令仍可调用: %v", err)
 	}
 }
@@ -35,7 +38,7 @@ func (service *delayedAttackFixture) OnStart(ctx context.Context, self gsr.Servi
 }
 
 func (service *delayedAttackFixture) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
-	if command == attackJoinCommand && !service.delayed {
+	if command == moleattack.AttackJoinCommand && !service.delayed {
 		service.delayed = true
 		if service.started != nil {
 			close(service.started)
@@ -78,8 +81,8 @@ func (service *seededMoleFixture) OnStart(ctx context.Context, self gsr.ServiceC
 		service gsr.Service
 	}{
 		{moleAccountingName, newMoleAccountingService()},
-		{moleServiceName, root},
-		{moleEntryName, newMoleEntryService("settlement")},
+		{molerpc.ServiceName, root},
+		{moleentry.ServiceName, newMoleEntryService("settlement")},
 		{moleSubmissionName, newMoleSubmissionService(service.checkpoint, "settlement")},
 	} {
 		id, err := self.CreateService(ctx, child.service)
@@ -130,11 +133,11 @@ func TestMoleSlowJoinDoesNotBlockDirectoryOrRooms(t *testing.T) {
 		t.Fatal("slow Join did not start")
 	}
 	begin := time.Now()
-	value, err := moleRPC(t, routes, "mole", moleServiceName, moleResolveEntryCommand, uint64(5), "login", "access-01", "agent")
-	if err != nil || value.(map[string]any)["entry_name"] != moleEntryName {
+	value, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, uint64(5), "login", "access-01", "agent")
+	if err != nil || value.(map[string]any)["entry_name"] != moleentry.ServiceName {
 		t.Fatalf("目录等待慢 Join: %v %v", value, err)
 	}
-	if _, err := moleRPC(t, routes, "mole", "attack-b-other", attackSnapshotCommand, uint64(4), "seeded"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", "attack-b-other", moleattack.AttackSnapshotCommand, uint64(4), "seeded"); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(begin); elapsed > 300*time.Millisecond {
@@ -203,7 +206,7 @@ func TestMoleSharedGroupsAndReconnect(t *testing.T) {
 	if reconnected["attack_name"] != name || reconnected["seat"] != first["seat"] {
 		t.Fatal("reconnect moved group or seat")
 	}
-	for _, command := range []runtime.CommandID{attackSnapshotCommand, attackLeaveCommand} {
+	for _, command := range []runtime.CommandID{moleattack.AttackSnapshotCommand, moleattack.AttackLeaveCommand} {
 		if _, err := moleRPC(t, routes, "mole", name, command, uint64(1), "old"); !errors.Is(err, errMoleStaleLogin) {
 			t.Fatalf("old login command %d: %v", command, err)
 		}
@@ -211,7 +214,7 @@ func TestMoleSharedGroupsAndReconnect(t *testing.T) {
 	if _, err := callMoleEnter(t, routes, uint64(1), "old", "access-01", "agent"); !errors.Is(err, errMoleStaleLogin) {
 		t.Fatalf("late Enter replaced new login: %v", err)
 	}
-	if _, err := moleRPC(t, routes, "mole", name, attackLeaveCommand, uint64(2), "login-2"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", name, moleattack.AttackLeaveCommand, uint64(2), "login-2"); err != nil {
 		t.Fatal(err)
 	}
 	joined := enterMoleTestUser(t, routes, 5, "login-5", "access-02")
@@ -319,7 +322,7 @@ func TestMoleReplacedLoginKeepsReenteredAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 新接入先取得 Entry 地址，随后进入已通过 Online 校验并停在 Resume 回包。
-	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleResolveEntryCommand, uint64(1), "new-login", "access-02", "agent"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, uint64(1), "new-login", "access-02", "agent"); err != nil {
 		t.Fatal(err)
 	}
 	probe.armed.Store(true)
@@ -338,10 +341,10 @@ func TestMoleReplacedLoginKeepsReenteredAccount(t *testing.T) {
 		t.Fatal("new entry did not resume")
 	}
 	// 旧 Agent 收到替换通知后清理旧成员，目录将 Forget 送到正在 Resume 的 Accounting。
-	if _, err := moleRPC(t, routes, "mole", old["attack_name"].(string), attackLeaveCommand, uint64(1), "old-login"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", old["attack_name"].(string), moleattack.AttackLeaveCommand, uint64(1), "old-login"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleHealthCommand); err != nil {
+	if _, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleHealthCommand); err != nil {
 		t.Fatal(err)
 	}
 	close(probe.release)
@@ -356,7 +359,7 @@ func TestMoleReplacedLoginKeepsReenteredAccount(t *testing.T) {
 	}
 	snapshot := result.value.(map[string]any)
 	target := snapshot["targets"].([]any)[0].(map[string]any)
-	_, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), attackHitCommand, uint64(1), "new-login", "new-action", target["spawn_seq"], target["hole"])
+	_, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), moleattack.AttackHitCommand, uint64(1), "new-login", "new-action", target["spawn_seq"], target["hole"])
 	if err != nil {
 		t.Fatalf("新 Entry 已成功，但首锤被旧离开清理破坏: %v", err)
 	}

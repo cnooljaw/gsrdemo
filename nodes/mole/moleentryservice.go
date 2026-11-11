@@ -11,6 +11,9 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
+// 进入协调提供固定逻辑入口，客户端经 Agent 调用。
+//
+//rpc:service moleentry public name=moleEntryName
 const (
 	moleEntryName                      = "mole-entry"
 	moleEnterCommand runtime.CommandID = 1

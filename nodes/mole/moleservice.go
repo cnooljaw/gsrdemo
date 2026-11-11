@@ -9,6 +9,9 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// 地鼠目录以固定名称对外发布，命令编号均从属于此 Service。
+//
+//rpc:service mole public name=moleServiceName
 const (
 	moleServiceName                           = "mole"
 	moleResolveEntryCommand runtime.CommandID = 1
@@ -17,8 +20,11 @@ const (
 	moleReserveCommand      runtime.CommandID = 12
 	moleDiscardGroupCommand runtime.CommandID = 13
 	moleHealthCommand       runtime.CommandID = 14
-	maxMoleUsers                              = 100000
-	moleCallTimeout                           = 500 * time.Millisecond
+)
+
+const (
+	maxMoleUsers    = 100000
+	moleCallTimeout = 500 * time.Millisecond
 )
 
 var (

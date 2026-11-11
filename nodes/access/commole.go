@@ -7,6 +7,9 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
@@ -30,21 +33,13 @@ func (mole *comMole) Name() string {
 
 var errMoleTargetUnavailable = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.target_unavailable", "target is unavailable")
 
-const (
-	moleResolveEntryCommand runtime.CommandID = 1
-	moleEnterCommand        runtime.CommandID = 1
-	moleHitCommand          runtime.CommandID = 2
-	moleSnapshotCommand     runtime.CommandID = 3
-	moleLeaveCommand        runtime.CommandID = 4
-)
-
 func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ *demopb.EnterRequest) error {
 	identity := mole.deps.Identity()
 	if err := mole.deps.AllowEnter(mole.Name()); err != nil {
 		return err
 	}
 	args := []any{identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName)}
-	value, err := mole.deps.Call(self, "mole", "mole", moleResolveEntryCommand, args...)
+	value, err := mole.deps.Call(self, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, args...)
 	if err != nil {
 		return err
 	}
@@ -56,7 +51,7 @@ func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	if !ok || entry == "" {
 		return errInvalidBackendReply
 	}
-	value, err = mole.deps.Call(self, "mole", cluster.ServiceName(entry), moleEnterCommand, args...)
+	value, err = mole.deps.Call(self, "mole", cluster.ServiceName(entry), moleentry.MoleEnterCommand, args...)
 	if err != nil {
 		return err
 	}
@@ -95,7 +90,7 @@ func (mole *comMole) onHit(self gsr.CommandContext, reply protocol.Context, requ
 		return err
 	}
 	// 不换 ActionID、不自动重试；未知结果停止操作，重入刷新余额，原操作留给受控工具核查。
-	value, err := mole.deps.Call(self, "mole", mole.attackName, moleHitCommand, identity.UserID, identity.LoginID,
+	value, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackHitCommand, identity.UserID, identity.LoginID,
 		request.GetActionId(), request.GetSpawnSeq(), request.GetHole())
 	if errors.Is(err, errMoleTargetUnavailable) {
 		// 该拒绝发生在 comMole 接纳记账之前；不伪造 HitID、奖励或余额。
@@ -123,7 +118,7 @@ func (mole *comMole) onSnapshot(self gsr.CommandContext, reply protocol.Context,
 	if err := mole.requireGame(); err != nil {
 		return err
 	}
-	value, err := mole.deps.Call(self, "mole", mole.attackName, moleSnapshotCommand, identity.UserID, identity.LoginID)
+	value, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackSnapshotCommand, identity.UserID, identity.LoginID)
 	if err != nil {
 		return err
 	}
@@ -139,7 +134,7 @@ func (mole *comMole) onLeave(self gsr.CommandContext, reply protocol.Context, _ 
 	if err := mole.requireGame(); err != nil {
 		return err
 	}
-	value, err := mole.deps.Call(self, "mole", mole.attackName, moleLeaveCommand, identity.UserID, identity.LoginID)
+	value, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackLeaveCommand, identity.UserID, identity.LoginID)
 	if err != nil {
 		return err
 	}
@@ -204,6 +199,6 @@ func (mole *comMole) Disconnect(self gsr.ServiceContext) error {
 		return nil
 	}
 	identity := mole.deps.Identity()
-	_, err := mole.deps.Call(self, "mole", mole.attackName, moleLeaveCommand, identity.UserID, identity.LoginID)
+	_, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackLeaveCommand, identity.UserID, identity.LoginID)
 	return err
 }

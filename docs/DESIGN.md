@@ -107,6 +107,8 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 | MoleAccountingService（`mole-accounting`） | 确认余额/版本、待确认扣返、显示修订号、归批缓冲及一个在途批次；只做内存记账 |
 | MoleSubmissionService（`mole-submission`） | Redis 检查点、原批次及回执；持久化、提交、恢复与重试，不访问 SQL |
 
+目录、Entry、Attack 是公开 Service，全部命令分别生成到 `mole`、`moleentry`、`moleattack` 契约包；目录和 Entry 有固定名称，Attack 只生成命令，实例名称由进入结果返回。Accounting、Submission、Pulse 标为私有，不生成共享契约；Accounting 和 Submission 保留节点内具名协作，标记不改变 GSR 的名称解析或现有来源校验。
+
 组装见 [MainService](../nodes/mole/main_service.go)，规则见 [attackGame](../nodes/mole/attackgame.go) 和 [molePool](../nodes/mole/molepool.go)。统计池累计唯一已入账的锤数、扣除、返还与净留存，不计等待或拒绝操作，不影响概率，也不是可支出钱包。
 
 ### 5.2 进入与即时命中
@@ -336,7 +338,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
-| RPC 契约迁移 | 结算读/写、Online、Login 的 Auth/Token、access 的 Agent Service 已使用就近定义与自动生成契约；mole、landlord 自身的命令尚未迁移，后续逐节点确认公开 Service、动态名称及本地来源限制。 |
+| RPC 契约迁移 | 结算读/写、Online、Login 的 Auth/Token、access 的 Agent、mole 的目录/Entry/Attack 已使用就近定义与自动生成契约；landlord 自身的命令尚未迁移，后续确认公开 Service、动态名称及本地来源限制。 |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
 | 麻将接入 | 结算服已提供按付款明细比例封顶的通用 Group；具体玩法的应付关系、事件时序及客户端尚未实现或验收。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |

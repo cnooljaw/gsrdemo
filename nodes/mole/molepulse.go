@@ -10,6 +10,11 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// Pulse 的计时命令仅供本地来源唤醒。
+//
+//rpc:service molepulse private
+const molePulseTickCommand runtime.CommandID = 1
+
 // molePulse 仅接收自己的 Timer，不发布名称、不执行业务或 I/O。
 // 目标 Mailbox 满时丢弃本次唤醒，下一次仍会尝试，避免 owner 自续约链断裂。
 type molePulse struct {
@@ -28,15 +33,15 @@ func startMolePulse(ctx context.Context, self gsr.ServiceContext, period time.Du
 }
 
 func (service *molePulse) OnStart(_ context.Context, self gsr.ServiceContext) error {
-	_, err := self.After(service.period, 1)
+	_, err := self.After(service.period, molePulseTickCommand)
 	return err
 }
 
 func (service *molePulse) Handle(self gsr.CommandContext, command runtime.CommandID, _ ...any) (any, error) {
-	if command != 1 || self.Source() != 0 {
+	if command != molePulseTickCommand || self.Source() != 0 {
 		return nil, runtime.ErrUnknownCommand
 	}
-	if _, err := self.After(service.period, 1); err != nil {
+	if _, err := self.After(service.period, molePulseTickCommand); err != nil {
 		self.Exit()
 		return nil, err
 	}

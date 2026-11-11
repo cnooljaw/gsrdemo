@@ -12,13 +12,17 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
+// Submission 只接收本节点批次及定时唤醒，不生成跨节点契约。
+//
+//rpc:service molesubmission private name=moleSubmissionName
 const (
 	moleSubmissionName                       = "mole-submission"
 	submissionBatchCommand runtime.CommandID = 1
 	submissionTickCommand  runtime.CommandID = 10
 	submissionStateCommand runtime.CommandID = 11
-	moleSettlementTimeout                    = 3 * time.Second
 )
+
+const moleSettlementTimeout = 3 * time.Second
 
 // moleSubmissionService 独占 Redis 检查点和结算调用；只推进一个在途批次，不持有钱包。
 type moleSubmissionService struct {

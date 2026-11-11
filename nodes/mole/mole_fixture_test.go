@@ -15,6 +15,9 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
@@ -414,7 +417,7 @@ func prepareMoleCluster(t *testing.T, fixture *settlementFixture) (map[cluster.N
 
 func callMoleEnter(t *testing.T, routes map[cluster.NodeID]string, args ...any) (any, error) {
 	t.Helper()
-	value, err := moleRPC(t, routes, "mole", moleServiceName, moleResolveEntryCommand, args...)
+	value, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +429,7 @@ func callMoleEnter(t *testing.T, routes map[cluster.NodeID]string, args ...any) 
 	if !ok {
 		return nil, errInvalidMoleInput
 	}
-	return moleRPC(t, routes, "mole", name, moleEnterCommand, args...)
+	return moleRPC(t, routes, "mole", name, moleentry.MoleEnterCommand, args...)
 }
 
 func enterMoleTestUser(t *testing.T, routes map[cluster.NodeID]string, userID uint64, login, access string) map[string]any {
@@ -452,7 +455,7 @@ func enterMoleTestUser(t *testing.T, routes map[cluster.NodeID]string, userID ui
 func testHitTarget(t *testing.T, routes map[cluster.NodeID]string, snapshot map[string]any, userID uint64, login, action string) map[string]any {
 	t.Helper()
 	target := snapshot["targets"].([]any)[0].(map[string]any)
-	value, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), attackHitCommand,
+	value, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), moleattack.AttackHitCommand,
 		userID, login, action, target["spawn_seq"], target["hole"])
 	if err != nil {
 		t.Fatal(err)

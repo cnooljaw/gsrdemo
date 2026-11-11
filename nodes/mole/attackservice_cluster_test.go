@@ -8,6 +8,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
@@ -44,7 +45,7 @@ func TestMolePanickedGroupDoesNotStopOtherGroups(t *testing.T) {
 	address, _ := startMoleTestNode(t, "mole", routes, main)
 	routes["mole"] = address
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
-	_, err := moleRPC(t, routes, "mole", "attack-broken", attackJoinCommand, uint64(2), "login-2", "access-01", "agent", "membership")
+	_, err := moleRPC(t, routes, "mole", "attack-broken", moleattack.AttackJoinCommand, uint64(2), "login-2", "access-01", "agent", "membership")
 	if !errors.Is(err, runtime.ErrServicePanicked) {
 		t.Fatalf("fault did not panic group: %v", err)
 	}

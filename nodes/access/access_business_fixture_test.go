@@ -15,6 +15,8 @@ import (
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	tokenrpc "github.com/cnooljaw/gsrdemo/common/rpc/token"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
@@ -79,7 +81,7 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			}
 			return service.current, nil
 		}
-	case "mole":
+	case molerpc.ServiceName:
 		return map[string]any{"entry_name": "entry"}, nil
 	case "entry":
 		if command == 3 {
@@ -90,7 +92,7 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 		return snapshot, nil
 	case "attack":
 		switch command {
-		case 2:
+		case moleattack.AttackHitCommand:
 			service.hits <- append([]any(nil), args...)
 			service.attempts++
 			if service.attempts == 1 {
@@ -117,11 +119,11 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 				return map[string]any{"hit_id": "hit-rejected", "action_id": args[2], "status": "rejected"}, nil
 			}
 			return map[string]any{"hit_id": "hit-1", "action_id": args[2], "spawn_seq": args[3], "hole": args[4], "status": "accepted", "debit": int64(100), "credit": int64(0), "balance": int64(900), "available": int64(900), "revision": uint64(2)}, nil
-		case 3:
+		case moleattack.AttackSnapshotCommand:
 			snapshot := fixtureSnapshot()
 			snapshot["targets"].([]any)[0].(map[string]any)["spawn_seq"] = uint64(10)
 			return snapshot, nil
-		case 4:
+		case moleattack.AttackLeaveCommand:
 			return true, nil
 		}
 	}
@@ -141,7 +143,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, "mole", "entry", "attack"} {
+	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, molerpc.ServiceName, "entry", "attack"} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
 		if err != nil {
 			return err

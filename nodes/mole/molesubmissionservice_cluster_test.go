@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
@@ -36,7 +37,7 @@ func TestMolePoisonBatchPausesSubmission(t *testing.T) {
 	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("提交暂停仍接纳新记账: %v", err)
 	}
-	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), attackSnapshotCommand, uint64(4), "login-4"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(4), "login-4"); err != nil {
 		t.Fatal("提交暂停阻塞了房间快照", err)
 	}
 	value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, uint64(1), bad["hit_id"])
@@ -81,7 +82,7 @@ func TestMoleSubmissionPanicPausesAccounting(t *testing.T) {
 	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("提交退出后仍显示账务可用: %v", err)
 	}
-	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), attackSnapshotCommand, uint64(4), "login-4"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(4), "login-4"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -273,7 +274,7 @@ func TestMoleExitDoesNotCancelHandedOffHit(t *testing.T) {
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
 	hit := testHitTarget(t, routes, snapshot, 1, "login", "action")
 	name := snapshot["attack_name"].(string)
-	if _, err := moleRPC(t, routes, "mole", name, attackLeaveCommand, uint64(1), "login"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", name, moleattack.AttackLeaveCommand, uint64(1), "login"); err != nil {
 		t.Fatal(err)
 	}
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")

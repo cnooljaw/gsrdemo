@@ -9,6 +9,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 )
 
 type busyMoleFixture struct {
@@ -91,7 +92,7 @@ func TestMoleTicksSurviveFullMailbox(t *testing.T) {
 			case "submission":
 				inner, command = newMoleSubmissionService(testMoleCheckpoint(t), "settlement"), submissionTickCommand
 			case "attack":
-				inner, command = newAttackService("attack-timer"), attackTickCommand
+				inner, command = newAttackService("attack-timer"), moleattack.AttackTickCommand
 			}
 			owner := &busyMoleFixture{owner: inner, command: command, blocked: make(chan struct{}), release: make(chan struct{}), ticks: make(chan struct{}, 8)}
 			main := &saturatedMoleMain{owner: owner, ready: make(chan struct{})}

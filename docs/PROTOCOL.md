@@ -146,6 +146,8 @@ Bind 超时可能已经生效，access 不自动重发，只尝试清理候选 L
 
 Node 为 `mole`，正常调用者为 access Agent。入口见 [MoleService](../nodes/mole/moleservice.go)、[Entry](../nodes/mole/moleentryservice.go)、[AttackService](../nodes/mole/attackservice.go)。
 
+共享命令分别见 [目录契约](../common/rpc/mole/commands.gen.go)、[Entry 契约](../common/rpc/moleentry/commands.gen.go)、[Attack 契约](../common/rpc/moleattack/commands.gen.go)。契约包含各公开 Service 的全部命令编号，下表列普通跨节点业务调用；Handler 的来源和参数类型限制仍按实际入口执行。
+
 | Service / Command | 方式 | 顺序参数 | 成功结果 |
 | --- | --- | --- | --- |
 | `mole / 1` ResolveEntry | Call | `U, L, N, A` | map：`entry_name string`，当前返回 mole-entry；不分组、不作 Online 身份核对 |
@@ -275,7 +277,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | mole-submission / 2、3 | 旧查询入口已移除，编号不复用 |
 | settlement / 5 Summary | 已移除，无汇总查询接口，编号不复用 |
 
-Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等仅属同节点协作，使用 owner 私有类型及本地消息；不作为跨节点 RPC 契约，也不向客户端开放。地鼠缓存 Resume/SetBalance/Forget 均携带本次 Membership，旧成员的回收不作用于当前缓存；斗地主 Release 使用本地 Call 返回 bool，false 表示同桌已有新预留，需要保留原座位等待 Join，true 表示旧成员可移除。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
+Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等约定为同节点协作，按实际 Handler 使用 owner 私有类型及本地消息，不向客户端开放。公开 Service 的命令编号整体生成，不代表私有类型可远程编解码或取消来源限制；私有 Service 不生成共享契约。地鼠缓存 Resume/SetBalance/Forget 均携带本次 Membership，旧成员的回收不作用于当前缓存；斗地主 Release 使用本地 Call 返回 bool，false 表示同桌已有新预留，需要保留原座位等待 Join，true 表示旧成员可移除。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
 
 ## 3. 主要调用链
 

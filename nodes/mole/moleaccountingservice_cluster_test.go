@@ -6,6 +6,7 @@ import (
 
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
@@ -28,7 +29,7 @@ func TestMoleMatchingSettlementDoesNotRepeatReward(t *testing.T) {
 			t.Fatalf("matching settlement emitted another result: %+v", message)
 		}
 	}
-	current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), attackSnapshotCommand, uint64(1), "login")
+	current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(1), "login")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func TestMoleCorrectionUsesCurrentLogin(t *testing.T) {
 			if message.Command != accessagent.MoleBalanceCorrectionPushCommand || message.LoginID != "new-login" || message.Payload["balance"] != int64(0) {
 				t.Fatalf("invalid account correction: %+v", message)
 			}
-			current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), attackSnapshotCommand, uint64(1), "new-login")
+			current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(1), "new-login")
 			if err != nil {
 				t.Fatal(err)
 			}

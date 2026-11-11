@@ -10,6 +10,9 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
+// Accounting 只参与本节点协作，命令与私有类型留在节点内。
+//
+//rpc:service moleaccounting private name=moleAccountingName
 const (
 	moleAccountingName                                   = "mole-accounting"
 	accountingLoadCommand              runtime.CommandID = 1
@@ -23,11 +26,14 @@ const (
 	accountingForgetCommand            runtime.CommandID = 12
 	accountingSettlementReceiptCommand runtime.CommandID = 13
 	accountingPauseCommand             runtime.CommandID = 14
-	accountingPeriod                                     = 100 * time.Millisecond
-	maxBatchOperations                                   = 500
-	maxBatchBytes                                        = 256 * 1024
-	maxPendingHits                                       = 4096
-	maxCompletedHits                                     = 4096
+)
+
+const (
+	accountingPeriod   = 100 * time.Millisecond
+	maxBatchOperations = 500
+	maxBatchBytes      = 256 * 1024
+	maxPendingHits     = 4096
+	maxCompletedHits   = 4096
 )
 
 type silverBalance struct {

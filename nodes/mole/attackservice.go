@@ -11,6 +11,9 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 )
 
+// 每个地鼠组独立创建，实例名称由目录返回；同类组共享全部命令。
+//
+//rpc:service moleattack public
 const (
 	attackJoinCommand     runtime.CommandID = 1
 	attackHitCommand      runtime.CommandID = 2
