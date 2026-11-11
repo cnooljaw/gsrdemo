@@ -85,7 +85,7 @@ func startAccess(t *testing.T) (string, string, func()) {
 		done <- gsr.Run(ctx, gsr.Config{
 			Logging: logging.Config{Directory: config.Node.LogDirectory},
 			Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"access-01": clusterAddress}},
-		}, &readyMain{Service: NewMain("access-01", config.Gate, "settlement"), ready: ready})
+		}, &readyMain{Service: NewMain("access-01", config.Gate), ready: ready})
 	}()
 	stopped := false
 	stop := func() {

@@ -1,7 +1,6 @@
 instance: access-02
 listen: access-02
 nodes_file: nodes.yaml
-settlement_node: settlement
 log_directory: ../logs/access-02
 gate:
   address: 127.0.0.1:7889

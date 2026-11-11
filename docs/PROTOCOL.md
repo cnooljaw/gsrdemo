@@ -183,7 +183,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 
 ### 2.6 通用银子结算接口
 
-Node 取配置 `settlement_node`，默认 `settlement`。入口见[Call 写入池](../nodes/settlement/settlementwriteservice.go)与[Call 读取池](../nodes/settlement/settlementreadservice.go)。
+Node 取游戏节点（mole、landlord）的配置 `settlement_node`，默认 `settlement`；access 不直接调用结算。入口见[Call 写入池](../nodes/settlement/settlementwriteservice.go)与[Call 读取池](../nodes/settlement/settlementreadservice.go)。
 
 | Service / Command | 调用方式 | 顺序参数 | 完成结果 |
 | --- | --- | --- | --- |

@@ -48,7 +48,7 @@ func TestAgentDisconnectExitsAndStopClosesClient(t *testing.T) {
 	}
 	closeError := errors.New("close failed")
 	client := &testClientSession{closeError: closeError}
-	agent := newAgent(client, registry, "settlement")
+	agent := newAgent(client, registry)
 	self := &exitContext{}
 	if _, err := agent.Handle(self, runtime.CommandID(0)); !errors.Is(err, runtime.ErrUnknownCommand) || self.exited {
 		t.Fatalf("unknown command: exited=%v, err=%v", self.exited, err)

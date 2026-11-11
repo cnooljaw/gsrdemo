@@ -18,9 +18,8 @@ import (
 )
 
 type accessConfig struct {
-	SettlementNode string           `yaml:"settlement_node"`
-	Node           model.NodeConfig `yaml:",inline"`
-	Gate           gateOptions      `yaml:"gate"`
+	Node model.NodeConfig `yaml:",inline"`
+	Gate gateOptions      `yaml:"gate"`
 }
 
 type gateOptions struct {
@@ -48,12 +47,6 @@ func loadAccessConfig(path string) (accessConfig, error) {
 		return config, err
 	}
 	config.Node = node
-	if config.SettlementNode == "" {
-		config.SettlementNode = "settlement"
-	}
-	if node.Nodes[config.SettlementNode] == "" {
-		return config, errors.New("settlement_node must exist in nodes_file")
-	}
 	return config, nil
 }
 
@@ -81,5 +74,5 @@ func run() error {
 	return gsr.Run(ctx, gsr.Config{
 		Logging: logging.Config{Directory: config.Node.LogDirectory},
 		Cluster: gsr.ClusterConfig{Nodes: nodes},
-	}, NewMain(cluster.NodeID(config.Node.Listen), config.Gate, cluster.NodeID(config.SettlementNode)))
+	}, NewMain(cluster.NodeID(config.Node.Listen), config.Gate))
 }

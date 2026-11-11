@@ -204,7 +204,7 @@ func startAccessBusiness(t *testing.T, scenarios ...string) (string, string, <-c
 	accessCtx, stopAccess := context.WithCancel(context.Background())
 	accessLogs := t.TempDir()
 	go func() {
-		accessDone <- gsr.Run(accessCtx, gsr.Config{Logging: logging.Config{Directory: accessLogs}, Cluster: gsr.ClusterConfig{Nodes: routes}}, &readyMain{Service: NewMain("access-01", gateOptions{Address: gateAddress, MaxConnections: 8, MaxFrameBytes: 4096, MaxOutboundQueueBytes: 65536}, "settlement"), ready: accessReady})
+		accessDone <- gsr.Run(accessCtx, gsr.Config{Logging: logging.Config{Directory: accessLogs}, Cluster: gsr.ClusterConfig{Nodes: routes}}, &readyMain{Service: NewMain("access-01", gateOptions{Address: gateAddress, MaxConnections: 8, MaxFrameBytes: 4096, MaxOutboundQueueBytes: 65536}), ready: accessReady})
 	}()
 	t.Cleanup(func() {
 		stopAccess()

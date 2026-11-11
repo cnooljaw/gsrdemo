@@ -40,16 +40,14 @@ type componentDependencies struct {
 	Identity   func() agentIdentity
 	AllowEnter func(string) error
 	Call       func(self gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error)
-	// SettlementNode 是配置中的目标节点名；服务名和命令由公开协议规定。
-	SettlementNode cluster.NodeID
-	Push           func(uint32, proto.Message) error
+	Push       func(uint32, proto.Message) error
 }
 
 var (
 	// errLoginRequired 表示当前连接尚未登录。
 	errLoginRequired = runtime.NewStatusError(runtime.ErrorClassDomain, "access.login_required", "login required")
 	// errEnterRequired 表示缺少所需游戏路由，或需要先离开当前游戏。
-	errEnterRequired = runtime.NewStatusError(runtime.ErrorClassDomain, "access.enter_required", "enter mole first")
+	errEnterRequired = runtime.NewStatusError(runtime.ErrorClassDomain, "access.enter_required", "game entry required or another game is active")
 	// errInvalidBackendReply 表示内部响应不满足当前协议契约。
 	errInvalidBackendReply = runtime.NewStatusError(runtime.ErrorClassDomain, "access.invalid_backend_reply", "invalid backend reply")
 )
