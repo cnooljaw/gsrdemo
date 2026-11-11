@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
@@ -80,11 +81,14 @@ func (agent *agent) HandleClientMessage(self gsr.CommandContext, frame []byte) e
 		return nil
 	}
 	err := agent.protocolDispatcher.HandleFrame(self, frame)
-	if err != nil {
-		var envelope commonv1.Envelope
-		if proto.Unmarshal(frame, &envelope) == nil && (envelope.MsgId == uint32(demopb.MsgId_C2S_LOGIN) || envelope.MsgId == uint32(demopb.MsgId_C2S_PASSWORD_AUTH)) {
-			agent.closeAfterLoginFailure(self)
-		}
+	if err == nil {
+		return nil
+	}
+	var envelope commonv1.Envelope
+	loginRequest := proto.Unmarshal(frame, &envelope) == nil &&
+		(envelope.MsgId == uint32(demopb.MsgId_C2S_LOGIN) || envelope.MsgId == uint32(demopb.MsgId_C2S_PASSWORD_AUTH))
+	if loginRequest || errors.Is(err, errInvalidBackendReply) {
+		agent.closeAfterFailure(self)
 	}
 	return err
 }

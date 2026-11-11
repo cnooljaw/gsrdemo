@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"time"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
-	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
 	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
@@ -121,42 +119,5 @@ func (agent *agent) commonProtocolHandlers() map[uint32]any {
 func (agent *agent) commonCommandHandlers() map[runtime.CommandID]any {
 	return map[runtime.CommandID]any{
 		replacedCommand: agent.handleReplaced,
-	}
-}
-
-// 登录失败关闭辅助 Service 仅由本地计时唤醒，不发布远程名称或共享契约。
-//
-//rpc:service loginfailurecloser private
-const loginFailureCloseCommand runtime.CommandID = 1
-
-// loginFailureCloser 独立等待错误回包的短发送窗口；Agent 已封闭后续业务，框架连接队列仍由 Gate 独占。
-type loginFailureCloser struct{ client gate.ClientSession }
-
-var _ gsr.Service = (*loginFailureCloser)(nil)
-
-func (closer *loginFailureCloser) OnStart(_ context.Context, self gsr.ServiceContext) error {
-	_, err := self.After(200*time.Millisecond, loginFailureCloseCommand)
-	return err
-}
-
-func (closer *loginFailureCloser) Handle(self gsr.CommandContext, cmd runtime.CommandID, _ ...any) (any, error) {
-	if cmd != loginFailureCloseCommand || self.Source() != 0 {
-		return nil, runtime.ErrUnknownCommand
-	}
-	self.Exit()
-	return nil, nil
-}
-
-func (closer *loginFailureCloser) OnStop(_ context.Context) error {
-	return closer.client.Close()
-}
-
-func (agent *agent) closeAfterLoginFailure(self gsr.ServiceContext) {
-	agent.closing = true
-	ctx, cancel := context.WithTimeout(context.Background(), agentCallTimeout)
-	defer cancel()
-	if _, err := self.CreateService(ctx, &loginFailureCloser{client: agent.client}); err != nil {
-		self.Exit()
-		return
 	}
 }

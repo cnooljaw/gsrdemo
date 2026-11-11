@@ -65,11 +65,15 @@ func (landlord *comLandlord) onEnter(self gsr.CommandContext, reply protocol.Con
 			}
 			return err
 		}
+		// Join 已返回，快照非法也必须保留已知目标，供断线时尝试 Leave。
+		landlord.room = cluster.ServiceName(room)
 		snapshot, err := landlordSnapshot(value)
 		if err != nil {
 			return err
 		}
-		landlord.room = cluster.ServiceName(room)
+		if snapshot.RoomName != room {
+			return errInvalidBackendReply
+		}
 		return landlordResponse(reply, demopb.MsgId_S2C_LANDLORD_ENTER, snapshot)
 	}
 	return runtime.ErrServiceNotFound

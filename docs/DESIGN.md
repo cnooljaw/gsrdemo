@@ -84,7 +84,7 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 ### 3.3 失败、替换与断线
 
 - 一条连接只允许成功登录一次。客户端的 UserID、LoginID 和后端路由由服务端决定，游戏入口要求已经登录。
-- 认证或登录失败时，协议层尝试排队返回错误，Agent 标记 `closing`，停止处理后续客户端业务；私有 `loginFailureCloser` 使用 GSR `After(200ms)` 留出发送窗口，随后关闭会话。创建该 Service 失败时 Agent 立即退出；发送窗口不保证客户端已经收到错误。
+- 认证或登录失败，以及客户端请求收到非法后端回包时，协议层先尝试排队返回错误，Agent 标记 `closing`，停止处理后续客户端业务；私有 [failureCloser](../nodes/access/agent_failure.go) 使用 GSR `After(200ms)` 留出发送窗口，随后关闭会话。Gate 断线通知触发组件 Leave 与条件 Unbind；创建辅助 Service 失败时，Agent 尽力清理后直接退出。发送窗口不保证客户端已经收到错误，清理失败也不代表后端未加入。
 - Bind 失败或超时不开放游戏，不自动重发 Bind；按候选 LoginID 尽力清理。普通断线依次调用游戏组件 Disconnect，再条件 Unbind，清空身份；OnStop 关闭连接。
 - 进程骤停不能执行清理，Online 或游戏目录可能暂留旧位置，由后续显式登录/进入覆盖。旧 LoginID 的替换通知、操作和解绑不能作用于新登录。
 
@@ -92,11 +92,11 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 
 ### 3.4 多游戏组合与客户端行为
 
-Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go) 和 [comLandlord](../nodes/access/comlandlord.go) 组件。组件与 Agent 同属 access 根目录的 `package main`，通过文件和类型组织职责；组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。
+Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go) 和 [comLandlord](../nodes/access/comlandlord.go) 组件。组件与 Agent 同属 access 根目录的 `package main`，通过文件和类型组织职责；组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。Join 已返回但客户端回包校验失败时，仍保留已知路由供断线清理；持有路由不表示客户端已收到进入成功。斗地主还核对快照桌名与本次 Join 目标一致。
 
 组件通过 [componentDependencies](../nodes/access/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主快照 110；101 用于旧登录替换，不使用 kind 字符串二次分发。
 
-这些业务命令同属一个 Agent Service，统一在 [agent.go](../nodes/access/agent.go) 定义；Agent 与游戏组件直接引用同包源常量，远端节点引用生成的 `accessagent` 契约。Agent 名称由连接启动时生成，契约不包含固定 ServiceName。Gate 断线事件使用框架命令，私有 `loginFailureCloser` 的计时命令不生成共享契约。
+这些业务命令同属一个 Agent Service，统一在 [agent.go](../nodes/access/agent.go) 定义；Agent 与游戏组件直接引用同包源常量，远端节点引用生成的 `accessagent` 契约。Agent 名称由连接启动时生成，契约不包含固定 ServiceName。Gate 断线事件使用框架命令，私有 `failureCloser` 的计时命令不生成共享契约。
 
 TypeScript CLI 完成密码认证再 Token 登录，也可显式保存 0600 Token 文件，后续直接 Token 登录。银子和身份使用 bigint；地鼠按绝对余额与 revision 接受更新。只有明确的 `target_unavailable` 拒绝会触发重新选目标；超时、繁忙、断线等未知结果停止操作并保留 ActionID，不自动重发命中。地鼠客户端收到 accepted 即继续玩法，斗地主等待终态快照；两者都不追加逐笔查账。
 
@@ -315,6 +315,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 设计边界 | 对应测试 |
 | --- | --- |
 | 认证不等于登录、失败回包后关闭 | [agent_auth_test.go](../nodes/access/agent_auth_test.go)、[tokenservice_test.go](../nodes/login/tokenservice_test.go)、[token_redis_test.go](../nodes/login/token_redis_test.go) |
+| 非法进入回包后的请求封闭、延时断线与原路由清理 | [agent_failure_test.go](../nodes/access/agent_failure_test.go) |
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
 | 地鼠内存余额、回执、重试与检查点恢复 | [Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
@@ -357,6 +358,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
+| Gate 发送后关闭（GSR 候选能力，暂不实现） | 由 GSR 原生提供类似 `client.SendAndClose(frame)` 的能力，用写出完成或有界失败替代业务层固定延时；协议适配与生命周期边界见[下方草案](#102-gate-发送后关闭草案)。 |
 | 牌局资金预留（草案，暂不实现） | 为牌局预留额度，附属小游戏实时使用剩余可用余额；不再按“游戏期间禁止整个钱包的其他扣款”推进。额度、封顶基准、并发与异常释放规则待确认，见下方草案。 |
 | 麻将接入 | 结算服已提供按付款明细比例封顶的通用 Group；具体玩法的应付关系、事件时序及客户端尚未实现或验收。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |
@@ -374,3 +376,17 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 - 客户端需要统一的钱包版本更新规则，防止两种游戏的回执交错覆盖。access 可能调整为“一个主游戏 + 允许并行的附属小游戏”；当前仍使用现有游戏进入互斥。
 
 当前实现保持第 6、7 节所述行为：没有牌局资金预留，斗地主按钱包余额封顶结算。后续有明确业务需求时，再确认这份草案及实施范围。
+
+### 10.2 Gate 发送后关闭草案
+
+更合适的长期方案是由 GSR Gate 原生支持类似 `client.SendAndClose(finalFrame)` 的能力。Gate 已拥有出站队列、实际写入和连接关闭过程，能够在最后一帧写出后关闭连接，业务无需创建辅助 Service 或猜测固定发送窗口。此项属于 GSR 的候选改进，暂不实现，也不修改相邻 GSR 仓库；当前仍使用第 3.3 节的 `failureCloser`。
+
+候选契约应明确：
+
+- 最后一帧入队与连接进入关闭阶段是同一个接纳动作；接纳后拒绝后续发送，按明确顺序处理已有队列和最后一帧，再关闭连接。写出等待受 Gate 的时间与容量上限约束。
+- 队列已满、写入失败或超时时仍应有界关闭，并明确返回或诊断失败；不能为了等错误回包而无限等待。重复关闭应幂等，不能重复发送最后一帧。
+- 调用成功只代表 Gate 接纳发送并关闭的请求，不保证客户端已收到或处理消息；正常路径以写出完成为关闭条件，也不等同业务确认。
+- `errorResponse` 是协议层概念，Gate 仍接收已编码的帧。GSR 的协议分发层需配套提供“错误响应并关闭”的接线，避免先自动回错、再重复发送同一错误；具体 API 名称与签名由 GSR 设计确定。
+- 是否关闭由业务决定；Agent 仍需封闭已排队的后续客户端业务，并在断线通知中按已知路由尽力 Leave、条件 Unbind。Gate 不理解游戏成员或替业务回滚超时请求。
+
+GSR 能力发布后，再评估 gsrdemo 的版本升级与替换，删除不再需要的 `failureCloser`，并验证错误回包、慢客户端、队列满和断线清理等边界。

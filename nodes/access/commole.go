@@ -59,6 +59,7 @@ func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	if err != nil {
 		return err
 	}
+	// Join 已返回，先保留断线清理路由；余额非法时由 Agent 封闭业务并关闭连接。
 	mole.attackName = cluster.ServiceName(snapshot.AttackName)
 	fields = value.(map[string]any)
 	silver, err := clientBalance(fields["silver"])

@@ -263,7 +263,8 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 | 节点/能力 | 错误码 | 调用方处置 |
 | --- | --- | --- |
-| access 准入/转换 | `access.login_required / enter_required / already_logged_in / invalid_backend_reply` | 未登录、路由缺失或后端回包非法时不继续业务 |
+| access 准入 | `access.login_required / enter_required / already_logged_in` | 拒绝当前请求；认证或登录请求失败时关闭当前连接 |
+| access 回包转换 | `access.invalid_backend_reply` | 客户端请求返回安全错误后封闭后续请求，再延时断线并尽力清理已知游戏路由和 Online；生命周期见[失败、替换与断线](DESIGN.md#33-失败替换与断线) |
 | 认证 | `login.invalid_request / invalid_credentials / store_unavailable` | 不建立登录；账号不存在与密码错误不区分 |
 | Token | `auth.invalid_token / token_store_unavailable` | 不放行，后者不能降级绕过 Redis 校验 |
 | Online | `online.invalid_request / login_id_conflict` | 不修改非法目录状态，不复用旧登录身份 |
