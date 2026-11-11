@@ -96,6 +96,9 @@ func (landlord *comLandlord) callRoom(self gsr.CommandContext, reply protocol.Co
 	if err != nil {
 		return err
 	}
+	if cluster.ServiceName(snapshot.RoomName) != landlord.room {
+		return errInvalidBackendReply
+	}
 	return landlordResponse(reply, responseID, snapshot)
 }
 

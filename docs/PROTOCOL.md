@@ -41,7 +41,7 @@
 | Enter | 1011 → 1012 | 空 | `snapshot Snapshot`、`silver Balance`，建立组路由和余额基线 |
 | Hit | 1021 → 1022 | `action_id string`、`spawn_seq uint64`、`hole int64`（0～8） | `hit Hit`、可选 `silver Balance`；明确目标失效时只带 `rejection="target_unavailable"` |
 | Snapshot | 1031 → 1032 | 空 | `snapshot Snapshot`，当前组和本人命中记录 |
-| Leave | 1041 → 1042 | 空 | `left bool`；成功后清除接入路由，已接纳账务继续处理 |
+| Leave | 1041 → 1042 | 空 | `left bool`，固定 true；确认离开后清除接入路由，已接纳账务继续处理 |
 | SnapshotPush | 服务端 → 1061 | 无请求 | `snapshot Snapshot`，当前组快照 |
 | BalancePush | 服务端 → 1062 | 无请求 | `silver Balance`，绝对余额校正，不是再次奖励 |
 
@@ -155,7 +155,9 @@ Node 为 `mole`，正常调用者为 access Agent。入口见 [MoleService](../n
 | `entry_name / 1` Enter | Call | `U, L, N, A` | 地鼠快照 map，附 `silver` 内部余额视图；Entry 完成 Online、余额和 Join 协调 |
 | `AttackName / 2` Hit | Call | `U, L, actionID string, spawnSeq uint64, hole int64` | Hit 字段 map；accepted 附 `balance/available int64, revision uint64`；已拒绝原记录可无余额 |
 | `AttackName / 3` Snapshot | Call | `U, L` | 与 C/S Snapshot 对应的快照 map |
-| `AttackName / 4` Leave | Call | `U, L` | bool；不取消已接纳账务 |
+| `AttackName / 4` Leave | Call | `U, L` | bool，固定 true；access 仅确认 true 后清路由，不取消已接纳账务 |
+
+access 核对 Snapshot 回包的 `attack_name` 与请求的 AttackName 一致；Leave 返回 false 或非 bool 属于非法回包，保留原路由用于断线清理，按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。
 
 内部余额视图字段为 `balance/confirmed_balance/available int64`、`version/revision uint64`；access 在 C/S 边界把 confirmed_balance/version 转成 ConfirmedSilver。Entry 只在缓存明确缺失时查询 `settlement-read / 4`，有 pending 时普通余额查询不重置确认基线。
 
@@ -179,7 +181,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | `RoomName / 5` Leave | Call | `U, L` | bool；Agent 接纳 true 后清路由，并返回空 C/S LeaveResponse |
 | `landlord / 13` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
-快照 map 与 C/S LandlordSnapshot 字段对应。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
+快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Ready、Call、Rob、Play、Snapshot 回包的 `room_name` 与本次请求目标一致，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
 
 ### 2.6 通用银子结算接口
 

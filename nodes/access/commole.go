@@ -127,6 +127,9 @@ func (mole *comMole) onSnapshot(self gsr.CommandContext, reply protocol.Context,
 	if err != nil {
 		return err
 	}
+	if cluster.ServiceName(snapshot.AttackName) != mole.attackName {
+		return errInvalidBackendReply
+	}
 	return reply.Response(uint32(demopb.MsgId_S2C_SNAPSHOT), &demopb.SnapshotResponse{Snapshot: snapshot})
 }
 
@@ -140,7 +143,7 @@ func (mole *comMole) onLeave(self gsr.CommandContext, reply protocol.Context, _ 
 		return err
 	}
 	left, ok := value.(bool)
-	if !ok {
+	if !ok || !left {
 		return errInvalidBackendReply
 	}
 	mole.attackName = ""

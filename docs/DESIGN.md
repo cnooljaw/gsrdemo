@@ -92,7 +92,7 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 
 ### 3.4 多游戏组合与客户端行为
 
-Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go) 和 [comLandlord](../nodes/access/comlandlord.go) 组件。组件与 Agent 同属 access 根目录的 `package main`，通过文件和类型组织职责；组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。Join 已返回但客户端回包校验失败时，仍保留已知路由供断线清理；持有路由不表示客户端已收到进入成功。斗地主还核对快照桌名与本次 Join 目标一致。
+Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go) 和 [comLandlord](../nodes/access/comlandlord.go) 组件。组件与 Agent 同属 access 根目录的 `package main`，通过文件和类型组织职责；组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。Join 已返回但客户端回包校验失败时，仍保留已知路由供断线清理；持有路由不表示客户端已收到进入成功。回包校验与离开确认见[游戏 RPC 契约](PROTOCOL.md#24-mole进入与组内操作)。
 
 组件通过 [componentDependencies](../nodes/access/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主快照 110；101 用于旧登录替换，不使用 kind 字符串二次分发。
 
@@ -315,7 +315,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 设计边界 | 对应测试 |
 | --- | --- |
 | 认证不等于登录、失败回包后关闭 | [agent_auth_test.go](../nodes/access/agent_auth_test.go)、[tokenservice_test.go](../nodes/login/tokenservice_test.go)、[token_redis_test.go](../nodes/login/token_redis_test.go) |
-| 非法进入回包后的请求封闭、延时断线与原路由清理 | [agent_failure_test.go](../nodes/access/agent_failure_test.go) |
+| 游戏回包校验、离开确认、失败后的请求封闭与路由清理 | [component_test.go](../nodes/access/component_test.go)、[agent_failure_test.go](../nodes/access/agent_failure_test.go) |
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
 | 地鼠内存余额、回执、重试与检查点恢复 | [Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
