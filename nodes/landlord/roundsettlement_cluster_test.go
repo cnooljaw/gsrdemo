@@ -16,6 +16,8 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
+	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
+	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 	"github.com/redis/go-redis/v9"
 )
@@ -206,13 +208,13 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 			service := newAttackService(game.Name, journal, nil, "settlement")
 			service.game = *game
 			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
-				game.Name: &landlordSettlementProbe{service}, landlordName: &landlordTestBackend{},
+				game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: &landlordTestBackend{},
 			})
 			var view map[string]any
 			if scenario.timeout {
 				deadline := time.Now().Add(2 * time.Second)
 				for {
-					view = landlordTestValue(t, routes, "landlord", game.Name, roomSnapshotCommand, uid, "login").(map[string]any)
+					view = landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uid, "login").(map[string]any)
 					if view["phase"] == "finished" {
 						break
 					}
@@ -222,7 +224,7 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 					time.Sleep(20 * time.Millisecond)
 				}
 			} else {
-				view = landlordTestValue(t, routes, "landlord", game.Name, roomPlayCommand, uid, "login", turn, []any{int64(3)}).(map[string]any)
+				view = landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand, uid, "login", turn, []any{int64(3)}).(map[string]any)
 			}
 			if receipt := view["settlement"].(map[string]any); receipt["status"] != status || receipt["balance"] != int64(10000) {
 				t.Fatalf("有效回执被 Redis 清理失败掩盖: %v", receipt)
@@ -242,7 +244,7 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 			for uid := uint64(1); uid <= 3; uid++ {
-				landlordTestValue(t, routes, "landlord", game.Name, roomLeaveCommand, uid, "login")
+				landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomLeaveCommand, uid, "login")
 			}
 			// 所有玩家已离开，清理期间桌仍存在，且终态不退回 pending。
 			if receipt := landlordTestValue(t, routes, "landlord", game.Name, 99).(map[string]any); receipt["status"] != status {
@@ -287,7 +289,7 @@ func TestSlowCleanupKeepsSnapshotResponsive(t *testing.T) {
 	routes := map[cluster.NodeID]string{}
 	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
 	time.Sleep(2 * time.Second)
-	_, err := landlordTestRPC(t, routes, "landlord", game.Name, roomSnapshotCommand, uint64(1), "login")
+	_, err := landlordTestRPC(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login")
 	if err != nil {
 		t.Fatalf("Redis 清理每秒超时，250ms Tick 积压导致本桌快照超时: %v", err)
 	}
@@ -319,7 +321,7 @@ func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 			service := newAttackService(game.Name, journal, nil, "settlement")
 			service.game = *game
 			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
-			view := landlordTestValue(t, routes, "landlord", game.Name, roomPlayCommand,
+			view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
 				game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)}).(map[string]any)
 			if view["settlement"].(map[string]any)["status"] != "pending" || !journal.client.HExists(context.Background(), journal.key, "landlord-"+game.Name).Val() {
 				t.Fatal("未确认结果被当作终态或丢失原请求")
@@ -333,7 +335,7 @@ func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 			}
 			deadline := time.Now().Add(3 * time.Second)
 			for {
-				view = landlordTestValue(t, routes, "landlord", game.Name, roomSnapshotCommand, uint64(1), "login").(map[string]any)
+				view = landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
 				if view["settlement"].(map[string]any)["status"] == "committed" {
 					break
 				}
@@ -379,7 +381,7 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 	done := make(chan response, 1)
 	go func() {
 		defer close(done)
-		value, err := landlordTestRPC(t, routes, "landlord", game.Name, roomPlayCommand,
+		value, err := landlordTestRPC(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
 			game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)})
 		done <- response{value, err}
 	}()
@@ -393,7 +395,7 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 		t.Fatal("局末 Call 未到达结算")
 	}
 	begin := time.Now()
-	landlordTestValue(t, routes, "landlord", other.game.Name, roomSnapshotCommand, uint64(1), "login")
+	landlordTestValue(t, routes, "landlord", other.game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login")
 	if time.Since(begin) >= 500*time.Millisecond {
 		t.Fatal("其他桌被结算等待阻塞")
 	}
@@ -407,7 +409,7 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		view := landlordTestValue(t, routes, "landlord", game.Name, roomSnapshotCommand, uint64(1), "login").(map[string]any)
+		view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
 		if view["settlement"].(map[string]any)["status"] == "committed" {
 			break
 		}

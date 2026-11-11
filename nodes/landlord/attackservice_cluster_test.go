@@ -11,6 +11,8 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
+	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
@@ -75,7 +77,7 @@ func (backend *landlordTestBackend) Handle(_ gsr.CommandContext, cmd runtime.Com
 		return map[string]any{"login_id": login, "access_node": "access-01", "agent_name": "agent"}, nil
 	case settlementread.GetBalanceCommand:
 		return map[string]any{"user_id": uid, "amount": int64(10000), "version": uint64(1)}, nil
-	case releaseCommand:
+	case landlordrpc.ReleaseCommand:
 		return true, nil
 	}
 	return nil, runtime.ErrUnknownCommand
@@ -171,8 +173,8 @@ func landlordTestValue(t *testing.T, routes map[cluster.NodeID]string, node, nam
 func joinLandlordTest(t *testing.T, routes map[cluster.NodeID]string, uid uint64, login string) map[string]any {
 	t.Helper()
 	landlordTestValue(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uid, login)
-	route := landlordTestValue(t, routes, "landlord", landlordName, resolveCommand, uid, login).(map[string]any)
-	return landlordTestValue(t, routes, "landlord", route["room_name"].(string), roomJoinCommand, uid, login, "access-01", "agent", route["membership"]).(map[string]any)
+	route := landlordTestValue(t, routes, "landlord", landlordrpc.ServiceName, landlordrpc.ResolveCommand, uid, login).(map[string]any)
+	return landlordTestValue(t, routes, "landlord", route["room_name"].(string), landlordattack.RoomJoinCommand, uid, login, "access-01", "agent", route["membership"]).(map[string]any)
 }
 
 // TestAttackRejoinAndPulse 保护随机凑桌、叫抢中的原手牌重连、旧身份清理隔离及真实 Pulse 超时推进，其他桌仍可准备。
@@ -184,7 +186,7 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 		reads[name] = &landlordTestBackend{}
 	}
 	startLandlordTestNode(t, routes, "settlement-02", reads)
-	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{landlordName: newLandlordService(landlordJournal{}, "settlement-02")})
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{landlordrpc.ServiceName: newLandlordService(landlordJournal{}, "settlement-02")})
 	var first map[string]any
 	name := ""
 	for uid := uint64(1); uid <= 3; uid++ {
@@ -195,23 +197,23 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 		if name != view["room_name"] {
 			t.Fatal("未凑到同桌")
 		}
-		first = landlordTestValue(t, routes, "landlord", name, roomReadyCommand, uid, "login").(map[string]any)
+		first = landlordTestValue(t, routes, "landlord", name, landlordattack.RoomReadyCommand, uid, "login").(map[string]any)
 	}
 	if first["phase"] != "calling" || len(first["bottom"].([]any)) != 0 {
 		t.Fatal("未进入叫地主或提前泄露底牌")
 	}
 	actorUID := first["players"].([]any)[int(first["turn_seat"].(int64))].(map[string]any)["user_id"].(uint64)
-	if _, err := landlordTestRPC(t, routes, "landlord", name, roomRobCommand, actorUID, "login", first["turn"], true); err == nil {
+	if _, err := landlordTestRPC(t, routes, "landlord", name, landlordattack.RoomRobCommand, actorUID, "login", first["turn"], true); err == nil {
 		t.Fatal("叫地主阶段接受了抢地主")
 	}
 	initialTurn := first["turn"].(uint64)
 	initialSeat := first["turn_seat"].(int64)
-	own := landlordTestValue(t, routes, "landlord", name, roomSnapshotCommand, uint64(1), "login").(map[string]any)
+	own := landlordTestValue(t, routes, "landlord", name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
 	rejoined := joinLandlordTest(t, routes, 1, "new-login")
 	if rejoined["room_name"] != name || !reflect.DeepEqual(own["hand"], rejoined["hand"]) {
 		t.Fatal("重连未保留原桌和手牌")
 	}
-	if _, err := landlordTestRPC(t, routes, "landlord", name, roomLeaveCommand, uint64(1), "login"); err == nil {
+	if _, err := landlordTestRPC(t, routes, "landlord", name, landlordattack.RoomLeaveCommand, uint64(1), "login"); err == nil {
 		t.Fatal("旧身份仍可离开新成员")
 	}
 	second := joinLandlordTest(t, routes, 4, "login")
@@ -219,7 +221,7 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 		t.Fatal("第四人进入满桌")
 	}
 	other := second["room_name"].(string)
-	if view := landlordTestValue(t, routes, "landlord", other, roomReadyCommand, uint64(4), "login").(map[string]any); view["phase"] != "waiting" {
+	if view := landlordTestValue(t, routes, "landlord", other, landlordattack.RoomReadyCommand, uint64(4), "login").(map[string]any); view["phase"] != "waiting" {
 		t.Fatal("其他桌状态异常")
 	}
 	// 等实际 10 秒叫地主超时；不修改 owner 内部字段，也不注入生产测试命令。
@@ -227,7 +229,7 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 	if wait > 0 {
 		<-time.After(wait)
 	}
-	after := landlordTestValue(t, routes, "landlord", name, roomSnapshotCommand, uint64(1), "new-login").(map[string]any)
+	after := landlordTestValue(t, routes, "landlord", name, landlordattack.RoomSnapshotCommand, uint64(1), "new-login").(map[string]any)
 	if after["turn"].(uint64) <= initialTurn {
 		t.Fatal("独立 Pulse 未推进真实叫地主超时")
 	}

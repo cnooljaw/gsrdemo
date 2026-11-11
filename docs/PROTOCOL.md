@@ -107,7 +107,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 | 项目 | 约定 |
 | --- | --- |
 | 定位 | `Node + ServiceName + CommandID`；节点来自 [nodes.yaml](../configs/nodes.yaml)，动态组名/桌名使用后端返回值，不自行拼接 |
-| 命令归属 | CommandID 从属于 Service，不同 Service 可重复；已迁移的公开命令由各自 Service 文件生成到 `common/rpc/<service>`，维护约定见 [Go 代码规范](GO-CODE-STYLE.md#331-service-命令与共享契约)，迁移范围见 [后续工作](DESIGN.md#10-后续工作) |
+| 命令归属 | CommandID 从属于 Service，不同 Service 可重复；公开命令由各自 Service 文件生成到 `common/rpc/<service>`，维护约定见 [Go 代码规范](GO-CODE-STYLE.md#331-service-命令与共享契约)，当前入口见 [Service 契约与寻址](DESIGN.md#23-service-契约与寻址) |
 | 编码 | 直接使用 GSR Cluster ValueCodec；整数为规范 int64/uint64，集合为 map/list，不额外包装内部 Protobuf |
 | 调用者 | 受信任内部节点/管理工具；Cluster Source 不充当用户身份 |
 | Call | 有限等待，返回结果或错误；超时后远端可能已执行，不能盲目新建身份重试 |
@@ -163,6 +163,8 @@ Node 为 `mole`，正常调用者为 access Agent。入口见 [MoleService](../n
 ### 2.5 landlord：凑桌与牌桌操作
 
 Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nodes/landlord/landlordservice.go)与[牌桌](../nodes/landlord/attackservice.go)。
+
+共享命令分别见 [目录契约](../common/rpc/landlord/commands.gen.go)、[AttackService 契约](../common/rpc/landlordattack/commands.gen.go)。目录含固定 ServiceName，牌桌只生成命令；共享编号不改变各 Handler 的实际调用边界。
 
 | Service / Command | 方式 | 顺序参数 | 成功结果 |
 | --- | --- | --- | --- |

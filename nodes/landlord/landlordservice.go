@@ -11,15 +11,19 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
-const landlordName = "landlord"
-const callTimeout = time.Second
+// 斗地主目录使用固定逻辑名称，全部命令由该 Service 统一维护。
+//
+//rpc:service landlord public name=landlordName
 const (
+	landlordName                        = "landlord"
 	resolveCommand    runtime.CommandID = 1
 	releaseCommand    runtime.CommandID = 10
 	checkRouteCommand runtime.CommandID = 11
 	sealCommand       runtime.CommandID = 12
 	discardCommand    runtime.CommandID = 13
 )
+
+const callTimeout = time.Second
 
 var (
 	errLandlordInput = runtime.NewStatusError(runtime.ErrorClassDomain, "landlord.invalid_request", "invalid landlord request")

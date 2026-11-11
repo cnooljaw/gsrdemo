@@ -9,6 +9,7 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
 )
 
 type tableCleanupContext struct {
@@ -22,7 +23,7 @@ var _ gsr.CommandContext = (*tableCleanupContext)(nil)
 func (*tableCleanupContext) Source() runtime.ServiceID { return 1 }
 func (self *tableCleanupContext) Exit()                { self.exited = true }
 func (self *tableCleanupContext) CallName(_ context.Context, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
-	if name != landlordName || command != releaseCommand {
+	if name != landlordrpc.ServiceName || command != landlordrpc.ReleaseCommand {
 		return nil, runtime.ErrUnknownCommand
 	}
 	return self.directory.Handle(self, command, args...)

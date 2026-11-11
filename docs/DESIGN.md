@@ -21,7 +21,7 @@ Demo 包含持续运行的多人打地鼠和三人随机房斗地主，使用示
 
 ### 2.1 GSR 与参考边界
 
-- 各节点使用独立 Go module，固定 `github.com/cnooljaw/gsr v1.0.3`；源码位于节点根目录。`common` 只保留共享配置能力，`typeclient` 是独立 TypeScript 项目；本地 replace 仅指向本仓库 common。
+- 各节点使用独立 Go module，固定 `github.com/cnooljaw/gsr v1.0.3`；源码位于节点根目录。`common` 提供共享配置、生成的 RPC 契约及对应生成工具，`typeclient` 是独立 TypeScript 项目；本地 replace 仅指向本仓库 common。
 - 节点由 `gsr.Run + MainService` 启动。MainService 创建、命名 Service 并打开 Cluster，组装完成后退出；已创建的 Service 和监听继续运行。外部 MySQL/Redis 客户端由宿主创建，Run 返回后关闭。
 - 每份可变状态归一个 Service，普通组件由其 owner 串行调用。独立 Service 提供独立 Mailbox 和等待边界；组件拆分不提供并行能力。业务使用 GSR `Call/Send/After`，不保存回调上下文或启动业务 goroutine。
 - 客户端使用 Protobuf Registry/Envelope，Cluster 使用 GSR 的规范 Go 参数。节点地址集中在 [nodes.yaml](../configs/nodes.yaml)，实例 YAML 通过 `nodes_file` 引用；相对路径基于配置文件目录。
@@ -40,6 +40,21 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 | Membership | 游戏成员实例，隔离离开后重进的迟到清理 |
 | ActionID / Turn | 地鼠客户端请求身份 / 斗地主轮次，用于检查重复或迟到操作 |
 | OperationID / BatchID | 财务原子操作身份 / 结算请求批次身份，重试不得改 ID 或内容 |
+
+### 2.3 Service 契约与寻址
+
+节点的业务命令定义在对应 Service 文件或附近。公开 Service 按整块命令生成共享契约，私有 Service 只保留节点内定义；节点内部优先使用源常量，跨节点引用 `common/rpc/<service>`。维护规则与生成入口见 [Service 命令与共享契约](GO-CODE-STYLE.md#331-service-命令与共享契约)。
+
+| 节点 | 公开契约包 | 寻址方式 |
+| --- | --- | --- |
+| login | `auth`、`token` | 固定名称 `auth`、`token` |
+| online | `online` | 固定名称 `online` |
+| settlement | `settlementwrite`、`settlementread` | 固定池名 `settlement-write`、`settlement-read`，成员由 GSR 选择 |
+| access | `accessagent` | 登录位置中的动态 AgentName |
+| mole | `mole`、`moleentry`、`moleattack` | 目录和 Entry 使用固定名称，动态组使用进入结果中的 AttackName |
+| landlord | `landlord`、`landlordattack` | 固定目录名称 `landlord`，动态牌桌使用目录返回的 RoomName |
+
+固定入口生成 `ServiceName`，动态实例只生成命令，不生成实例名或 ServiceID。业务节点地址从配置或已验证的位置记录取得，池成员数只影响节点组装。公开标记不代替 Handler 的来源、身份和参数校验。
 
 ## 3. 接入、认证与登录
 
@@ -177,6 +192,8 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 ### 6.1 凑桌、规则与可见性
 
 [LandlordService](../nodes/landlord/landlordservice.go) 只管理桌预留、人数和用户路由，优先填充可加入的桌；客户端不指定桌号。每桌一个 [AttackService](../nodes/landlord/attackservice.go)，具名组合私有 `attackGame` 和 `roundSettlement`，由本桌串行修改，不增加规则 Service 或共享游戏基类。
+
+目录和牌桌分别整体生成 `landlord`、`landlordattack` 契约，节点内协作仍引用源常量。恢复实例复用牌桌实现，但不注册远程名称；私有 `landlordPulse` 的计时命令不生成共享契约。牌桌 Tick 即使有共享编号，也继续拒绝远程来源。
 
 [attackGame](../nodes/landlord/attackgame.go) 用一个 phase 表示 `waiting → calling → robbing → playing → finished`，规则如下：
 
@@ -338,7 +355,6 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
-| RPC 契约迁移 | 结算读/写、Online、Login 的 Auth/Token、access 的 Agent、mole 的目录/Entry/Attack 已使用就近定义与自动生成契约；landlord 自身的命令尚未迁移，后续确认公开 Service、动态名称及本地来源限制。 |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
 | 麻将接入 | 结算服已提供按付款明细比例封顶的通用 Group；具体玩法的应付关系、事件时序及客户端尚未实现或验收。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |

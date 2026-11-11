@@ -7,6 +7,8 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
+	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
+	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
@@ -39,7 +41,7 @@ func (landlord *comLandlord) onEnter(self gsr.CommandContext, reply protocol.Con
 		return err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		value, err := landlord.deps.Call(self, "landlord", "landlord", 1, identity.UserID, identity.LoginID)
+		value, err := landlord.deps.Call(self, "landlord", landlordrpc.ServiceName, landlordrpc.ResolveCommand, identity.UserID, identity.LoginID)
 		if err != nil {
 			return err
 		}
@@ -52,11 +54,11 @@ func (landlord *comLandlord) onEnter(self gsr.CommandContext, reply protocol.Con
 		if !roomOK || !memberOK || room == "" || membership == "" {
 			return errInvalidBackendReply
 		}
-		value, err = landlord.deps.Call(self, "landlord", cluster.ServiceName(room), 1, identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName), membership)
+		value, err = landlord.deps.Call(self, "landlord", cluster.ServiceName(room), landlordattack.RoomJoinCommand, identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName), membership)
 		if err != nil {
 			// 只有明确房间消失才丢弃目录；超时可能已加入，不能随机换桌。
 			if errors.Is(err, runtime.ErrServiceNotFound) || errors.Is(err, runtime.ErrServiceClosed) || errors.Is(err, runtime.ErrServicePanicked) {
-				if _, discardErr := landlord.deps.Call(self, "landlord", "landlord", 13, room); discardErr != nil {
+				if _, discardErr := landlord.deps.Call(self, "landlord", landlordrpc.ServiceName, landlordrpc.DiscardCommand, room); discardErr != nil {
 					return discardErr
 				}
 				continue
@@ -94,7 +96,7 @@ func (landlord *comLandlord) callRoom(self gsr.CommandContext, reply protocol.Co
 }
 
 func (landlord *comLandlord) onReady(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordReadyRequest) error {
-	return landlord.callRoom(self, reply, 2, demopb.MsgId_S2C_LANDLORD_READY)
+	return landlord.callRoom(self, reply, landlordattack.RoomReadyCommand, demopb.MsgId_S2C_LANDLORD_READY)
 }
 
 func (landlord *comLandlord) onPlay(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordPlayRequest) error {
@@ -102,11 +104,11 @@ func (landlord *comLandlord) onPlay(self gsr.CommandContext, reply protocol.Cont
 	for i, c := range request.Cards {
 		cards[i] = c
 	}
-	return landlord.callRoom(self, reply, 3, demopb.MsgId_S2C_LANDLORD_PLAY, request.Turn, cards)
+	return landlord.callRoom(self, reply, landlordattack.RoomPlayCommand, demopb.MsgId_S2C_LANDLORD_PLAY, request.Turn, cards)
 }
 
 func (landlord *comLandlord) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordSnapshotRequest) error {
-	return landlord.callRoom(self, reply, 4, demopb.MsgId_S2C_LANDLORD_SNAPSHOT)
+	return landlord.callRoom(self, reply, landlordattack.RoomSnapshotCommand, demopb.MsgId_S2C_LANDLORD_SNAPSHOT)
 }
 
 func (landlord *comLandlord) onLeave(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordLeaveRequest) error {
@@ -117,7 +119,7 @@ func (landlord *comLandlord) onLeave(self gsr.CommandContext, reply protocol.Con
 	if landlord.room == "" {
 		return errEnterRequired
 	}
-	value, err := landlord.deps.Call(self, "landlord", landlord.room, 5, identity.UserID, identity.LoginID)
+	value, err := landlord.deps.Call(self, "landlord", landlord.room, landlordattack.RoomLeaveCommand, identity.UserID, identity.LoginID)
 	if err != nil {
 		return err
 	}
@@ -173,11 +175,11 @@ func landlordResponse(reply protocol.Context, id demopb.MsgId, snapshot *demopb.
 }
 
 func (landlord *comLandlord) onCall(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordCallRequest) error {
-	return landlord.callRoom(self, reply, 6, demopb.MsgId_S2C_LANDLORD_CALL, request.Turn, request.Yes)
+	return landlord.callRoom(self, reply, landlordattack.RoomBidCommand, demopb.MsgId_S2C_LANDLORD_CALL, request.Turn, request.Yes)
 }
 
 func (landlord *comLandlord) onRob(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordRobRequest) error {
-	return landlord.callRoom(self, reply, 7, demopb.MsgId_S2C_LANDLORD_ROB, request.Turn, request.Yes)
+	return landlord.callRoom(self, reply, landlordattack.RoomRobCommand, demopb.MsgId_S2C_LANDLORD_ROB, request.Turn, request.Yes)
 }
 
 // ProtocolHandlers 返回本游戏的客户端协议入口。
@@ -207,6 +209,6 @@ func (landlord *comLandlord) Disconnect(self gsr.ServiceContext) error {
 		return nil
 	}
 	identity := landlord.deps.Identity()
-	_, err := landlord.deps.Call(self, "landlord", landlord.room, 5, identity.UserID, identity.LoginID)
+	_, err := landlord.deps.Call(self, "landlord", landlord.room, landlordattack.RoomLeaveCommand, identity.UserID, identity.LoginID)
 	return err
 }

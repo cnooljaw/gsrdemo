@@ -13,6 +13,9 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
+// 每桌独立实例使用目录返回的名称；恢复实例不注册远程名称。
+//
+//rpc:service landlordattack public
 const (
 	roomJoinCommand     runtime.CommandID = 1
 	roomReadyCommand    runtime.CommandID = 2
