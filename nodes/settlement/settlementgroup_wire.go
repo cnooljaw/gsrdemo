@@ -7,7 +7,7 @@ import (
 
 // decodeEqualGroup 要求理论奖池按 UserID 降序分配余数、收支守恒且每名参与者只出现一次。
 func decodeEqualGroup(request map[string]any) (settlementBatch, error) {
-	batch, err := decodeSettlementGroup(request)
+	batch, err := decodeGroupFields(request)
 	if err != nil {
 		return batch, err
 	}
@@ -111,7 +111,7 @@ func decodeTransferGroup(request map[string]any) (settlementBatch, error) {
 		changes = append(changes, map[string]any{"user_id": a.UserID, "reason": "game_win_loss", "debit": a.Debit, "credit": a.Credit})
 	}
 	normalized := map[string]any{"version": request["version"], "operation_id": request["operation_id"], "business": request["business"], "business_ref": request["business_ref"], "detail": request["detail"], "changes": changes}
-	batch, err := decodeSettlementGroup(normalized)
+	batch, err := decodeGroupFields(normalized)
 	if err != nil {
 		return batch, err
 	}

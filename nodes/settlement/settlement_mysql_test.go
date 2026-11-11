@@ -161,8 +161,8 @@ func TestSettlementOperationDeduplicatesAcrossBatches(t *testing.T) {
 func TestSettlementGroupWritesAllWalletsTogether(t *testing.T) {
 	store, mock := mockStore(t)
 	request := map[string]any{"version": uint64(2), "operation_id": "round", "business": "cards", "business_ref": "round-1", "detail": map[string]any{}, "changes": []any{
-		map[string]any{"user_id": uint64(1), "reason": "game_win_loss", "debit": int64(95), "credit": int64(0)}, map[string]any{"user_id": uint64(2), "reason": "game_win_loss", "debit": int64(0), "credit": int64(100)}, map[string]any{"user_id": uint64(1), "reason": "service_fee", "debit": int64(5), "credit": int64(0)}}}
-	batch, err := decodeSettlementGroup(request)
+		map[string]any{"user_id": uint64(1), "reason": "game_win_loss", "debit": int64(100), "credit": int64(0)}, map[string]any{"user_id": uint64(2), "reason": "game_win_loss", "debit": int64(0), "credit": int64(100)}}}
+	batch, err := decodeEqualGroup(request)
 	if err != nil {
 		t.Fatal(err)
 	}

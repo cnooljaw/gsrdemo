@@ -83,7 +83,7 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 		if (index*37)%100 < scenario.writePercent {
 			report.WriteRPC++
 			if report.WriteRPC%10 == 0 {
-				job.command = settleGroupCommand
+				job.command = settleEqualGroupCommand
 				changes := []any{}
 				for i, delta := range []int64{-1, -1, 2} {
 					debit, credit := int64(0), int64(0)
@@ -98,7 +98,7 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 				}
 				job.args = []any{map[string]any{"version": uint64(2), "operation_id": id, "business": "landlord", "business_ref": id, "changes": changes, "detail": map[string]any{}}}
 				sample.Operations = append(sample.Operations, id)
-				sample.Batches = append(sample.Batches, derivedBatchID("group", id))
+				sample.Batches = append(sample.Batches, derivedBatchID("group-equal", id))
 				report.Operations++
 			} else {
 				ops := make([]map[string]any, batchSize)
@@ -145,12 +145,12 @@ func runSettlementMixedCase(t *testing.T, store settlementStore, sample *liveSet
 				continue
 			}
 			cmd := result.job.command
-			if cmd == 0 || cmd == settleGroupCommand {
+			if cmd == 0 || cmd == settleEqualGroupCommand {
 				writeLatency = append(writeLatency, result.elapsed)
 				expectedBatch := result.job.id
 				count := batchSize
-				if cmd == settleGroupCommand {
-					expectedBatch = derivedBatchID("group", result.job.id)
+				if cmd == settleEqualGroupCommand {
+					expectedBatch = derivedBatchID("group-equal", result.job.id)
 					count = 1
 				}
 				rows, ok := result.receipt["results"].([]any)

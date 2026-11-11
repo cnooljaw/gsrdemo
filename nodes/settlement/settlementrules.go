@@ -163,7 +163,7 @@ func decodeSettlementSingle(fields map[string]any) (settlementBatch, error) {
 	return boundedBatch(settlementBatch{ID: derivedBatchID("single", operation.ID), Kind: "single", Operations: []silverOperation{operation}}, fields)
 }
 
-func decodeSettlementGroup(fields map[string]any) (settlementBatch, error) {
+func decodeGroupFields(fields map[string]any) (settlementBatch, error) {
 	operation, err := decodeSilverOperation(fields, true, true)
 	if err != nil {
 		return settlementBatch{}, err

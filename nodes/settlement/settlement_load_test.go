@@ -65,7 +65,7 @@ func (caller *settlementLoadCaller) Handle(self gsr.CommandContext, command runt
 	if command == 0 {
 		command, args = settleBatchCommand, []any{job.request}
 	}
-	if command == settleBatchCommand || command == settleSingleCommand || command == settleGroupCommand {
+	if command == settleBatchCommand || command == settleSingleCommand || command == settleEqualGroupCommand {
 		name = settlementWriteName
 	}
 	value, err := self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)

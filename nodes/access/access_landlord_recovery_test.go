@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net"
 	"os/exec"
+	"sort"
 	"testing"
 	"time"
 
@@ -154,12 +155,13 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 	ids *[]string, landlord, settlement accessNodeProcess, redisAddress string) {
 	t.Helper()
 	for _, scenario := range []struct {
-		name                              string
-		restartLandlord, alreadyCommitted bool
+		name                                           string
+		restartLandlord, alreadyCommitted, capBalances bool
 	}{
-		{"结算节点中断后恢复", false, false},
-		{"地主节点重启补交", true, false},
-		{"已入账未确认后地主重启", true, true},
+		{"结算节点中断后恢复", false, false, false},
+		{"地主节点重启补交", true, false, false},
+		{"已入账未确认后地主重启", true, true, false},
+		{"余额不足封顶并向客户端返回实际扣返", false, false, true},
 	} {
 		before := map[uint64]struct {
 			amount  int64
@@ -192,6 +194,42 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 		}
 		if saved.ID != operationID || len(saved.Changes) != 3 || saved.Multiplier != 8 {
 			t.Fatalf("pending result not saved: %+v", saved)
+		}
+		if scenario.capBalances {
+			// 等结算服停止且原请求已保存后，模拟其他业务扣款，构造局末余额不足。
+			for _, change := range saved.Changes {
+				if change.Debit == 0 {
+					continue
+				}
+				if _, err := db.ExecContext(ctx, "UPDATE silver_balances SET amount=1, version=version+1 WHERE user_id=?", change.UserID); err != nil {
+					t.Fatal(err)
+				}
+				balance := before[change.UserID]
+				balance.amount = 1
+				balance.version++
+				before[change.UserID] = balance
+			}
+		}
+		type actualChange struct{ debit, credit int64 }
+		actual := map[uint64]actualChange{}
+		var paid int64
+		winners := []uint64{}
+		for _, change := range saved.Changes {
+			if change.Debit > 0 {
+				debit := min(change.Debit, before[change.UserID].amount)
+				actual[change.UserID] = actualChange{debit: debit}
+				paid += debit
+			} else {
+				winners = append(winners, change.UserID)
+			}
+		}
+		sort.Slice(winners, func(i, j int) bool { return winners[i] > winners[j] })
+		for i, uid := range winners {
+			credit := paid / int64(len(winners))
+			if int64(i) < paid%int64(len(winners)) {
+				credit++
+			}
+			actual[uid] = actualChange{credit: credit}
 		}
 		var count int
 		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", operationID).Scan(&count); err != nil || count != 0 {
@@ -234,8 +272,27 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 				t.Fatal(err)
 			}
 			b := before[c.UserID]
-			if amount != b.amount-c.Debit+c.Credit || version != b.version+1 {
+			change := actual[c.UserID]
+			wantVersion := b.version
+			if change.debit != 0 || change.credit != 0 {
+				wantVersion++
+			}
+			if amount != b.amount-change.debit+change.credit || version != wantVersion {
 				t.Fatalf("recovery repeated or lost funds: uid=%d amount=%d version=%d", c.UserID, amount, version)
+			}
+		}
+		if scenario.capBalances {
+			for index, client := range clients {
+				view := landlordProcessView(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{})
+				uid := players[index].id
+				change, balance := actual[uid], before[uid]
+				version := balance.version
+				if change.debit != 0 || change.credit != 0 {
+					version++
+				}
+				if view.Settlement == nil || view.Settlement.Status != "committed" || view.Settlement.Debit != change.debit || view.Settlement.Credit != change.credit || view.Settlement.Balance != balance.amount-change.debit+change.credit || view.Settlement.Version != version {
+					t.Fatalf("客户端实际扣返不正确: %+v", view.Settlement)
+				}
 			}
 		}
 		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", operationID).Scan(&count); err != nil || count != 1 {
@@ -247,6 +304,6 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 			}
 			_ = client.Close()
 		}
-		t.Logf("斗地主恢复：%s；原 ID 唯一入账，余额/版本各变化一次，Redis pending 清除", scenario.name)
+		t.Logf("斗地主恢复：%s；原 ID 唯一入账，实际扣返、余额与版本正确，Redis pending 清除", scenario.name)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/cnooljaw/gsr"
@@ -56,6 +57,7 @@ type landlordOperation struct {
 	Status     string                     `json:"-"`
 	Reason     string                     `json:"-"`
 	Balances   map[uint64]landlordBalance `json:"-"`
+	Actual     map[uint64]landlordChange  `json:"-"`
 }
 
 func operationForGame(game attackGame) *landlordOperation {
@@ -111,10 +113,9 @@ func (round *roundSettlement) snapshotFor(uid uint64) map[string]any {
 		return nil
 	}
 	view := map[string]any{"operation_id": operation.ID, "status": operation.Status, "reason": operation.Reason}
-	for _, c := range operation.Changes {
-		if c.UserID == uid {
-			view["debit"], view["credit"] = c.Debit, c.Credit
-		}
+	view["debit"], view["credit"] = int64(0), int64(0)
+	if change, ok := operation.Actual[uid]; ok {
+		view["debit"], view["credit"] = change.Debit, change.Credit
 	}
 	if balance, ok := operation.Balances[uid]; ok {
 		view["balance"], view["version"] = balance.Amount, balance.Version
@@ -170,11 +171,45 @@ func (round *roundSettlement) applyReceipt(value any) error {
 		return errLandlordInput
 	}
 	status, ok := item["status"].(string)
-	if !ok || (status != "committed" && status != "rejected") {
+	if !ok || status != "committed" {
 		return errLandlordInput
 	}
 	reason, ok := item["reason"].(string)
-	if !ok {
+	if !ok || reason != "" {
+		return errLandlordInput
+	}
+	changes, ok := item["actual_changes"].([]any)
+	if !ok || len(changes) != len(operation.Changes) {
+		return errLandlordInput
+	}
+	actual := make(map[uint64]landlordChange, len(changes))
+	var debitTotal, creditTotal int64
+	for _, value := range changes {
+		row, ok := value.(map[string]any)
+		if !ok {
+			return errLandlordInput
+		}
+		uid, uidOK := row["user_id"].(uint64)
+		debit, debitOK := row["debit"].(int64)
+		credit, creditOK := row["credit"].(int64)
+		if !uidOK || !debitOK || !creditOK || debit < 0 || credit < 0 || debitTotal > math.MaxInt64-debit || creditTotal > math.MaxInt64-credit {
+			return errLandlordInput
+		}
+		var requested landlordChange
+		for _, original := range operation.Changes {
+			if original.UserID == uid {
+				requested = original
+				break
+			}
+		}
+		if requested.UserID == 0 || actual[uid].UserID != 0 || debit > requested.Debit || credit > requested.Credit {
+			return errLandlordInput
+		}
+		actual[uid] = landlordChange{UserID: uid, Debit: debit, Credit: credit}
+		debitTotal += debit
+		creditTotal += credit
+	}
+	if debitTotal != creditTotal {
 		return errLandlordInput
 	}
 	values, ok := fields["balances"].([]any)
@@ -202,7 +237,7 @@ func (round *roundSettlement) applyReceipt(value any) error {
 		}
 		balances[uid] = landlordBalance{amount, version}
 	}
-	operation.Status, operation.Reason, operation.Balances = status, reason, balances
+	operation.Status, operation.Reason, operation.Balances, operation.Actual = status, reason, balances, actual
 	round.cleanupPending = true
 	round.retryAt = time.Time{}
 	return nil

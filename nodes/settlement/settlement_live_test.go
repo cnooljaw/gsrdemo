@@ -117,7 +117,7 @@ func liveCall(t *testing.T, address string, command runtime.CommandID, args ...a
 	return result
 }
 
-// TestSettlementLiveMySQL 保护真实事务上的三种入口、跨批次去重、多人原子性、重启及原始明细对账。
+// TestSettlementLiveMySQL 保护真实单人、批量事务的跨批次去重、重启及原始明细对账。
 func TestSettlementLiveMySQL(t *testing.T) {
 	store, _ := liveSettlementStore(t)
 	sample := newLiveSettlementSample(t, store, 3)
@@ -159,39 +159,6 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	if statuses[0].(map[string]any)["status"] != "committed" || statuses[1].(map[string]any)["status"] != "rejected" || statuses[2].(map[string]any)["status"] != "committed" {
 		t.Fatal("independent batch outcomes lost")
 	}
-	group := map[string]any{"version": uint64(2), "operation_id": prefix + "-group-bad", "business": business, "business_ref": "round", "detail": map[string]any{"round": "test"}, "changes": []any{
-		map[string]any{"user_id": users[0], "reason": "game_win_loss", "debit": int64(100), "credit": int64(0)}, map[string]any{"user_id": users[1], "reason": "game_win_loss", "debit": int64(0), "credit": int64(50)}, map[string]any{"user_id": users[2], "reason": "game_win_loss", "debit": int64(0), "credit": int64(50)}}}
-	sample.Operations = append(sample.Operations, prefix+"-group-bad")
-	sample.Batches = append(sample.Batches, derivedBatchID("group", prefix+"-group-bad"))
-	result = liveCall(t, address, settleGroupCommand, group)
-	if result["results"].([]any)[0].(map[string]any)["status"] != "rejected" {
-		t.Fatal("insufficient group not rejected")
-	}
-	if liveCall(t, address, getBalanceCommand, users[1])["amount"] != int64(1000) {
-		t.Fatal("rejected group paid a winner")
-	}
-	group["operation_id"] = prefix + "-group"
-	group["changes"].([]any)[0].(map[string]any)["debit"] = int64(93)
-	group["changes"] = append(group["changes"].([]any), map[string]any{"user_id": users[0], "reason": "service_fee", "debit": int64(5), "credit": int64(0)})
-	group["changes"].([]any)[1].(map[string]any)["credit"] = int64(48)
-	sample.Operations = append(sample.Operations, prefix+"-group")
-	sample.Batches = append(sample.Batches, derivedBatchID("group", prefix+"-group"))
-	first := liveCall(t, address, settleGroupCommand, group)
-	encoded, _ := json.Marshal(first)
-	again := liveCall(t, address, settleGroupCommand, group)
-	retry, _ := json.Marshal(again)
-	if string(encoded) != string(retry) {
-		t.Fatal("retry changed historical receipt")
-	}
-	group["changes"].([]any)[1].(map[string]any)["credit"] = int64(49)
-	if _, err := settlementRPC(t, address, settleGroupCommand, group); !errors.Is(err, errSettlementConflict) {
-		t.Fatalf("group identity conflict: %v", err)
-	}
-	group["changes"].([]any)[1].(map[string]any)["credit"] = int64(48)
-	group["changes"].([]any)[3].(map[string]any)["reason"] = "other_fee"
-	if _, err := settlementRPC(t, address, settleGroupCommand, group); !errors.Is(err, errSettlementConflict) {
-		t.Fatalf("changed reason: %v", err)
-	}
 
 	// 单人接口的同一操作可以作为新的批量请求重提，不能重复加减。
 	repeated := testSingle(prefix+"-single", users[0], 100, 198)
@@ -206,12 +173,12 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary["operation_count"] != int64(4) || summary["debit"] != int64(1198) || summary["credit"] != int64(346) {
+	if summary["operation_count"] != int64(3) || summary["debit"] != int64(1100) || summary["credit"] != int64(248) {
 		t.Fatalf("summary duplicated money: %v", summary)
 	}
-	for i, want := range []int64{0, 1048, 1100} {
+	for i, want := range []int64{98, 1000, 1050} {
 		balance := liveCall(t, address, getBalanceCommand, users[i])
-		if balance["amount"] != want || balance["version"] != []uint64{4, 2, 3}[i] {
+		if balance["amount"] != want || balance["version"] != []uint64{3, 1, 2}[i] {
 			t.Fatalf("wallet %d: %v want amount %d", i, balance, want)
 		}
 	}
@@ -222,20 +189,20 @@ func TestSettlementLiveMySQL(t *testing.T) {
 		t.Fatal("invalid archive succeeded")
 	}
 	cancel()
-	if liveCall(t, address, getBalanceCommand, users[1])["amount"] != int64(1048) {
+	if liveCall(t, address, getBalanceCommand, users[1])["amount"] != int64(1000) {
 		t.Fatal("archive failure did not roll back wallet")
 	}
 	stop()
 	address, _ = startSettlementTestNode(t, store.db)
-	operation := liveCall(t, address, getOperationCommand, users[1], prefix+"-group")
+	operation := liveCall(t, address, getOperationCommand, users[2], prefix+"-b")
 	if operation["status"] != "committed" {
 		t.Fatal("restart lost financial result")
 	}
-	// 原始明细、终局结果与余额仍可关联，检查业务记录数量（含两项业务拒绝）。
+	// 原始明细、终局结果与余额仍可关联，检查业务记录数量（含一项业务拒绝）。
 	ctx, cancel = context.WithTimeout(context.Background(), settlementSQLTimeout)
 	defer cancel()
 	var count int
-	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE business = ?", business).Scan(&count); err != nil || count != 6 {
+	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE business = ?", business).Scan(&count); err != nil || count != 4 {
 		t.Fatalf("detail/index count: %d %v", count, err)
 	}
 	var requestJSON []byte
@@ -246,7 +213,7 @@ func TestSettlementLiveMySQL(t *testing.T) {
 	if err := json.Unmarshal(requestJSON, &archived); err != nil || len(archived.Operations) != 3 || archived.Operations[0].Changes[0].Debit != 1000 {
 		t.Fatal("original detail archive missing")
 	}
-	if err := store.db.QueryRowContext(ctx, "SELECT request_json FROM settlement_batches WHERE batch_id = ?", derivedBatchID("group", prefix+"-group")).Scan(&requestJSON); err != nil {
+	if err := store.db.QueryRowContext(ctx, "SELECT request_json FROM settlement_batches WHERE batch_id = ?", derivedBatchID("single", prefix+"-single")).Scan(&requestJSON); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(requestJSON, &archived); err != nil {
@@ -259,7 +226,7 @@ func TestSettlementLiveMySQL(t *testing.T) {
 			feeFound = true
 		}
 	}
-	if len(changes) != 4 || !feeFound {
+	if len(changes) != 2 || !feeFound {
 		t.Fatal("reason components not preserved")
 	}
 }

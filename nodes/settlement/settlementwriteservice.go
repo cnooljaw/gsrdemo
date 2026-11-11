@@ -18,9 +18,8 @@ const (
 	getOperationCommand        runtime.CommandID = 3
 	getBalanceCommand          runtime.CommandID = 4
 	settleSingleCommand        runtime.CommandID = 6
-	settleGroupCommand         runtime.CommandID = 7
-	settleEqualGroupCommand    runtime.CommandID = 8
-	settleTransferGroupCommand runtime.CommandID = 9
+	settleEqualGroupCommand    runtime.CommandID = 7
+	settleTransferGroupCommand runtime.CommandID = 8
 	settlementSQLTimeout                         = 2 * time.Second
 )
 
@@ -46,7 +45,6 @@ func newSettlementWriteService(db *sql.DB) *settlementWriteService {
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		settleBatchCommand:         service.handleSettleBatch,
 		settleSingleCommand:        service.handleSettleSingle,
-		settleGroupCommand:         service.handleSettleGroup,
 		settleEqualGroupCommand:    service.handleSettleEqualGroup,
 		settleTransferGroupCommand: service.handleSettleTransferGroup,
 	})
@@ -78,14 +76,6 @@ func (service *settlementWriteService) handleSettleBatch(self gsr.CommandContext
 
 func (service *settlementWriteService) handleSettleSingle(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeSettlementSingle(request)
-	if err != nil {
-		return nil, err
-	}
-	return service.commit(self, batch)
-}
-
-func (service *settlementWriteService) handleSettleGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
-	batch, err := decodeSettlementGroup(request)
 	if err != nil {
 		return nil, err
 	}

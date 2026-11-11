@@ -121,10 +121,13 @@ func (backend *landlordSettlementBackend) Handle(_ gsr.CommandContext, cmd runti
 		}
 	}
 	balances := []any{}
+	actual := []any{}
 	for _, change := range request["changes"].([]any) {
+		fields := change.(map[string]any)
+		actual = append(actual, map[string]any{"user_id": fields["user_id"], "debit": fields["debit"], "credit": fields["credit"]})
 		balances = append(balances, map[string]any{"user_id": change.(map[string]any)["user_id"], "amount": int64(10000), "version": uint64(2)})
 	}
-	receipt := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": backend.status, "reason": ""}}, "balances": balances}
+	receipt := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": backend.status, "reason": "", "actual_changes": actual}}, "balances": balances}
 	return receipt, nil
 }
 
@@ -177,9 +180,7 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 		timeout      bool
 	}{
 		{"出牌成功", "committed", false},
-		{"出牌拒绝", "rejected", false},
 		{"超时出牌成功", "committed", true},
-		{"超时出牌拒绝", "rejected", true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			status := scenario.status

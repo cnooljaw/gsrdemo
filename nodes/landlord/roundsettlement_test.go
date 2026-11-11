@@ -63,15 +63,22 @@ func TestRoundReceiptAppliesOnce(t *testing.T) {
 	round.prepareOperation(*game)
 	id := round.operation.ID
 	balances := []any{}
+	actual := []any{}
 	for _, change := range round.operation.Changes {
+		actual = append(actual, map[string]any{"user_id": change.UserID, "debit": change.Debit, "credit": change.Credit})
 		balances = append(balances, map[string]any{"user_id": change.UserID, "amount": int64(1000), "version": uint64(2)})
 	}
-	fields := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": ""}}, "balances": balances}
+	fields := map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": "", "actual_changes": actual}}, "balances": balances}
 	for _, malformed := range []any{
 		nil,
 		map[string]any{},
 		map[string]any{"results": []any{map[string]any{"operation_id": "other-round", "status": "committed", "reason": ""}}, "balances": balances},
 		map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "pending", "reason": ""}}, "balances": balances},
+		map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "rejected", "reason": "insufficient_silver", "actual_changes": actual}}, "balances": balances},
+		map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": ""}}, "balances": balances},
+		map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": "", "actual_changes": []any{actual[0], actual[0], actual[2]}}}, "balances": balances},
+		map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": "", "actual_changes": []any{map[string]any{"user_id": uint64(1), "debit": int64(-1), "credit": int64(0)}, actual[1], actual[2]}}}, "balances": balances},
+		map[string]any{"results": []any{map[string]any{"operation_id": id, "status": "committed", "reason": "", "actual_changes": []any{map[string]any{"user_id": uint64(1), "debit": int64(0), "credit": int64(0)}, actual[1], actual[2]}}}, "balances": balances},
 		map[string]any{"results": fields["results"], "balances": balances[:2]},
 		map[string]any{"results": fields["results"], "balances": []any{balances[0], balances[0], balances[2]}},
 		map[string]any{"results": fields["results"], "balances": []any{map[string]any{"user_id": uint64(99), "amount": int64(1000), "version": uint64(2)}, balances[1], balances[2]}},
@@ -98,5 +105,45 @@ func TestRoundReceiptAppliesOnce(t *testing.T) {
 	}
 	if err := round.applyReceipt(map[string]any{}); err != nil || round.operation.Status != "committed" || round.fault != nil {
 		t.Fatal("重复确认覆盖了终态")
+	}
+}
+
+// TestRoundSnapshotUsesActualSettlement 保护封顶后客户端显示结算回执的实际扣返，待确认时不把理论金额当成已入账。
+func TestRoundSnapshotUsesActualSettlement(t *testing.T) {
+	game := testLandlordGame(t)
+	game.Phase, game.Winner = "finished", game.Landlord
+	round := roundSettlement{}
+	round.prepareOperation(*game)
+	for _, change := range round.operation.Changes {
+		view := round.snapshotFor(change.UserID)
+		if view["debit"] != int64(0) || view["credit"] != int64(0) {
+			t.Fatalf("待确认却显示扣返: %v", view)
+		}
+	}
+	var loser, other uint64
+	for _, change := range round.operation.Changes {
+		if change.Debit > 0 {
+			if loser == 0 {
+				loser = change.UserID
+			} else {
+				other = change.UserID
+			}
+		}
+	}
+	winner := round.operation.Changes[round.operation.Landlord].UserID
+	balances := []any{}
+	for _, change := range round.operation.Changes {
+		balances = append(balances, map[string]any{"user_id": change.UserID, "amount": int64(100), "version": uint64(2)})
+	}
+	actual := []any{map[string]any{"user_id": loser, "debit": int64(1), "credit": int64(0)}, map[string]any{"user_id": other, "debit": int64(2), "credit": int64(0)}, map[string]any{"user_id": winner, "debit": int64(0), "credit": int64(3)}}
+	receipt := map[string]any{"results": []any{map[string]any{"operation_id": round.operation.ID, "status": "committed", "reason": "", "actual_changes": actual}}, "balances": balances}
+	if err := round.applyReceipt(receipt); err != nil {
+		t.Fatal(err)
+	}
+	if view := round.snapshotFor(winner); view["credit"] != int64(3) {
+		t.Fatalf("未使用实际返还: %v", view)
+	}
+	if view := round.snapshotFor(loser); view["debit"] != int64(1) {
+		t.Fatalf("未使用实际扣款: %v", view)
 	}
 }

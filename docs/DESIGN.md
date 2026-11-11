@@ -186,19 +186,19 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 
 底分为 10，初次叫地主不翻倍，每次抢地主、炸弹/王炸各翻倍。当前不计算春天、明牌、个人加倍或手续费。设统一倍率为 M：地主胜时地主 Credit=20M、两农民各 Debit=10M；地主负时反向。规则校验倍率和金额上限，三人净变化合计为零。
 
-准备时查询钱包，至少 20 银子才可准备；这是准入预判，不冻结账户。局末使用一个 SettleGroup 原子结算，任一钱包不足时整笔 rejected，余额不变，牌局胜负仍保留；当前不会自动扣光或调整赢家奖励。
+准备时查询钱包，至少 20 银子才可准备；这是准入预判，不冻结账户。局末使用一个 SettleEqualGroup 原子结算：每位输家最多扣到 0，赢家均分实际扣款，余数按 UserID 从大到小分配；客户端显示回执中的实际扣返和确认余额。
 
 确定胜负的当前回调按以下顺序执行：
 
 ```text
 prepareOperation：固定本局 OperationID 与三人金额
   → submit：保存 Redis 待请求，Call settlement-write / 7
-  → applyReceipt：校验返回的原 ID、终态和三人余额，确认本桌财务终态
+  → applyReceipt：校验返回的原 ID、实际扣返和三人余额，确认本桌财务终态
   → pushSnapshots：向三人的当前连接发起推送
   → deletePendingSettlement：删除 Redis 待记录
 ```
 
-[roundSettlement](../nodes/landlord/roundsettlement.go) 用 `operation *landlordOperation` 保存固定请求及确认结果，`snapshotFor` 组装本人扣返、状态、余额与版本；[landlordJournal](../nodes/landlord/landlordjournal.go) 只持久化请求字段。正常局末不先广播 finished + pending；当前出牌回调拿到合法回执后直接返回终态快照，并向三人的当前连接发起推送，不再追加查账。临时故障返回或主动查询快照时仍可能看到未确认状态。
+[roundSettlement](../nodes/landlord/roundsettlement.go) 用 `operation *landlordOperation` 保存固定请求及确认结果，`snapshotFor` 组装本人实际扣返、状态、余额与版本；pending 的实际扣返为 0；[landlordJournal](../nodes/landlord/landlordjournal.go) 只持久化请求字段。正常局末不先广播 finished + pending；当前出牌回调拿到合法回执后直接返回终态快照，并向三人的当前连接发起推送，不再追加查账。临时故障返回或主动查询快照时仍可能看到未确认状态。
 
 ### 6.3 重试、清理与恢复
 
@@ -251,7 +251,7 @@ Call 等待会占用当前调用方 Service：地鼠由独立 Submission 等待�
 [事务实现](../nodes/settlement/settlementstore.go) 为每批开启一个 MySQL 事务：
 
 1. 核对已有 BatchID、OperationID；同 ID 同内容复用原结果，不同内容报冲突。按 UserID 排序，使用 `FOR UPDATE NOWAIT` 锁钱包，锁冲突返回可重试错误。
-2. 按请求顺序检查并计算余额、版本。Single 是一笔单人操作；Batch 中各笔单人操作分别判定；旧 Group 参与者全部通过才一起修改，余额不足时整笔拒绝。新均分 Group 和付款明细 Group 按事务内余额独立封顶，返回实际扣返；具体分配与限制见 [Group 协议](PROTOCOL.md#26-通用银子结算接口)。
+2. 按请求顺序检查并计算余额、版本。Single 是一笔单人操作；Batch 中各笔单人操作分别判定；均分 Group 和付款明细 Group 按事务内余额独立封顶，返回实际扣返；具体分配与限制见 [Group 协议](PROTOCOL.md#26-通用银子结算接口)。
 3. 同事务保存钱包、操作索引、请求明细和完整回执，Commit 成功才返回。SQL 或提交错误不当作业务拒绝；Call 成功后仍须检查回执中各项 `committed/rejected`。
 
 OperationID 是全局财务身份，BatchID 是提交身份；Single/Group 派生稳定 BatchID。规范请求作 SHA-256 摘要，跨批次重复操作保留原终态及 `origin_batch`，不重复扣返；幂等记录不自动过期。需要 MySQL 8.0+ / InnoDB，结算服不保存持久待执行队列，未完成请求由游戏负责恢复。
@@ -261,7 +261,7 @@ OperationID 是全局财务身份，BatchID 是提交身份；Single/Group 派�
 | 表 | 当前用途 |
 | --- | --- |
 | `silver_balances` | UserID、amount、version，唯一持久钱包 |
-| `settlement_operations` | 全局 OperationID、摘要、原批次及位置、business/status、扣返汇总；旧入口记录请求汇总，新 Group 记录实际汇总 |
+| `settlement_operations` | 全局 OperationID、摘要、原批次及位置、business/status、扣返汇总；单人入口记录请求汇总，Group 记录实际汇总 |
 | `settlement_batches` | BatchID、摘要、规范请求 JSON 和完整回执 JSON |
 
 [schema.sql](../nodes/settlement/schema.sql) 由管理员初始化专用库，节点启动不自动迁移。普通结算不创建钱包，缺失时报 wallet_not_found。`-init-wallet UserID -silver Amount` 是独立管理入口，以固定 `wallet-init-{UserID}` 操作完成初始化；同金额重复执行返回原结果，不同金额或缺失初始化凭据时拒绝覆盖。账号创建不自动创建钱包。
@@ -333,7 +333,6 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 方向 | 待完成内容与边界 |
 | --- | --- |
 | 游戏期间扣款限制 | 本局及未确认结算期间禁止其他业务扣同一钱包。需在权威扣款入口执行，并定义断线、重启和完成后的释放规则；access 的游戏互斥不能代替资金约束。 |
-| 斗地主输光封顶 | 结算服已提供均分 Group，但斗地主仍使用旧 Group，余额不足整笔拒绝。接入时需区分已持久化旧请求与新请求，使用回执中的实际扣返生成客户端结果。 |
 | 麻将接入 | 结算服已提供按付款明细比例封顶的通用 Group；具体玩法的应付关系、事件时序及客户端尚未实现或验收。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |
 | 历史存储 | 短 ID、按日表、冷热归档和清理策略尚未实施；不能在破坏原 ID 幂等约束的情况下直接删除去重记录。 |

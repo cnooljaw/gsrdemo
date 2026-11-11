@@ -132,7 +132,7 @@ func TestGroupPoliciesValidateAndPreserveIdentity(t *testing.T) {
 		map[string]any{"user_id": uint64(2), "reason": "game_win_loss", "debit": int64(0), "credit": int64(20)},
 		map[string]any{"user_id": uint64(3), "reason": "game_win_loss", "debit": int64(0), "credit": int64(20)},
 	}}
-	legacy, err := decodeSettlementGroup(group)
+	legacy, err := decodeGroupFields(group)
 	if err != nil {
 		t.Fatal(err)
 	}

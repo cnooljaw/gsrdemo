@@ -115,6 +115,8 @@ settlement 提供 `settlement-write` 与 `settlement-read` 两个 Call 服务池
 
 混合压测运行 `GSRDEMO_SETTLEMENT_MIXED_LOAD=1 ./scripts/dev.sh load settlement`，结果在 `.cache/settlement-mixed-load.json`。三个场景分别模拟常态、入场高峰和受控核查高峰，比例是可复现的演示假设。固定同一批工作量比较读写成员配比，分别记录写操作数/秒、查询数/秒、读写 P99、重试和数据库连接等待；读快照按余额/版本配对校验，结束后逐个钱包和唯一账务对账。该测试不会修改配置。旧本机配置的 `worker_count` 需改为 `write_workers`，并添加 `read_workers`，具体默认值见设计文档。
 
+结算写入口 `/7` 现为封顶均分、`/8` 为付款明细。升级前须确认没有旧 Group 待请求，停止旧版调用方并同步升级 settlement 与 landlord；旧版与新版的相同编号含义不同，不能混用。历史账务可查询，但不能按新规则重提旧请求。
+
 `run` 前台运行节点，优先读取 `configs/<节点>-01.local.yaml`，没有时读取对应 `.yaml`。mole 监听启动后会恢复 Redis 检查点，恢复成功才接纳玩家；全部服务正常运行后再启动客户端。日志在 `logs/<实例名>/`。
 
 两个 access 共用同一个二进制，第二个实例另开终端执行表中命令。所有节点的地址表仍只维护 `configs/nodes.yaml`；各实例的配置文件、`instance` 和 `listen` 统一使用 `access-01`、`access-02`、`access-03` 等编号名称，不保留 `access` 路由别名。每个实例使用独立的 Cluster、WS 端口和日志目录；修改地址表后，重启所有节点以加载新路由。

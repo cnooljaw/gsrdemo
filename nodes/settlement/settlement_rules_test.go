@@ -34,37 +34,15 @@ func TestSettlementSeparatesSingleBatchAndGroup(t *testing.T) {
 		map[string]any{"user_id": uint64(1), "reason": "game_win_loss", "debit": int64(200), "credit": int64(0)},
 		map[string]any{"user_id": uint64(2), "reason": "game_win_loss", "debit": int64(0), "credit": int64(100)},
 		map[string]any{"user_id": uint64(3), "reason": "game_win_loss", "debit": int64(0), "credit": int64(100)}}}
-	if _, err := decodeSettlementGroup(group); err != nil {
+	if _, err := decodeEqualGroup(group); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := decodeSettlementBatch(testBatch("wrong", group)); !errors.Is(err, errInvalidSettlement) {
 		t.Fatalf("group accepted by single batch: %v", err)
 	}
 	group["changes"].([]any)[1].(map[string]any)["user_id"] = uint64(1)
-	if _, err := decodeSettlementGroup(group); err != nil {
-		t.Fatal("repeated participant rejected", err)
-	}
-}
-
-// TestSettlementGroupIsAtomicAndChecksFullDebit 保护多人中一人不足时无人改变，单人返还不能支付本笔扣款。
-func TestSettlementGroupIsAtomicAndChecksFullDebit(t *testing.T) {
-	wallets := map[uint64]walletBalance{1: {UserID: 1, Amount: 100, Version: 1}, 2: {UserID: 2, Amount: 100, Version: 1}}
-	operation := silverOperation{Changes: []silverChange{{UserID: 1, Debit: 200}, {UserID: 2, Credit: 200}}}
-	if reason := applySilverOperation(wallets, operation); reason != "insufficient_silver" || wallets[2].Amount != 100 || wallets[1].Amount != 100 {
-		t.Fatal("partial group settlement")
-	}
-	operation.Changes = []silverChange{{UserID: 1, Debit: 200, Credit: 398}}
-	if reason := applySilverOperation(wallets, operation); reason != "insufficient_silver" {
-		t.Fatal("credit paid its own debit")
-	}
-	operation.Changes = []silverChange{{UserID: 1, Debit: 100}, {UserID: 2, Credit: 100}}
-	if reason := applySilverOperation(wallets, operation); reason != "" || wallets[1].Amount != 0 || wallets[2].Amount != 200 {
-		t.Fatal("valid group failed")
-	}
-	wallets[2] = walletBalance{UserID: 2, Amount: math.MaxInt64, Version: 2}
-	operation.Changes = []silverChange{{UserID: 1, Credit: 1}, {UserID: 2, Credit: 1}}
-	if reason := applySilverOperation(wallets, operation); reason != "balance_overflow" || wallets[1].Amount != 0 {
-		t.Fatal("overflow changed a participant")
+	if _, err := decodeEqualGroup(group); !errors.Is(err, errInvalidSettlement) {
+		t.Fatal("repeated participant accepted", err)
 	}
 }
 

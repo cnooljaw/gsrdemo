@@ -128,7 +128,7 @@ func settlementRPC(t *testing.T, address string, command runtime.CommandID, args
 // settlementCall 供功能测试和压测直达固定公开入口；未知命令交由读入口验证拒绝契约。
 func settlementCall(ctx context.Context, self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
 	name := settlementReadName
-	if command == settleBatchCommand || command == settleSingleCommand || command == settleGroupCommand {
+	if command == settleBatchCommand || command == settleSingleCommand || command == settleEqualGroupCommand {
 		name = settlementWriteName
 	}
 	return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
@@ -168,7 +168,7 @@ func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 	for _, entry := range []struct {
 		command runtime.CommandID
 		request map[string]any
-	}{{settleSingleCommand, single}, {settleGroupCommand, group}} {
+	}{{settleSingleCommand, single}, {settleEqualGroupCommand, group}} {
 		mock.ExpectBegin().WillReturnError(errors.New("injected SQL outage"))
 		if _, err := settlementRPC(t, address, entry.command, entry.request); !errors.Is(err, errSettlementUnavailable) {
 			t.Fatalf("write command %d did not reach its transaction: %v", entry.command, err)
@@ -203,6 +203,9 @@ func TestSettlementReadWriteBoundaries(t *testing.T) {
 	}
 	if _, err := businessRPC(t, routes, "settlement", "settlement-write", getBalanceCommand, uint64(1)); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatal(err)
+	}
+	if _, err := businessRPC(t, routes, "settlement", "settlement-write", runtime.CommandID(9), map[string]any{}); !errors.Is(err, runtime.ErrUnknownCommand) {
+		t.Fatalf("移除后的旧编号仍可调用: %v", err)
 	}
 	if _, err := businessRPC(t, routes, "settlement", "settlement-submit", settleBatchCommand, map[string]any{}); !errors.Is(err, runtime.ErrServiceNotFound) {
 		t.Fatalf("旧 Send 入口仍存在: %v", err)

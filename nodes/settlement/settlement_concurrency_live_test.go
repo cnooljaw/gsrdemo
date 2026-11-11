@@ -136,9 +136,9 @@ func TestSettlementHotWalletLiveMySQL(t *testing.T) {
 		id := fmt.Sprintf("%s-locked-%d", sample.Business, index)
 		request := liveGroupRequest(id, sample.Business, users[0], users[2], 100)
 		sample.Operations = append(sample.Operations, id)
-		sample.Batches = append(sample.Batches, derivedBatchID("group", id))
+		sample.Batches = append(sample.Batches, derivedBatchID("group-equal", id))
 		begin := time.Now()
-		if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": peerAddress}, "settlement", settlementWriteName, settleGroupCommand, request); !errors.Is(err, errSettlementUnavailable) {
+		if _, err := businessRPC(t, map[cluster.NodeID]string{"settlement": peerAddress}, "settlement", settlementWriteName, settleEqualGroupCommand, request); !errors.Is(err, errSettlementUnavailable) {
 			t.Fatalf("locked group claimed a terminal result: %v", err)
 		}
 		if elapsed := time.Since(begin); elapsed >= 500*time.Millisecond {
@@ -169,7 +169,7 @@ func TestSettlementHotWalletLiveMySQL(t *testing.T) {
 	id := sample.Business + "-locked-0"
 	request := liveGroupRequest(id, sample.Business, users[0], users[2], 100)
 	for _, peerAddress := range addresses {
-		value, err := retryLiveSettlement(t, peerAddress, settlementWriteName, settleGroupCommand, request)
+		value, err := retryLiveSettlement(t, peerAddress, settlementWriteName, settleEqualGroupCommand, request)
 		if err != nil || value["results"].([]any)[0].(map[string]any)["status"] != "committed" {
 			t.Fatalf("original group did not recover: %v %v", value, err)
 		}
@@ -206,7 +206,7 @@ func TestSettlementConcurrentIdentitiesLiveMySQL(t *testing.T) {
 				request["version"], request["business"] = uint64(2), sample.Business
 				command, prefix := settleSingleCommand, "single"
 				if kind == "group" {
-					command, prefix = settleGroupCommand, "group"
+					command, prefix = settleEqualGroupCommand, "group-equal"
 					request = liveGroupRequest(id, sample.Business, sample.Users[0], sample.Users[1+index%2], 100)
 				}
 				jobs = append(jobs, job{addresses[index%len(addresses)], command, request})
@@ -252,7 +252,9 @@ func TestSettlementConcurrentIdentitiesLiveMySQL(t *testing.T) {
 			wantAmount, wantVersion := int64(0), uint64(11)
 			if kind == "duplicate" {
 				wantAmount, wantVersion = 900, 2
-			} else if committed != 10 || rejected != 6 {
+			} else if kind == "group" && (committed != 16 || rejected != 0) {
+				t.Fatalf("capped group did not finish: committed=%d rejected=%d", committed, rejected)
+			} else if kind == "debit" && (committed != 10 || rejected != 6) {
 				t.Fatalf("overdraft or missing operation: committed=%d rejected=%d", committed, rejected)
 			}
 			value := liveCall(t, address, getBalanceCommand, sample.Users[0])
