@@ -6,7 +6,6 @@ package mole
 const ServiceName = "mole"
 
 const (
-	MoleResolveEntryCommand = 1
 	MoleDepartedCommand     = 10
 	MoleBalanceCommand      = 11
 	MoleReserveCommand      = 12

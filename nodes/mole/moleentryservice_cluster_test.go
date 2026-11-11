@@ -108,10 +108,8 @@ func TestMoleSlowJoinDoesNotBlockDirectoryOrRooms(t *testing.T) {
 	started := make(chan struct{})
 	address, _ := startMoleTestNode(t, "mole", routes, &seededMoleFixture{checkpoint: testMoleCheckpoint(t), slowStarted: started})
 	routes["mole"] = address
-	for _, userID := range []uint64{1, 5} {
-		if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, userID, "login", "access-01", "agent"); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(1), "login", "access-01", "agent"); err != nil {
+		t.Fatal(err)
 	}
 	// 等待内存账初始化；不通过待测的进入路径判断准备就绪。
 	deadline := time.Now().Add(2 * time.Second)
@@ -133,9 +131,8 @@ func TestMoleSlowJoinDoesNotBlockDirectoryOrRooms(t *testing.T) {
 		t.Fatal("slow Join did not start")
 	}
 	begin := time.Now()
-	value, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, uint64(5), "login", "access-01", "agent")
-	if err != nil || value.(map[string]any)["entry_name"] != moleentry.ServiceName {
-		t.Fatalf("目录等待慢 Join: %v %v", value, err)
+	if _, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleHealthCommand); err != nil {
+		t.Fatalf("目录等待慢 Join: %v", err)
 	}
 	if _, err := moleRPC(t, routes, "mole", "attack-b-other", moleattack.AttackSnapshotCommand, uint64(4), "seeded"); err != nil {
 		t.Fatal(err)
@@ -321,10 +318,7 @@ func TestMoleReplacedLoginKeepsReenteredAccount(t *testing.T) {
 	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(1), "new-login", "access-02", "agent"); err != nil {
 		t.Fatal(err)
 	}
-	// 新接入先取得 Entry 地址，随后进入已通过 Online 校验并停在 Resume 回包。
-	if _, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, uint64(1), "new-login", "access-02", "agent"); err != nil {
-		t.Fatal(err)
-	}
+	// 新接入直连 Entry，通过 Online 校验后停在 Resume 回包。
 	probe.armed.Store(true)
 	type response struct {
 		value any

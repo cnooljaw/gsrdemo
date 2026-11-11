@@ -145,14 +145,13 @@ Bind 超时可能已经生效，access 不自动重发，只尝试清理候选 L
 
 ### 2.4 mole：进入与组内操作
 
-Node 为 `mole`，正常调用者为 access Agent。入口见 [MoleService](../nodes/mole/moleservice.go)、[Entry](../nodes/mole/moleentryservice.go)、[AttackService](../nodes/mole/attackservice.go)。
+Node 为 `mole`，access Agent 直接调用 [Entry](../nodes/mole/moleentryservice.go) 或 [AttackService](../nodes/mole/attackservice.go)；[MoleService](../nodes/mole/moleservice.go) 负责节点内的分组目录协作。
 
 共享命令分别见 [目录契约](../common/rpc/mole/commands.gen.go)、[Entry 契约](../common/rpc/moleentry/commands.gen.go)、[Attack 契约](../common/rpc/moleattack/commands.gen.go)。契约包含各公开 Service 的全部命令编号，下表列普通跨节点业务调用；Handler 的来源和参数类型限制仍按实际入口执行。
 
 | Service / Command | 方式 | 顺序参数 | 成功结果 |
 | --- | --- | --- | --- |
-| `mole / 1` ResolveEntry | Call | `U, L, N, A` | map：`entry_name string`，当前返回 mole-entry；不分组、不作 Online 身份核对 |
-| `entry_name / 1` Enter | Call | `U, L, N, A` | 地鼠快照 map，附 `silver` 内部余额视图；Entry 完成 Online、余额和 Join 协调 |
+| `mole-entry / 1` Enter | Call | `U, L, N, A` | 地鼠快照 map，附 `silver` 内部余额视图；Entry 完成 Online、余额和 Join 协调 |
 | `AttackName / 2` Hit | Call | `U, L, actionID string, spawnSeq uint64, hole int64` | Hit 字段 map；accepted 附 `balance/available int64, revision uint64`；已拒绝原记录可无余额 |
 | `AttackName / 3` Snapshot | Call | `U, L` | 与 C/S Snapshot 对应的快照 map |
 | `AttackName / 4` Leave | Call | `U, L` | bool，固定 true；access 仅确认 true 后清路由，不取消已接纳账务 |
@@ -310,8 +309,7 @@ Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission �
 
 ```text
 1011 Enter
-  → Agent Call mole/mole/1
-  → Agent Call mole-entry/1
+  → Agent Call mole/mole-entry/1
   → Entry Call online/online/2
   → 本地复用余额；仅缺失时 Call settlement-read/4
   → 本地目录预留与 AttackService Join

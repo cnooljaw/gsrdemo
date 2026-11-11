@@ -7,7 +7,6 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
-	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
@@ -38,20 +37,8 @@ func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	if err := mole.deps.AllowEnter(mole.Name()); err != nil {
 		return err
 	}
-	args := []any{identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName)}
-	value, err := mole.deps.Call(self, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, args...)
-	if err != nil {
-		return err
-	}
-	fields, ok := value.(map[string]any)
-	if !ok {
-		return errInvalidBackendReply
-	}
-	entry, ok := fields["entry_name"].(string)
-	if !ok || entry == "" {
-		return errInvalidBackendReply
-	}
-	value, err = mole.deps.Call(self, "mole", cluster.ServiceName(entry), moleentry.MoleEnterCommand, args...)
+	value, err := mole.deps.Call(self, "mole", moleentry.ServiceName, moleentry.MoleEnterCommand,
+		identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName))
 	if err != nil {
 		return err
 	}
@@ -61,7 +48,7 @@ func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	}
 	// Join 已返回，先保留断线清理路由；余额非法时由 Agent 封闭业务并关闭连接。
 	mole.attackName = cluster.ServiceName(snapshot.AttackName)
-	fields = value.(map[string]any)
+	fields := value.(map[string]any)
 	silver, err := clientBalance(fields["silver"])
 	if err != nil {
 		return err

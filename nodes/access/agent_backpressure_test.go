@@ -15,6 +15,7 @@ import (
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -119,9 +120,9 @@ func enteredMoleAgent(t *testing.T, client *accessPushClient, registry *protocol
 		Identity:   agent.session.snapshot,
 		AllowEnter: agent.allowEnter,
 		Push:       agent.push,
-		Call: func(_ gsr.ServiceContext, _ cluster.NodeID, name cluster.ServiceName, _ runtime.CommandID, _ ...any) (any, error) {
-			if name == "mole" {
-				return map[string]any{"entry_name": "entry"}, nil
+		Call: func(_ gsr.ServiceContext, node cluster.NodeID, name cluster.ServiceName, command runtime.CommandID, _ ...any) (any, error) {
+			if node != "mole" || name != moleentry.ServiceName || command != moleentry.MoleEnterCommand {
+				t.Fatalf("未直连地鼠进入服务: %s/%s/%d", node, name, command)
 			}
 			snapshot := fixtureSnapshot()
 			snapshot["silver"] = map[string]any{"balance": int64(1000)}

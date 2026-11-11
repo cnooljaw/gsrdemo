@@ -69,9 +69,7 @@ func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
 				AllowEnter: func(string) error { return nil },
 				Call: func(_ gsr.ServiceContext, node cluster.NodeID, service cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
 					switch {
-					case node == "mole" && service == "mole":
-						return map[string]any{"entry_name": "entry"}, nil
-					case node == "mole" && service == "entry" && command == moleentry.MoleEnterCommand:
+					case node == "mole" && service == moleentry.ServiceName && command == moleentry.MoleEnterCommand:
 						snapshot := fixtureSnapshot()
 						snapshot["silver"] = map[string]any{"balance": "invalid"}
 						return snapshot, nil

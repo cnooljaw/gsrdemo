@@ -14,7 +14,6 @@ import (
 //rpc:service mole public name=moleServiceName
 const (
 	moleServiceName                           = "mole"
-	moleResolveEntryCommand runtime.CommandID = 1
 	moleDepartedCommand     runtime.CommandID = 10
 	moleBalanceCommand      runtime.CommandID = 11
 	moleReserveCommand      runtime.CommandID = 12
@@ -59,7 +58,6 @@ func newMoleService() *moleService {
 	service := &moleService{routes: make(map[uint64]moleRoute), groups: make(map[string]int)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		moleHealthCommand:       service.handleHealth,
-		moleResolveEntryCommand: service.handleEntryAddress,
 		moleReserveCommand:      service.handleReserve,
 		moleDiscardGroupCommand: service.handleDiscardGroup,
 		moleDepartedCommand:     service.handleDeparted,
@@ -80,14 +78,6 @@ func (service *moleService) Handle(self gsr.CommandContext, command runtime.Comm
 
 func (service *moleService) OnStop(_ context.Context) error {
 	return nil
-}
-
-// entryAddress 仅返回稳定的进入通道，不等待 Online、余额或 Join。
-func (service *moleService) handleEntryAddress(_ gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (map[string]any, error) {
-	if !validMember(userID, loginID, accessNode, agentName) {
-		return nil, errInvalidMoleInput
-	}
-	return map[string]any{"entry_name": moleEntryName}, nil
 }
 
 // reserve 在 Join 前保留座位；未知结果的重试始终回到原组。

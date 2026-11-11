@@ -130,7 +130,7 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 
 ### 5.2 进入与即时命中
 
-进入走低频协调：Agent 向 `mole / 1` 获取进入地址，再调用 Entry。Entry 核对 Online 当前绑定，优先复用 Accounting 的余额缓存；仅缓存缺失才查询 `settlement-read` 初始化。错误不视为缓存缺失，有待确认操作时普通余额查询不能改写确认基线。
+进入走低频协调：Agent 直接 Call 固定名称 `mole-entry`，名称和命令引用生成的 `moleentry` 契约。Entry 核对 Online 当前绑定，优先复用 Accounting 的余额缓存；仅缓存缺失才查询 `settlement-read` 初始化。错误不视为缓存缺失，有待确认操作时普通余额查询不能改写确认基线。
 
 目录优先补足未满组，Join 前保留路由；Join 超时可能已经成功，保留原路由，不能另开组。确认原组已停止后才清理重选。相同用户重进保留组/座位、更新连接。Entry 在余额初始化前生成本次 Membership，同一身份贯穿 Accounting 缓存与组目录；离开清理同时检查 LoginID 和 Membership，Accounting 也只接受当前 Membership 的回收通知。
 

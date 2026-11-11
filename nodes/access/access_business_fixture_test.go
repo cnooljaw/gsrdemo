@@ -15,8 +15,8 @@ import (
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
-	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	tokenrpc "github.com/cnooljaw/gsrdemo/common/rpc/token"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
@@ -81,10 +81,8 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			}
 			return service.current, nil
 		}
-	case molerpc.ServiceName:
-		return map[string]any{"entry_name": "entry"}, nil
-	case "entry":
-		if command == 3 {
+	case moleentry.ServiceName:
+		if command != moleentry.MoleEnterCommand {
 			return nil, runtime.ErrUnknownCommand
 		}
 		snapshot := fixtureSnapshot()
@@ -146,7 +144,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, molerpc.ServiceName, "entry", "attack"} {
+	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, "attack"} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
 		if err != nil {
 			return err

@@ -15,7 +15,6 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
-	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
@@ -410,19 +409,7 @@ func prepareMoleCluster(t *testing.T, fixture *settlementFixture) (map[cluster.N
 
 func callMoleEnter(t *testing.T, routes map[cluster.NodeID]string, args ...any) (any, error) {
 	t.Helper()
-	value, err := moleRPC(t, routes, "mole", molerpc.ServiceName, molerpc.MoleResolveEntryCommand, args...)
-	if err != nil {
-		return nil, err
-	}
-	address, ok := value.(map[string]any)
-	if !ok {
-		return nil, errInvalidMoleInput
-	}
-	name, ok := address["entry_name"].(string)
-	if !ok {
-		return nil, errInvalidMoleInput
-	}
-	return moleRPC(t, routes, "mole", name, moleentry.MoleEnterCommand, args...)
+	return moleRPC(t, routes, "mole", moleentry.ServiceName, moleentry.MoleEnterCommand, args...)
 }
 
 func enterMoleTestUser(t *testing.T, routes map[cluster.NodeID]string, userID uint64, login, access string) map[string]any {
