@@ -23,14 +23,7 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
-// 测试后端按公开 wire 协议注册命令；游戏业务不持有这些编号。
-const (
-	moleTestWait                                 = 8 * time.Second
-	settlementSubmitCommand    runtime.CommandID = 1
-	settlementBatchCommand     runtime.CommandID = 2
-	settlementOperationCommand runtime.CommandID = 3
-	settlementBalanceCommand   runtime.CommandID = 4
-)
+const moleTestWait = 8 * time.Second
 
 // settlementFixture 仅实现 mole 用到的单用户测试契约，不是 settlement 业务实现。
 type settlementFixture struct {
@@ -61,12 +54,12 @@ func newSettlementFixture() *settlementFixture {
 		service.balances[userID] = silverBalance{Amount: 10000, Version: 1}
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		settlementSubmitCommand:    service.handleSubmit,
-		settlementBatchCommand:     service.handleBatch,
-		settlementBalanceCommand:   service.handleBalance,
-		settlementOperationCommand: service.handleOperation,
-		998:                        service.handleChangeBalance,
-		997:                        service.handleHide,
+		settlementwrite.SettleBatchCommand: service.handleSubmit,
+		settlementread.GetBatchCommand:     service.handleBatch,
+		settlementread.GetBalanceCommand:   service.handleBalance,
+		settlementread.GetOperationCommand: service.handleOperation,
+		998:                                service.handleChangeBalance,
+		997:                                service.handleHide,
 	})
 	return service
 }

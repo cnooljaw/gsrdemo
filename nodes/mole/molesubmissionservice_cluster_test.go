@@ -11,6 +11,7 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
+	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
 
 // TestMolePoisonBatchPausesSubmission 保护永久错误保留原批次并停止新记账，不持续冲击结算节点。
@@ -258,7 +259,7 @@ func TestMoleRestartReloadsSettlementState(t *testing.T) {
 	if reconnected["silver"].(map[string]any)["balance"] != want {
 		t.Fatal("restart did not reload settlement balance")
 	}
-	value, err := moleRPC(t, routes, "settlement", "settlement", settlementOperationCommand, uint64(1), hit["hit_id"])
+	value, err := moleRPC(t, routes, "settlement", "settlement", settlementread.GetOperationCommand, uint64(1), hit["hit_id"])
 	if err != nil || value == nil || value.(map[string]any)["status"] != "committed" {
 		t.Fatalf("durable operation was not queryable: %v %v", value, err)
 	}
