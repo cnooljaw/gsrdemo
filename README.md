@@ -208,6 +208,8 @@ unset demo_password
 
 公开 Service 的 RPC 名称与命令在对应 Service 文件中维护，生成到 `common/rpc/<service>/commands.gen.go` 并入库；修改源定义后执行 `generate rpc`。`check` 会只读核对生成结果，缺失、过期或多余的生成文件都会报错。定义方式见 [Service 命令与共享契约](docs/GO-CODE-STYLE.md#331-service-命令与共享契约)，当前入口见 [Service 契约与寻址](docs/DESIGN.md#23-service-契约与寻址)。
 
+新增游戏按 [接入顺序](docs/GO-CODE-STYLE.md#332-新增游戏的接入顺序) 推进；教程第 12、16、20 页分别讲命令契约、同包组件组装和工作清单。RPC 契约生成与客户端协议生成是两个入口，生成后仍需验证实际 Handler 与业务调用链。
+
 单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）。此验收执行外部节点二进制，使用 `-count=1` 确保本次实际启动进程：
 
 ```shell

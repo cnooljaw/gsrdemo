@@ -108,6 +108,7 @@ func (mole *comMole) ProtocolHandlers() map[uint32]any {
 - 固定单实例和服务池生成固定逻辑名称；池成员共享一份契约，数量和成员 ID 不进入生成文件。动态房间省略 `name=`，只生成命令，调用使用业务返回的实例名称。节点地址从配置取得。
 - 源定义由对应节点维护，`common/rpc/<service>/commands.gen.go` 由工具生成并纳入 Git。所属节点内部优先引用源定义，跨节点调用方引用生成常量；禁止手改生成文件或另抄一份编号。Agent 与游戏接入组件在同包内通过文件和类型组织，直接共享 Agent 命令，不为共享常量增加独立包。工程生成与同步检查命令见 [README](../README.md#开发与验证)。
 - 公开/私有标记控制契约生成，不是 GSR 的访问控制。节点组装决定是否对外发布名称；需要限制本地来源的 Handler 继续执行来源检查，不能依赖常量是否导出。
+- 生成检查只保证生成结果与源定义的名称、编号同步，不验证参数顺序、返回类型或完整 Handler 接线。参数、结果、身份及路由由实际入口校验，并以相关业务/通信测试保护；`generate rpc` 或 `check` 通过不能代替真实业务验收。
 
 例如结算写 Service 的源定义：
 
@@ -121,6 +122,23 @@ const (
 ```
 
 生成后调用方引用 `settlementwrite.ServiceName`、`settlementwrite.SettleBatchCommand` 等。当前入口见 [Service 契约与寻址](DESIGN.md#23-service-契约与寻址)。
+
+#### 3.3.2 新增游戏的接入顺序
+
+以下是沿用当前工程结构的工作顺序，不代表这些游戏能力已经实现。先确认业务方案，再逐节点完成与验证；Service 标记格式遵循上一节。
+
+| 顺序 | 要完成的工作 | 核对位置与结果 |
+| --- | --- | --- |
+| 1. 确认职责 | 明确玩法状态 owner、最少状态、失败与恢复承诺；依据独立状态/等待需求决定是否新增 Service 或节点 | 当前设计写入 DESIGN；未实现的承诺留在末尾，组件本身不提供并行 |
+| 2. 定义调用契约 | 在 PROTOCOL 按 C/S、跨节点和本地协作列出调用方、目标、顺序参数、结果、错误及重试身份 | 远程参数遵循 GSR 规范类型；固定入口、动态实例或服务池的寻址方式明确 |
+| 3. 实现 Service | 名称和命令块放在 Service 附近，标记整 Service 的 public/private；显式编写 Dispatcher 和 Handler，再由 MainService 组装 | 固定入口用 `name=`；动态实例省略；编号显式且在同一 Service 内唯一，公私标记不代替来源校验 |
+| 4. 生成 RPC 契约 | 执行 README 的 `generate rpc` 入口，核对 `common/rpc/<service>/commands.gen.go` 后再接调用方 | 跨节点引用生成常量，节点内部优先引用源定义；源定义和产物一并入库，不手改生成文件 |
+| 5. 接入客户端协议 | 按实际需要修改现有 `.proto`、生成 Go/TS 协议并接入客户端 | C/S 的 MsgID 与 Service 的 CommandID 分开；如增加 Agent 推送，命令归 `agent.go` 的同一公开命令块，并重新生成 RPC 契约 |
+| 6. 实现接入组件 | 在 access 根目录新增 `com<游戏>.go`，与 Agent 同为 `package main`；实现现有 `gameComponent` 并加入唯一 `games` 清单 | 参考 [commole](../nodes/access/commole.go)、[comlandlord](../nodes/access/comlandlord.go)；通过 `componentDependencies` 取当前身份，不保存父 Agent/self，不复制状态 |
+| 7. 补齐运行入口 | 新增节点时补 YAML、节点地址及现有工程脚本支持；按业务需要接入结算和已保存请求恢复 | 池化只影响组装，调用仍用逻辑名称；动态游戏实例使用业务返回的名称，禁止猜测实例名或池成员 ID |
+| 8. 验证和同步文档 | 先已有相关用例与关键失败边界，再按影响范围执行工程检查和实际通信验收 | 核对 Handler 接线、参数/回执、旧 LoginID、重复/冲突、超时未知结果；涉及资金时核对原 ID、实际扣返和最终账务。生成同步通过不表示上述行为已验收 |
+
+工程命令统一见 [README](../README.md#开发与验证)，状态与恢复承诺归 [DESIGN](DESIGN.md)，接口字段与调用顺序归 [PROTOCOL](PROTOCOL.md)。
 
 ### 3.4 调用、超时与失败
 

@@ -56,6 +56,8 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 
 固定入口生成 `ServiceName`，动态实例只生成命令，不生成实例名或 ServiceID。业务节点地址从配置或已验证的位置记录取得，池成员数只影响节点组装。公开标记不代替 Handler 的来源、身份和参数校验。
 
+新增游戏从职责确认、命令定义与生成，到同包组件接入和实际验证的顺序，见 [新增游戏的接入顺序](GO-CODE-STYLE.md#332-新增游戏的接入顺序)。
+
 ## 3. 接入、认证与登录
 
 ### 3.1 连接与协议入口
