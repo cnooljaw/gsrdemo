@@ -138,19 +138,26 @@ func (round *roundSettlement) submit(self gsr.ServiceContext) error {
 	err := round.journal.save(ctx, round.operation)
 	cancel()
 	if err != nil {
+		round.pauseOnPermanentError(err)
 		return err
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), settlementCallTimeout)
 	value, err := self.Cluster().Call(ctx, round.node, settlementwrite.ServiceName, settlementwrite.SettleEqualGroupCommand, round.operation.wire())
 	cancel()
 	if err != nil {
-		var status *runtime.StatusError
-		if errors.As(err, &status) && status.Class == runtime.ErrorClassDomain && status.Code != "settlement.store_unavailable" {
-			round.fault = err
-		}
+		round.pauseOnPermanentError(err)
 		return err
 	}
 	return round.applyReceipt(value)
+}
+
+// pauseOnPermanentError 只用于保存和 Call 报错；坏回执仍属于未确认结果，必须允许重提原请求。
+func (round *roundSettlement) pauseOnPermanentError(err error) {
+	var status *runtime.StatusError
+	permanentDomain := errors.As(err, &status) && status.Class == runtime.ErrorClassDomain && status.Code != "settlement.store_unavailable"
+	if permanentDomain || errors.Is(err, runtime.ErrUnknownCommand) || errors.Is(err, runtime.ErrInvalidCommandArguments) {
+		round.fault = err
+	}
 }
 
 // applyReceipt 只接受当前操作的完整终态；格式错误时保留原请求，不假报已完成。

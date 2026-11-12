@@ -227,7 +227,8 @@ prepareOperation：固定本局 OperationID 与三人金额
 ### 6.3 重试、清理与恢复
 
 - 本桌直接 Call 写池，等待只占用本桌，其他桌继续工作。保存/删除 Redis 各等待最多 250ms；access 的外层 Call 等待 3 秒，包含本桌排队及处理时间。结算 Call 的总等待范围见[调用与超时](#72-调用与超时)。
-- 超时、满邮箱、临时远端错误或坏回执保留原请求，从本次等待结束后至少退避 1 秒再重提；非临时远端错误保留请求并停止自动提交。原始 OperationID 和金额不变，Call 超时不表示未入账。
+- 超时、满邮箱、临时 Redis/远端错误或坏回执保留原请求，从本次等待结束后至少退避 1 秒再重提。原始 OperationID 和金额不变，Call 超时不表示未入账；保存失败时不调用结算。
+- 保存时请求无效或同 ID 内容冲突、Call 返回非临时 Domain 错误，或命令不存在/参数不匹配时，设置本桌 `fault` 停止自动提交，保留内存原请求及已有 Redis 记录，不覆盖冲突记录、不伪造财务终态。先核查并修复问题；已保存请求可在重启时按原 ID 恢复，仅存在内存中的请求不能靠 Redis 恢复。坏回执只代表结果未确认，不进入此暂停分支。
 - 有效回执只确认当前操作的完整终态，确认后不重复调用结算。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，从本次等待结束后至少退避 1 秒再清理；等待期间的 Tick 不访问 Redis，也不重新调用结算。
 - 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。结算确认后或全不叫回到 waiting 时，桌通过本地 Call 请求目录释放已离开成员；目录确认无同桌新预留才移除座位。空桌在待记录清理完成后退出；刚创建等待首次 Join 的桌不提前退出。
 - 启动时加载 Redis 待请求，为各请求创建恢复专用 AttackService；不发布可加入桌名，也不向旧连接广播，确认并清理后退出。只恢复已保存的局末账务，不恢复进行中手牌。清理前崩溃会再次按原 ID 幂等补交。
@@ -320,7 +321,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
 | 地鼠进入、换组与成员实例隔离 | [进入协作用例](../nodes/mole/moleentryservice_cluster_test.go)、[换组回收时序用例](../nodes/mole/moleentryservice_retry_test.go) |
 | 地鼠目录回收、内存余额、回执、重试与检查点恢复 | [目录回收用例](../nodes/mole/moleservice_test.go)、[Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
-| 斗地主规则、Call 终态、超时隔离、原请求重试与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
+| 斗地主规则、Call 终态、超时隔离、原请求重试、暂停与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Journal 故障用例](../nodes/landlord/landlordjournal_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
 | 事务、全局幂等、锁冲突与读写 Call 池并行 | [SQL 用例](../nodes/settlement/settlement_mysql_test.go)、[Call 池用例](../nodes/settlement/settlement_cluster_test.go)、[真实并发用例](../nodes/settlement/settlement_concurrency_live_test.go) |
 | 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
 

@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
+	"github.com/cnooljaw/gsr/runtime"
 	"github.com/redis/go-redis/v9"
 )
+
+var errLandlordOperationConflict = runtime.NewStatusError(runtime.ErrorClassDomain, "landlord.operation_conflict", "landlord operation identity conflict")
 
 // landlordJournal 只操作本游戏独立 Hash，每条记录对应一个原子三人结算。
 type landlordJournal struct {
@@ -17,7 +19,7 @@ type landlordJournal struct {
 
 func (journal landlordJournal) save(ctx context.Context, operation *landlordOperation) error {
 	if !operation.valid() {
-		return errors.New("invalid landlord operation")
+		return errLandlordInput
 	}
 	data, err := json.Marshal(operation)
 	if err != nil {
@@ -30,7 +32,7 @@ func (journal landlordJournal) save(ctx context.Context, operation *landlordOper
 		return err
 	}
 	if value != 1 {
-		return errors.New("landlord operation identity conflict")
+		return errLandlordOperationConflict
 	}
 	return nil
 }

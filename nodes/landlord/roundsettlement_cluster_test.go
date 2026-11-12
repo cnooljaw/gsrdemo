@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -295,6 +296,51 @@ func TestSlowCleanupKeepsSnapshotResponsive(t *testing.T) {
 	}
 }
 
+// TestLandlordJournalOutageRetriesOriginalOperation 保护临时保存故障不发起结算，Redis 恢复后保存原请求、结算并清理。
+func TestLandlordJournalOutageRetriesOriginalOperation(t *testing.T) {
+	journal := landlordJournal{client: startLandlordRedis(t), key: "test:landlord:pending"}
+	fault := &landlordSaveFault{}
+	fault.unavailable.Store(true)
+	journal.client.AddHook(fault)
+	backend := &landlordSettlementBackend{journal: journal, status: "committed", requests: make(chan map[string]any, 1)}
+	routes := map[cluster.NodeID]string{}
+	startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{settlementwrite.ServiceName: backend})
+	game := testLandlordGame(t)
+	for i := range game.Players {
+		game.Players[i].AccessNode, game.Players[i].AgentName = "access", "agent"
+	}
+	game.Players[game.Seat].Hand = []int64{3}
+	finished := *game
+	finished.Phase, finished.Winner = "finished", finished.Seat
+	want := operationForGame(finished).wire()
+	service := newAttackService(game.Name, journal, nil, "settlement")
+	service.game = *game
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
+	view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
+		game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)}).(map[string]any)
+	if view["settlement"].(map[string]any)["status"] != "pending" || backend.calls.Load() != 0 || journal.client.HLen(context.Background(), journal.key).Val() != 0 {
+		t.Fatal("保存失败仍调用结算或伪造终态")
+	}
+	fault.unavailable.Store(false)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		view = landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
+		if view["settlement"].(map[string]any)["status"] == "committed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("临时保存错误被永久暂停")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if fault.attempts.Load() < 2 || backend.calls.Load() != 1 || journal.client.HLen(context.Background(), journal.key).Val() != 0 {
+		t.Fatal("保存重试、结算次数或终态清理错误")
+	}
+	if !reflect.DeepEqual(<-backend.requests, want) {
+		t.Fatal("恢复改变了原 OperationID 或金额")
+	}
+}
+
 // TestLandlordUnconfirmedCallRetriesOriginalOperation 保护临时错误和坏回执只重提原请求，永久错误保留 Redis 并停止自动提交。
 func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 	for _, scenario := range []struct {
@@ -306,6 +352,8 @@ func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 		{"mailbox_full", runtime.ErrMailboxFull, false, false},
 		{"malformed_receipt", nil, true, false},
 		{"identity_conflict", runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.identity_conflict", "test identity conflict"), false, true},
+		{"unknown_command", runtime.ErrUnknownCommand, false, true},
+		{"invalid_arguments", fmt.Errorf("wrapped remote error: %w", runtime.ErrInvalidCommandArguments), false, true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			journal := landlordJournal{client: startLandlordRedis(t), key: "test:landlord:pending"}
@@ -330,6 +378,10 @@ func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 				time.Sleep(1500 * time.Millisecond)
 				if backend.calls.Load() != 1 || journal.client.HLen(context.Background(), journal.key).Val() != 1 {
 					t.Fatal("永久错误仍重复提交或丢失原请求")
+				}
+				pending, err := journal.load(context.Background())
+				if err != nil || len(pending) != 1 || !reflect.DeepEqual(pending[0].wire(), <-backend.requests) {
+					t.Fatalf("暂停改变了原请求: %v", err)
 				}
 				return
 			}
