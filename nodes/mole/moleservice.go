@@ -22,8 +22,9 @@ const (
 )
 
 const (
-	maxMoleUsers    = 100000
-	moleCallTimeout = 500 * time.Millisecond
+	maxMoleUsers      = 100000
+	moleCallTimeout   = 500 * time.Millisecond
+	maxForgetPerFlush = 64
 )
 
 var (
@@ -44,18 +45,21 @@ type moleRoute struct {
 	Membership string
 }
 
-// moleService 只持有冷路径目录，地鼠和记账分别属于自己的 Service。
+// moleService 持有分组目录与尚未接纳的缓存回收通知，地鼠和记账分别属于自己的 Service。
 type moleService struct {
-	routes     map[uint64]moleRoute
-	groups     map[string]int
-	dispatcher *gsr.Dispatcher
-	onStopped  func(error)
+	routes        map[uint64]moleRoute
+	groups        map[string]int
+	pendingForget map[uint64]string // UserID → Membership；同用户只保留最新一条回收通知。
+	dispatcher    *gsr.Dispatcher
+	onStopped     func(error)
 }
 
 var _ gsr.Service = (*moleService)(nil)
 
 func newMoleService() *moleService {
-	service := &moleService{routes: make(map[uint64]moleRoute), groups: make(map[string]int)}
+	service := &moleService{
+		routes: make(map[uint64]moleRoute), groups: make(map[string]int), pendingForget: make(map[uint64]string),
+	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		moleHealthCommand:       service.handleHealth,
 		moleReserveCommand:      service.handleReserve,
@@ -70,7 +74,11 @@ func (service *moleService) OnStart(ctx context.Context, self gsr.ServiceContext
 	return startMolePulse(ctx, self, accountingPeriod, moleHealthCommand, service.onStopped)
 }
 
-func (service *moleService) handleHealth(gsr.CommandContext) error { return nil }
+// handleHealth 复用目录的周期存活探测，补投缓存回收，不等待 Accounting 执行。
+func (service *moleService) handleHealth(self gsr.CommandContext) error {
+	service.flushForgets(self)
+	return nil
+}
 
 func (service *moleService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	return service.dispatcher.Handle(self, command, args...)
@@ -109,6 +117,7 @@ func (service *moleService) handleDiscardGroup(self gsr.CommandContext, name str
 		return errInvalidMoleInput
 	}
 	service.removeGroup(name)
+	service.flushForgets(self)
 	return nil
 }
 
@@ -148,10 +157,24 @@ func (service *moleService) handleDeparted(self gsr.CommandContext, userID uint6
 	if !service.removeMember(userID, loginID, attack, membership) {
 		return nil
 	}
-	if err := self.SendName(moleAccountingName, accountingForgetCommand, userID, membership); err != nil {
-		logMoleError(self, "余额缓存回收通知未接纳", err)
-	}
+	service.flushForgets(self)
 	return nil
+}
+
+// flushForgets 只移除已被接纳的通知；背压时停下，交给下一次目录 Pulse 补投。
+func (service *moleService) flushForgets(self gsr.ServiceContext) {
+	attempts := 0
+	for userID, membership := range service.pendingForget {
+		if attempts >= maxForgetPerFlush {
+			return
+		}
+		attempts++
+		if err := self.SendName(moleAccountingName, accountingForgetCommand, userID, membership); err != nil {
+			logMoleError(self, "余额缓存回收通知未接纳，保留待补投", err)
+			return
+		}
+		delete(service.pendingForget, userID)
+	}
 }
 
 func (service *moleService) removeMember(userID uint64, loginID, attack, membership string) bool {
@@ -160,6 +183,7 @@ func (service *moleService) removeMember(userID uint64, loginID, attack, members
 		return false
 	}
 	delete(service.routes, userID)
+	service.pendingForget[userID] = membership
 	service.groups[attack]--
 	if service.groups[attack] == 0 {
 		delete(service.groups, attack)
@@ -172,6 +196,7 @@ func (service *moleService) removeGroup(name string) {
 	for userID, route := range service.routes {
 		if route.Attack == name {
 			delete(service.routes, userID)
+			service.pendingForget[userID] = route.Membership
 		}
 	}
 }

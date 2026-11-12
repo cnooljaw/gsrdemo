@@ -118,7 +118,7 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 
 | Service | 独占状态与职责 |
 | --- | --- |
-| MoleService（`mole`） | 用户到组的路由、成员实例及组人数；预留分组、条件清理和转发余额校正 |
+| MoleService（`mole`） | 用户到组的路由、成员实例及组人数；预留分组、条件清理、未接纳的缓存回收通知和余额校正转发 |
 | MoleEntryService（`mole-entry`） | 协调 Online 检查、余额初始化及 Join；无权威房间或钱包状态 |
 | AttackService（每组一个） | 成员、座位、连接路由、目标时间线和有限请求记录；调用私有 attackGame 处理规则 |
 | MoleAccountingService（`mole-accounting`） | 确认余额/版本、待确认扣返、显示修订号、归批缓冲及一个在途批次；只做内存记账 |
@@ -187,6 +187,7 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 - 未保存 Redis 的内存命中可能在崩溃时丢失；已保存批次按原 ID、顺序和金额恢复，不查询后再抽奖或重新生成请求。
 - Redis 等待最多 500ms；结算 Call 的总等待范围见[调用与超时](#72-调用与超时)。超时、满邮箱、临时错误或非法回执保留原请求，按 100ms～2s 退避重试，不逐笔查账。确定性错误保留批次并暂停新记账。
 - Leave 不取消已接纳账务；有待扣时保留账户缓存，结清且已离开后才回收。目录/账户上限为 100,000，每组请求记录上限 1,024，已完成记账记录上限 4,096。
+- 正常离开与确认停止后的整组清理，均由目录按 `UserID → Membership` 保存尚未被 Accounting 接纳的回收通知；同一用户只保留最新一条。清理后立即尝试 Send，每次回调最多 64 条；未接纳时停止本轮并保留待投记录，由现有 100ms 目录 Pulse 再次唤醒补投。Send 接纳后移除待投记录，不等同缓存已回收；Accounting 核对 Membership，并按有无待结算操作决定立即或延后回收。补投表仅在本节点内存中，节点退出后不单独恢复。
 - 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 唤醒 owner，目标邮箱满只跳过本次，不切断后续周期。Submission 退出暂停新记账；Accounting 或目录退出使宿主返回失败；单个组退出不停止其他组。
 
 ## 6. 斗地主：牌桌与局末结算
@@ -317,7 +318,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 认证不等于登录、失败回包后关闭 | [agent_auth_test.go](../nodes/access/agent_auth_test.go)、[tokenservice_test.go](../nodes/login/tokenservice_test.go)、[token_redis_test.go](../nodes/login/token_redis_test.go) |
 | 游戏回包校验、离开确认、失败后的请求封闭与路由清理 | [component_test.go](../nodes/access/component_test.go)、[agent_failure_test.go](../nodes/access/agent_failure_test.go) |
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
-| 地鼠内存余额、回执、重试与检查点恢复 | [Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
+| 地鼠目录回收、内存余额、回执、重试与检查点恢复 | [目录回收用例](../nodes/mole/moleservice_test.go)、[Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
 | 事务、全局幂等、锁冲突与读写 Call 池并行 | [SQL 用例](../nodes/settlement/settlement_mysql_test.go)、[Call 池用例](../nodes/settlement/settlement_cluster_test.go)、[真实并发用例](../nodes/settlement/settlement_concurrency_live_test.go) |
 | 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |

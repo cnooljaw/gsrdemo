@@ -282,7 +282,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | mole-submission / 2、3 | 旧查询入口已移除，编号不复用 |
 | settlement / 5 Summary | 已移除，无汇总查询接口，编号不复用 |
 
-Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等约定为同节点协作，按实际 Handler 使用 owner 私有类型及本地消息，不向客户端开放。公开 Service 的命令编号整体生成，不代表私有类型可远程编解码或取消来源限制；私有 Service 不生成共享契约。地鼠缓存 Resume/SetBalance/Forget 均携带本次 Membership，旧成员的回收不作用于当前缓存；斗地主 Release 使用本地 Call 返回 bool，false 表示同桌已有新预留，需要保留原座位等待 Join，true 表示旧成员可移除。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
+Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等约定为同节点协作，按实际 Handler 使用 owner 私有类型及本地消息，不向客户端开放。公开 Service 的命令编号整体生成，不代表私有类型可远程编解码或取消来源限制；私有 Service 不生成共享契约。地鼠缓存 Resume/SetBalance/Forget 均携带本次 Membership，旧成员的回收不作用于当前缓存；目录回收通知的补投与限量边界见[地鼠故障边界](DESIGN.md#54-检查点与故障边界)。斗地主 Release 使用本地 Call 返回 bool，false 表示同桌已有新预留，需要保留原座位等待 Join，true 表示旧成员可移除。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
 
 ## 3. 主要调用链
 
