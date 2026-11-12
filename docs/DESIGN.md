@@ -185,7 +185,7 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 [Redis 检查点](../nodes/mole/molesubmissionservice_redis.go) 用一个版本 2 的值保存确认统计、最后序号/批次及至多一个 pending。Lua CAS 整体替换，不在 Lua 中计算金额；已完成的原批次重复处理不累计统计，跨批旧操作按 `origin_batch` 排除重复累计。检查点无 TTL，缺失时必须显式 `-init-accounting`，损坏或旧格式拒绝开放记账；不支持两个活跃 mole 共用同一个 key。
 
 - 未保存 Redis 的内存命中可能在崩溃时丢失；已保存批次按原 ID、顺序和金额恢复，不查询后再抽奖或重新生成请求。
-- Redis 等待最多 500ms；结算 Call 的总等待范围见[调用与超时](#72-调用与超时)。超时、满邮箱、临时错误或非法回执保留原请求，按 100ms～2s 退避重试，不逐笔查账。确定性错误保留批次并暂停新记账。
+- Redis 等待最多 500ms；结算 Call 的总等待范围见[调用与超时](#72-调用与超时)。超时、满邮箱、临时错误或非法回执保留原请求，按 100ms～2s 退避重试，不逐笔查账。业务确定性错误，以及 GSR 的 `runtime.unknown_command`、`runtime.invalid_command_arguments` 接线错误，保留原批次并暂停新记账；修复后重启，按原请求恢复。
 - Leave 不取消已接纳账务；有待扣时保留账户缓存，结清且已离开后才回收。目录/账户上限为 100,000，每组请求记录上限 1,024，已完成记账记录上限 4,096。
 - 正常离开、确认停止后的整组清理，以及目录明确拒绝且未建立用户路由的预留尝试，均由目录按 `UserID → Membership` 保存尚未被 Accounting 接纳的回收通知；同一用户只保留最新一条。产生通知后立即尝试 Send，每次回调最多 64 条；未接纳时停止本轮并保留待投记录，由现有 100ms 目录 Pulse 再次唤醒补投。Send 接纳后移除待投记录，不等同缓存已回收；Accounting 核对 Membership，并按有无待结算操作决定立即或延后回收。预留拒绝的回收决定由目录在处理请求时作出，调用方的 Call 超时不能证明预留未执行。补投表仅在本节点内存中，节点退出后不单独恢复。
 - 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 唤醒 owner，目标邮箱满只跳过本次，不切断后续周期。Submission 退出暂停新记账；Accounting 或目录退出使宿主返回失败；单个组退出不停止其他组。

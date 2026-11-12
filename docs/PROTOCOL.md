@@ -260,7 +260,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 ### 2.8 内部错误与停用入口
 
-以下是服务端稳定 Domain Code；C/S 只收到第 1.5 节的框架安全错误。参数类型/数量错误与未知命令沿用 GSR `runtime.invalid_command_arguments / runtime.unknown_command`。
+以下是服务端稳定 Domain Code 及相关 GSR 错误；C/S 只收到第 1.5 节的框架安全错误。参数类型/数量错误与未知命令沿用 GSR `runtime.invalid_command_arguments / runtime.unknown_command`。
 
 | 节点/能力 | 错误码 | 调用方处置 |
 | --- | --- | --- |
@@ -271,6 +271,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | Online | `online.invalid_request / login_id_conflict` | 不修改非法目录状态，不复用旧登录身份 |
 | mole | `mole.invalid_request / stale_login / conflict / busy / target_unavailable / online_unavailable / accounting_unavailable / insufficient_silver / operation_unknown` | 区分明确拒绝与未知结果；target_unavailable 的 C/S 特例见 1.3 |
 | landlord | `landlord.invalid_request / stale_login / invalid_turn / invalid_cards / busy / insufficient_silver` | 不盲目重复出牌；当前轮次与状态用快照核实 |
+| mole 结算调用接线 | `runtime.unknown_command / runtime.invalid_command_arguments` | Submission 按确定性错误暂停，保留原请求；恢复边界见[地鼠故障边界](DESIGN.md#54-检查点与故障边界) |
 | settlement 临时故障 | `settlement.store_unavailable` | 保留原请求，按游戏 owner 的限频策略重试；框架 ErrMailboxFull 同样退避，不能当成财务 rejected |
 | settlement 确定性故障 | `settlement.invalid_request / identity_conflict / wallet_not_found / balance_overflow / version_overflow` | 保留请求并暂停自动重试，核查身份、格式、钱包或数值范围；后两项为新 Group 接口的错误 |
 

@@ -110,7 +110,10 @@ func (service *moleSubmissionService) handleTick(self gsr.CommandContext) error 
 
 func (service *moleSubmissionService) retryOrPause(self gsr.ServiceContext, err error) {
 	var status *runtime.StatusError
-	if errors.As(err, &status) && (status.Class == runtime.ErrorClassDomain && status.Code != "settlement.store_unavailable" && status.Code != "mole.accounting_unavailable") {
+	permanentDomain := errors.As(err, &status) && status.Class == runtime.ErrorClassDomain &&
+		status.Code != "settlement.store_unavailable" && status.Code != "mole.accounting_unavailable"
+	// 未知命令与外层参数不匹配需要修复接线，不能作为临时故障反复投递。
+	if permanentDomain || errors.Is(err, runtime.ErrUnknownCommand) || errors.Is(err, runtime.ErrInvalidCommandArguments) {
 		service.fault = err
 		_ = self.SendName(moleAccountingName, accountingPauseCommand)
 		logMoleError(self, "结算提交暂停，保留原批次，修复后重启恢复", err)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -16,44 +17,87 @@ import (
 
 // TestMolePoisonBatchPausesSubmission 保护永久错误保留原批次并停止新记账，不持续冲击结算节点。
 func TestMolePoisonBatchPausesSubmission(t *testing.T) {
-	fixture := newSettlementFixture()
-	fixture.rejectUser = 1
-	routes, _ := prepareMoleCluster(t, fixture)
-	first := enterMoleTestUser(t, routes, 1, "login-1", "access-01")
-	_ = enterMoleTestUser(t, routes, 2, "login-2", "access-01")
-	_ = enterMoleTestUser(t, routes, 3, "login-3", "access-01")
-	other := enterMoleTestUser(t, routes, 4, "login-4", "access-02")
-	bad := testHitTarget(t, routes, first, 1, "login-1", "bad")
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		value, err := moleRPC(t, routes, "mole", moleSubmissionName, submissionStateCommand)
-		if err == nil && value.(map[string]any)["blocked"] == true {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("submission did not pause: %v %v", value, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
-		t.Fatalf("提交暂停仍接纳新记账: %v", err)
-	}
-	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(4), "login-4"); err != nil {
-		t.Fatal("提交暂停阻塞了房间快照", err)
-	}
-	value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, uint64(1), bad["hit_id"])
-	if err != nil || value.(map[string]any)["status"] != "accepted" {
-		t.Fatalf("unknown result was discarded: %v %v", value, err)
-	}
-	state, err := fixture.checkpoint.load(context.Background())
-	if err != nil || state.Pending == nil || state.Pending.Events[0].HitID != bad["hit_id"] {
-		t.Fatalf("poison batch lost: %+v %v", state, err)
-	}
-	// 停止重试永久错误，不用持续请求冲击结算节点。
-	requests := fixture.submitCount.Load()
-	time.Sleep(3 * accountingPeriod)
-	if fixture.submitCount.Load() != requests {
-		t.Fatal("permanent conflict kept retrying")
+	for _, scenario := range []struct {
+		name       string
+		firstError error
+		rejectUser uint64
+	}{
+		{name: "identity conflict", rejectUser: 1},
+		{name: "unknown command", firstError: runtime.ErrUnknownCommand},
+		{name: "invalid arguments", firstError: fmt.Errorf("wrapped remote error: %w", runtime.ErrInvalidCommandArguments)},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			fixture := newSettlementFixture()
+			fixture.rejectUser, fixture.firstError = scenario.rejectUser, scenario.firstError
+			routes, stop := prepareMoleCluster(t, fixture)
+			first := enterMoleTestUser(t, routes, 1, "login-1", "access-01")
+			_ = enterMoleTestUser(t, routes, 2, "login-2", "access-01")
+			_ = enterMoleTestUser(t, routes, 3, "login-3", "access-01")
+			other := enterMoleTestUser(t, routes, 4, "login-4", "access-02")
+			bad := testHitTarget(t, routes, first, 1, "login-1", "bad")
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				value, err := moleRPC(t, routes, "mole", moleSubmissionName, submissionStateCommand)
+				if err == nil && value.(map[string]any)["blocked"] == true {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("submission did not pause: %v %v", value, err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
+				t.Fatalf("提交暂停仍接纳新记账: %v", err)
+			}
+			current, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(4), "login-4")
+			if err != nil {
+				t.Fatal("提交暂停阻塞了房间快照", err)
+			}
+			target := current.(map[string]any)["targets"].([]any)[0].(map[string]any)
+			if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackHitCommand,
+				uint64(4), "login-4", "must-not-run", target["spawn_seq"], target["hole"]); !errors.Is(err, errAccountingUnavailable) {
+				t.Fatalf("提交暂停后仍接纳新命中: %v", err)
+			}
+			value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, uint64(1), bad["hit_id"])
+			if err != nil || value.(map[string]any)["status"] != "accepted" {
+				t.Fatalf("unknown result was discarded: %v %v", value, err)
+			}
+			state, err := fixture.checkpoint.load(context.Background())
+			if err != nil || state.Pending == nil || state.Pending.Events[0].HitID != bad["hit_id"] {
+				t.Fatalf("poison batch lost: %+v %v", state, err)
+			}
+			original := <-fixture.submitRequests
+			if !reflect.DeepEqual(state.Pending.wire(), original) {
+				t.Fatal("暂停改变了原批次身份或内容")
+			}
+			// 停止重试永久错误，不用持续请求冲击结算节点。
+			requests := fixture.submitCount.Load()
+			if requests != 1 {
+				t.Fatalf("永久错误不应重试: requests=%d", requests)
+			}
+			time.Sleep(3 * accountingPeriod)
+			if fixture.submitCount.Load() != requests {
+				t.Fatal("permanent conflict kept retrying")
+			}
+			if scenario.firstError != nil {
+				// 一次性接线错误已由替身清除；重启后必须从 Redis 恢复原请求。
+				stop()
+				address, _ := startMoleTestNode(t, "mole", routes, newMoleTestMain(t, fixture))
+				routes["mole"] = address
+				reconnected := enterMoleTestUser(t, routes, 1, "recovered-login", "access-02")
+				want := int64(10000) - bad["debit"].(int64) + bad["credit"].(int64)
+				if reconnected["silver"].(map[string]any)["balance"] != want || fixture.submitCount.Load() != requests+1 {
+					t.Fatal("重启未按原批次恢复余额")
+				}
+				if !reflect.DeepEqual(<-fixture.submitRequests, original) {
+					t.Fatal("重启恢复改变了原批次身份或内容")
+				}
+				restored, err := fixture.checkpoint.load(context.Background())
+				if err != nil || restored.Pending != nil || restored.Sequence != 1 || restored.Pool.Hits != 1 {
+					t.Fatalf("恢复后批次未唯一确认: %+v %v", restored, err)
+				}
+			}
+		})
 	}
 }
 
