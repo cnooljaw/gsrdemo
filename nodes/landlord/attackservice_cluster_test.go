@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"reflect"
 	"testing"
@@ -175,6 +176,75 @@ func joinLandlordTest(t *testing.T, routes map[cluster.NodeID]string, uid uint64
 	landlordTestValue(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uid, login)
 	route := landlordTestValue(t, routes, "landlord", landlordrpc.ServiceName, landlordrpc.ResolveCommand, uid, login).(map[string]any)
 	return landlordTestValue(t, routes, "landlord", route["room_name"].(string), landlordattack.RoomJoinCommand, uid, login, "access-01", "agent", route["membership"]).(map[string]any)
+}
+
+// landlordReadyProbe 不创建 Pulse，固定快照观察时序；仅让第一次封桌 Send 未被接纳。
+type landlordReadyProbe struct {
+	*attackService
+	sealAttempts int
+}
+
+var _ gsr.Service = (*landlordReadyProbe)(nil)
+
+func (*landlordReadyProbe) OnStart(context.Context, gsr.ServiceContext) error { return nil }
+
+func (probe *landlordReadyProbe) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == 99 {
+		return int64(probe.sealAttempts), nil
+	}
+	return probe.attackService.Handle(&landlordReadyContext{CommandContext: self, probe: probe}, cmd, args...)
+}
+
+type landlordReadyContext struct {
+	gsr.CommandContext
+	probe *landlordReadyProbe
+}
+
+var _ gsr.CommandContext = (*landlordReadyContext)(nil)
+
+func (self *landlordReadyContext) SendName(name cluster.ServiceName, cmd runtime.CommandID, args ...any) error {
+	if name == landlordName && cmd == sealCommand {
+		self.probe.sealAttempts++
+		if self.probe.sealAttempts == 1 {
+			return runtime.ErrMailboxFull
+		}
+	}
+	return self.CommandContext.SendName(name, cmd, args...)
+}
+
+// TestReadyFailureKeepsTableAndRetryDealsOnce 保护第三人准备失败不改变原桌，重试成功后重复 Ready 不再次封桌或发牌。
+func TestReadyFailureKeepsTableAndRetryDealsOnce(t *testing.T) {
+	table, directory := occupiedLandlordTable()
+	table.game.Players[0].Ready, table.game.Players[1].Ready = true, true
+	room := table.game.Name
+	probe := &landlordReadyProbe{attackService: table}
+	routes := map[cluster.NodeID]string{}
+	startLandlordTestNode(t, routes, "settlement", map[string]gsr.Service{settlementread.ServiceName: &landlordTestBackend{}})
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{landlordrpc.ServiceName: directory, room: probe})
+	before := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login").(map[string]any)
+	if _, err := landlordTestRPC(t, routes, "landlord", room, landlordattack.RoomReadyCommand, uint64(3), "login"); !errors.Is(err, runtime.ErrMailboxFull) {
+		t.Fatalf("未注入封桌消息满邮箱错误: %v", err)
+	}
+	after := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login")
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("失败的 Ready 改变了准备、轮次或手牌")
+	}
+	dealt := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomReadyCommand, uint64(3), "login").(map[string]any)
+	if dealt["phase"] != "calling" || dealt["turn"] != before["turn"].(uint64)+1 || len(dealt["hand"].([]any)) != 17 || len(dealt["bottom"].([]any)) != 0 {
+		t.Fatal("重试未正常发牌或提前公开底牌")
+	}
+	for _, value := range dealt["players"].([]any) {
+		if value.(map[string]any)["ready"] != true {
+			t.Fatal("重试发牌后遗漏了准备状态")
+		}
+	}
+	if _, err := landlordTestRPC(t, routes, "landlord", room, landlordattack.RoomReadyCommand, uint64(3), "login"); !errors.Is(err, errLandlordBusy) {
+		t.Fatalf("发牌后仍接受重复 Ready: %v", err)
+	}
+	current := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login")
+	if !reflect.DeepEqual(dealt, current) || landlordTestValue(t, routes, "landlord", room, 99) != int64(2) {
+		t.Fatal("重复 Ready 改变了已发的牌、轮次或重复封桌")
+	}
 }
 
 // landlordLeaveProbe 不创建 Pulse，固定下一次 Join 先于后台回收；仅对第一次 Release 注入失败。

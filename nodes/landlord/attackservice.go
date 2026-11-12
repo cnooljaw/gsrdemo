@@ -231,16 +231,19 @@ func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, l
 	if !ok || amount < 2*baseSilver {
 		return nil, errLandlordFunds
 	}
-	if service.game.markReady(seat) {
+	// 当前回调内暂存准备和发牌结果；markReady 只改值字段，deal 分配新的手牌切片。
+	next := service.game
+	if next.markReady(seat) {
 		deck, err := shuffledDeck()
 		if err != nil {
 			return nil, err
 		}
-		if err := self.SendName(landlordName, sealCommand, service.game.Name, true); err != nil {
+		if err := self.SendName(landlordName, sealCommand, next.Name, true); err != nil {
 			return nil, err
 		}
-		service.game.deal(deck, rand.IntN(3), time.Now())
+		next.deal(deck, rand.IntN(3), time.Now())
 	}
+	service.game = next
 	service.pushSnapshots(self)
 	return service.snapshotFor(uid), nil
 }

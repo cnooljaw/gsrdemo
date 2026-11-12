@@ -172,7 +172,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | --- | --- | --- | --- |
 | `landlord / 1` Resolve | Call | `U, L` | map：`room_name/membership string`，服务端预留桌位 |
 | `RoomName / 1` Join | Call | `U, L, N, A, M` | 本人桌快照 map；核对 Online 及目录成员实例 |
-| `RoomName / 2` Ready | Call | `U, L` | 本人桌快照；查询钱包存在且余额至少 20，未冻结资金 |
+| `RoomName / 2` Ready | Call | `U, L` | 本人桌快照；钱包余额至少 20，未冻结资金；失败保持原桌状态，发牌后再 Ready 返回 busy，详见[准备与发牌](DESIGN.md#61-凑桌规则与可见性) |
 | `RoomName / 6` Call | Call | `U, L, turn uint64, yes bool` | 本人桌快照；叫/不叫 |
 | `RoomName / 7` Rob | Call | `U, L, turn uint64, yes bool` | 本人桌快照；抢/不抢 |
 | `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | 本人桌快照；空列表表示不出 |
