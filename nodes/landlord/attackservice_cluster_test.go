@@ -177,6 +177,110 @@ func joinLandlordTest(t *testing.T, routes map[cluster.NodeID]string, uid uint64
 	return landlordTestValue(t, routes, "landlord", route["room_name"].(string), landlordattack.RoomJoinCommand, uid, login, "access-01", "agent", route["membership"]).(map[string]any)
 }
 
+// landlordLeaveProbe 不创建 Pulse，固定下一次 Join 先于后台回收；仅对第一次 Release 注入失败。
+type landlordLeaveProbe struct {
+	*attackService
+	afterRelease bool
+	releaseCalls int
+}
+
+var _ gsr.Service = (*landlordLeaveProbe)(nil)
+
+func (*landlordLeaveProbe) OnStart(context.Context, gsr.ServiceContext) error { return nil }
+
+func (probe *landlordLeaveProbe) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == 99 {
+		return int64(probe.releaseCalls), nil
+	}
+	return probe.attackService.Handle(&landlordLeaveContext{CommandContext: self, probe: probe}, cmd, args...)
+}
+
+type landlordLeaveContext struct {
+	gsr.CommandContext
+	probe *landlordLeaveProbe
+}
+
+var _ gsr.CommandContext = (*landlordLeaveContext)(nil)
+
+func (self *landlordLeaveContext) CallName(ctx context.Context, name cluster.ServiceName, cmd runtime.CommandID, args ...any) (any, error) {
+	if name != landlordrpc.ServiceName || cmd != landlordrpc.ReleaseCommand {
+		return self.CommandContext.CallName(ctx, name, cmd, args...)
+	}
+	self.probe.releaseCalls++
+	if self.probe.releaseCalls == 1 && !self.probe.afterRelease {
+		return nil, context.DeadlineExceeded
+	}
+	value, err := self.CommandContext.CallName(ctx, name, cmd, args...)
+	if self.probe.releaseCalls == 1 && err == nil {
+		return nil, context.DeadlineExceeded
+	}
+	return value, err
+}
+
+// TestJoinReconcilesUnconfirmedLeave 保护新人早于 Pulse 到达时能收掉旧座位，同用户新预留则保留座位并隔离迟到清理。
+func TestJoinReconcilesUnconfirmedLeave(t *testing.T) {
+	for _, afterRelease := range []bool{true, false} {
+		name, uid, login := "new_player_before_pulse", uint64(4), "login"
+		if !afterRelease {
+			name, uid, login = "rejoin_before_release", 1, "new-login"
+		}
+		t.Run(name, func(t *testing.T) {
+			table, directory := occupiedLandlordTable()
+			old := table.game.Players[0]
+			probe := &landlordLeaveProbe{attackService: table, afterRelease: afterRelease}
+			routes := map[cluster.NodeID]string{}
+			startLandlordTestNode(t, routes, "online", map[string]gsr.Service{onlinerpc.ServiceName: &landlordTestBackend{logins: map[uint64]string{}}})
+			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{landlordrpc.ServiceName: directory, table.game.Name: probe})
+			if left := landlordTestValue(t, routes, "landlord", table.game.Name, landlordattack.RoomLeaveCommand, uint64(1), "login"); left != true {
+				t.Fatal("释放错误阻止了接纳离开")
+			}
+			joined := joinLandlordTest(t, routes, uid, login)
+			if joined["room_name"] != table.game.Name || len(joined["players"].([]any)) != 3 {
+				t.Fatal("Join 未复用原桌的空位")
+			}
+			if calls := landlordTestValue(t, routes, "landlord", table.game.Name, 99); calls != int64(2) {
+				t.Fatalf("Join 没有主动核对待回收座位: %v", calls)
+			}
+			if _, err := landlordTestRPC(t, routes, "landlord", table.game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login"); err == nil {
+				t.Fatal("旧成员仍能访问牌桌")
+			}
+			if !afterRelease {
+				if released := landlordTestValue(t, routes, "landlord", landlordrpc.ServiceName, landlordrpc.ReleaseCommand,
+					old.UserID, old.LoginID, table.game.Name, old.Membership, true); released != false {
+					t.Fatal("旧清理释放了新预留")
+				}
+				landlordTestValue(t, routes, "landlord", table.game.Name, landlordattack.RoomSnapshotCommand, uid, login)
+			}
+		})
+	}
+}
+
+type landlordSlowRelease struct{ *landlordService }
+
+var _ gsr.Service = (*landlordSlowRelease)(nil)
+
+func (directory *landlordSlowRelease) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == landlordrpc.ReleaseCommand {
+		time.Sleep(1100 * time.Millisecond)
+	}
+	return directory.landlordService.Handle(self, cmd, args...)
+}
+
+// TestSlowMemberReleaseKeepsSnapshotResponsive 保护目录释放超过 Call 预算时，Pulse 退避使积压 Tick 不会饿死本桌快照。
+func TestSlowMemberReleaseKeepsSnapshotResponsive(t *testing.T) {
+	table, directory := occupiedLandlordTable()
+	table.game.detach(0)
+	routes := map[cluster.NodeID]string{}
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
+		landlordrpc.ServiceName: &landlordSlowRelease{directory},
+		table.game.Name:         &landlordSettlementProbe{table},
+	})
+	time.Sleep(2200 * time.Millisecond)
+	if _, err := landlordTestRPC(t, routes, "landlord", table.game.Name, landlordattack.RoomSnapshotCommand, uint64(2), "login"); err != nil {
+		t.Fatalf("慢目录引起积压 Tick，导致快照无法响应: %v", err)
+	}
+}
+
 // TestAttackRejoinAndPulse 保护随机凑桌、叫抢中的原手牌重连、旧身份清理隔离及真实 Pulse 超时推进，其他桌仍可准备。
 func TestAttackRejoinAndPulse(t *testing.T) {
 	routes := map[cluster.NodeID]string{}

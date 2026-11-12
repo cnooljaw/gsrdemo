@@ -70,7 +70,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 | Rob | 1181 → 1182 | `turn uint64`、`yes bool` | `snapshot`；当前 robbing 操作者抢/不抢 |
 | Play | 1121 → 1122 | `turn uint64`、`cards int64[]` | `snapshot`；空 cards 表示不出 |
 | Snapshot | 1131 → 1132 | 空 | `snapshot`，当前阶段与本人手牌 |
-| Leave | 1141 → 1142 | 空 | 空 `LandlordLeaveResponse`；当前 Handler 不填其中预留的 snapshot 字段，响应成功即完成离开 |
+| Leave | 1141 → 1142 | 空 | 空 `LandlordLeaveResponse`；当前 Handler 不填其中预留的 snapshot 字段，成功表示牌桌已接纳离开，目录回收可稍后完成 |
 | Push | 服务端 → 1161 | 无请求 | `snapshot`，含普通游戏更新或局末结算结果 |
 
 | 快照字段组 | 字段与类型 | 含义 |
@@ -177,7 +177,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | `RoomName / 7` Rob | Call | `U, L, turn uint64, yes bool` | 本人桌快照；抢/不抢 |
 | `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | 本人桌快照；空列表表示不出 |
 | `RoomName / 4` Snapshot | Call | `U, L` | 本人桌快照 |
-| `RoomName / 5` Leave | Call | `U, L` | bool；Agent 接纳 true 后清路由，并返回空 C/S LeaveResponse |
+| `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回空 C/S LeaveResponse；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
 | `landlord / 13` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
 快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Ready、Call、Rob、Play、Snapshot 回包的 `room_name` 与本次请求目标一致，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。

@@ -111,6 +111,9 @@ func (game *attackGame) markReady(seat int) bool {
 
 func (game *attackGame) detach(seat int) {
 	game.Players[seat].AccessNode, game.Players[seat].AgentName = "", ""
+	if game.Phase == "waiting" {
+		game.Players[seat].Ready = false
+	}
 }
 
 func (game *attackGame) remove(seat int) bool {

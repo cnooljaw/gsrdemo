@@ -27,12 +27,15 @@ const (
 	roomTickCommand     runtime.CommandID = 10
 )
 
+const releaseRetryDelay = time.Second
+
 // attackService 独占一桌状态；局末直接 Call 结算，确认后推送结果并清理待请求。
 type attackService struct {
-	game       attackGame
-	settlement roundSettlement
-	recovery   bool
-	dispatcher *gsr.Dispatcher
+	game           attackGame
+	settlement     roundSettlement
+	recovery       bool
+	releaseRetryAt time.Time
+	dispatcher     *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*attackService)(nil)
@@ -93,6 +96,9 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	if service.settlement.pending() || (service.game.Phase != "waiting" && service.game.Phase != "finished") {
 		return nil
 	}
+	if time.Now().Before(service.releaseRetryAt) {
+		return nil
+	}
 	reclaimed, err := service.releaseDetachedPlayers(self)
 	if err != nil {
 		return err
@@ -135,10 +141,12 @@ func (service *attackService) releaseRoute(self gsr.ServiceContext, player landl
 	defer cancel()
 	value, err := self.CallName(ctx, landlordName, releaseCommand, player.UserID, player.LoginID, service.game.Name, player.Membership, service.game.Phase == "waiting")
 	if err != nil {
+		service.releaseRetryAt = time.Now().Add(releaseRetryDelay)
 		return false, err
 	}
 	released, ok := value.(bool)
 	if !ok {
+		service.releaseRetryAt = time.Now().Add(releaseRetryDelay)
 		return false, errLandlordInput
 	}
 	return released, nil
@@ -191,6 +199,12 @@ func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, lo
 	if allowed != true {
 		return nil, errLandlordStale
 	}
+	// 目录可能已释放旧成员而本桌丢失了回执；主动 Join 不等待后台回收的退避期。
+	if service.game.Phase == "waiting" {
+		if _, err := service.releaseDetachedPlayers(self); err != nil {
+			return nil, err
+		}
+	}
 	if err := service.game.join(uid, login, node, agent, membership); err != nil {
 		return nil, err
 	}
@@ -237,16 +251,16 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 		return false, err
 	}
 	player := service.game.Players[seat]
+	service.game.detach(seat)
 	if (service.game.Phase != "waiting" && service.game.Phase != "finished") || service.settlement.pending() {
-		service.game.detach(seat)
 		return true, nil
 	}
 	released, err := service.releaseRoute(self, player)
 	if err != nil {
-		return false, err
+		_ = self.Logger().Error("斗地主已接纳离开，待重试释放成员", "user_id", uid, "membership", player.Membership, "error", err.Error())
+		return true, nil
 	}
 	if !released {
-		service.game.detach(seat)
 		return true, nil
 	}
 	if service.game.remove(seat) {
