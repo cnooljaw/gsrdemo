@@ -55,16 +55,16 @@ func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uin
 	if !ok || current["login_id"] != loginID || current["access_node"] != accessNode || current["agent_name"] != agentName {
 		return nil, errMoleStaleLogin
 	}
-	// 同一成员身份贯穿余额缓存与组目录，旧连接的迟到回收不能作用于本次进入。
-	membership, err := randomInstance("member-")
-	if err != nil {
-		return nil, err
-	}
-	balance, err := service.entryBalance(self, userID, membership)
-	if err != nil {
-		return nil, err
-	}
 	for attempt := 0; attempt < 2; attempt++ {
+		// 每次换组重新建立成员身份和余额视图，原组的迟到回收不能作用于新组。
+		membership, err := randomInstance("member-")
+		if err != nil {
+			return nil, err
+		}
+		balance, err := service.entryBalance(self, userID, membership)
+		if err != nil {
+			return nil, err
+		}
 		ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
 		value, err := self.CallName(ctx, moleServiceName, moleReserveCommand, userID, loginID, membership)
 		cancel()
