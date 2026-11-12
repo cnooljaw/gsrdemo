@@ -93,18 +93,26 @@ func (service *moleService) handleReserve(self gsr.CommandContext, userID uint64
 	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(loginID) || !validMoleIdentifier(membership) {
 		return moleRoute{}, errInvalidMoleInput
 	}
-	if _, exists := service.routes[userID]; !exists && len(service.routes) >= maxMoleUsers {
+	existingRoute, exists := service.routes[userID]
+	if !exists && len(service.routes) >= maxMoleUsers {
+		service.pendingForget[userID] = membership
+		service.flushForgets(self)
 		return moleRoute{}, errMoleBusy
 	}
-	name := service.routes[userID].Attack
+	name := existingRoute.Attack
 	if name == "" {
 		var err error
 		name, err = service.chooseGroup(self)
 		if err != nil {
+			if !exists {
+				// 预留未建立，也没有发起 Join；回收 Entry 已准备的本次余额缓存。
+				service.pendingForget[userID] = membership
+				service.flushForgets(self)
+			}
 			return moleRoute{}, err
 		}
 	}
-	if _, exists := service.routes[userID]; !exists {
+	if !exists {
 		service.groups[name]++
 	}
 	route := moleRoute{Attack: name, LoginID: loginID, Membership: membership}
