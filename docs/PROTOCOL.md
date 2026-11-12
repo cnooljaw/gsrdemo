@@ -71,7 +71,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 | Play | 1121 → 1122 | `turn uint64`、`cards int64[]` | `snapshot`；空 cards 表示不出 |
 | Snapshot | 1131 → 1132 | 空 | `snapshot`，当前阶段与本人手牌 |
 | Leave | 1141 → 1142 | 空 | 空 `LandlordLeaveResponse`；当前 Handler 不填其中预留的 snapshot 字段，成功表示牌桌已接纳离开，目录回收可稍后完成 |
-| Push | 服务端 → 1161 | 无请求 | `snapshot`，含普通游戏更新或局末结算结果 |
+| Push | 服务端 → 1161 | 无请求 | `snapshot`，含普通游戏更新、成员回收后的更新或局末结算结果；回收通知见[设计](DESIGN.md#63-重试清理与恢复) |
 
 | 快照字段组 | 字段与类型 | 含义 |
 | --- | --- | --- |

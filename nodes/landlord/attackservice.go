@@ -100,6 +100,9 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 		return nil
 	}
 	reclaimed, err := service.releaseDetachedPlayers(self)
+	if reclaimed {
+		service.pushSnapshots(self)
+	}
 	if err != nil {
 		return err
 	}

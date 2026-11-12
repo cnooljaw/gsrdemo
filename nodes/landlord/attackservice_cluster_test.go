@@ -12,6 +12,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
 	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
@@ -244,6 +245,126 @@ func TestReadyFailureKeepsTableAndRetryDealsOnce(t *testing.T) {
 	current := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login")
 	if !reflect.DeepEqual(dealt, current) || landlordTestValue(t, routes, "landlord", room, 99) != int64(2) {
 		t.Fatal("重复 Ready 改变了已发的牌、轮次或重复封桌")
+	}
+}
+
+// landlordMemberPushRecorder 只观察第三个座位收到的快照，计数和最后快照均由本 Service 管理。
+type landlordMemberPushRecorder struct {
+	count  int64
+	latest map[string]any
+}
+
+var _ gsr.Service = (*landlordMemberPushRecorder)(nil)
+
+func (*landlordMemberPushRecorder) OnStart(context.Context, gsr.ServiceContext) error { return nil }
+func (*landlordMemberPushRecorder) OnStop(context.Context) error                      { return nil }
+func (recorder *landlordMemberPushRecorder) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == 99 {
+		return map[string]any{"count": recorder.count, "snapshot": recorder.latest}, nil
+	}
+	if cmd != accessagent.LandlordSnapshotPushCommand {
+		return nil, runtime.ErrUnknownCommand
+	}
+	view := args[1].(map[string]any)
+	if view["seat"] == int64(2) {
+		recorder.count++
+		recorder.latest = view
+	}
+	return nil, nil
+}
+
+// landlordReclaimProbe 不启用周期 Timer，测试显式推进 Tick；可阻止指定成员释放，以观察部分成功的通知。
+type landlordReclaimProbe struct {
+	*attackService
+	blockedUID uint64
+}
+
+var _ gsr.Service = (*landlordReclaimProbe)(nil)
+
+func (*landlordReclaimProbe) OnStart(context.Context, gsr.ServiceContext) error { return nil }
+func (probe *landlordReclaimProbe) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd != 98 {
+		return probe.attackService.Handle(self, cmd, args...)
+	}
+	err := probe.handleTick(&landlordReclaimContext{CommandContext: self, blockedUID: probe.blockedUID})
+	// 同一推送目标随后处理 Call，确保前面的 Send 已被观察端处理，避免用睡眠猜测送达时间。
+	if _, barrierErr := remote(self, "access", "agent", 99); barrierErr != nil {
+		return nil, barrierErr
+	}
+	return nil, err
+}
+
+type landlordReclaimContext struct {
+	gsr.CommandContext
+	blockedUID uint64
+}
+
+var _ gsr.CommandContext = (*landlordReclaimContext)(nil)
+
+func (*landlordReclaimContext) Source() runtime.ServiceID { return 1 }
+func (self *landlordReclaimContext) CallName(ctx context.Context, name cluster.ServiceName, cmd runtime.CommandID, args ...any) (any, error) {
+	if name == landlordName && cmd == releaseCommand && args[0] == self.blockedUID {
+		return nil, runtime.ErrMailboxFull
+	}
+	return self.CommandContext.CallName(ctx, name, cmd, args...)
+}
+
+// TestReclaimedMembersPushSnapshot 保护实际回收和部分成功均通知剩余玩家，新预留或空转 Tick 不额外推送。
+func TestReclaimedMembersPushSnapshot(t *testing.T) {
+	for _, scenario := range []struct {
+		name, phase    string
+		blockedUID     uint64
+		newReservation bool
+		players        int
+		pushes         int64
+	}{
+		{name: "waiting", phase: "waiting", players: 1, pushes: 1},
+		{name: "partial_failure", phase: "waiting", blockedUID: 2, players: 2, pushes: 1},
+		{name: "new_reservations", phase: "waiting", newReservation: true, players: 3},
+		{name: "settled", phase: "finished", players: 1, pushes: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			table, directory := occupiedLandlordTable()
+			room := table.game.Name
+			table.game.Phase = scenario.phase
+			if scenario.phase == "finished" {
+				table.game.Landlord, table.game.Winner = 0, 2
+				table.settlement.prepareOperation(table.game)
+				table.settlement.operation.Status = "committed"
+			}
+			for seat := range 2 {
+				table.game.detach(seat)
+				if scenario.newReservation {
+					uid := table.game.Players[seat].UserID
+					directory.routes[uid] = landlordRoute{room, "new-login", "new-membership"}
+				}
+			}
+			routes := map[cluster.NodeID]string{}
+			startLandlordTestNode(t, routes, "access", map[string]gsr.Service{"agent": &landlordMemberPushRecorder{}})
+			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
+				landlordrpc.ServiceName: directory, room: &landlordReclaimProbe{attackService: table, blockedUID: scenario.blockedUID},
+			})
+			_, err := landlordTestRPC(t, routes, "landlord", room, 98)
+			if (scenario.blockedUID != 0 && !errors.Is(err, runtime.ErrMailboxFull)) || (scenario.blockedUID == 0 && err != nil) {
+				t.Fatalf("Tick 结果与注入不符: %v", err)
+			}
+			view := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login").(map[string]any)
+			if len(view["players"].([]any)) != scenario.players {
+				t.Fatal("回收后的座位数量不正确")
+			}
+			observed := landlordTestValue(t, routes, "access", "agent", 99).(map[string]any)
+			if observed["count"] != scenario.pushes {
+				t.Fatalf("成员变化推送次数不符: %v", observed)
+			}
+			if scenario.pushes != 0 && !reflect.DeepEqual(view, observed["snapshot"]) {
+				t.Fatal("推送不是回收后的最新快照")
+			}
+			landlordTestValue(t, routes, "landlord", room, 98)
+			idle := landlordTestValue(t, routes, "access", "agent", 99).(map[string]any)
+			if !reflect.DeepEqual(observed, idle) {
+				t.Fatal("空转或退避 Tick 重复推送")
+			}
+		})
 	}
 }
 

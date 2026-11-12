@@ -27,6 +27,10 @@ var _ gsr.CommandContext = (*tableCleanupContext)(nil)
 func (*tableCleanupContext) Source() runtime.ServiceID      { return 1 }
 func (self *tableCleanupContext) Exit()                     { self.exited = true }
 func (*tableCleanupContext) Logger() *logging.ServiceLogger { return nil }
+
+// 单元上下文不连接远端；零值 Cluster 的推送失败不影响成员回收，实际推送由通信测试观察。
+func (*tableCleanupContext) Cluster() *gsr.Cluster { return &gsr.Cluster{} }
+
 func (self *tableCleanupContext) CallName(_ context.Context, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
 	if name != landlordrpc.ServiceName || command != landlordrpc.ReleaseCommand {
 		return nil, runtime.ErrUnknownCommand
