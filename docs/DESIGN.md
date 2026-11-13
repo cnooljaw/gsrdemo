@@ -84,7 +84,8 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 ### 3.3 失败、替换与断线
 
 - 一条连接只允许成功登录一次。客户端的 UserID、LoginID 和后端路由由服务端决定，游戏入口要求已经登录。
-- 认证或登录失败，以及客户端请求收到非法后端回包时，协议层先尝试排队返回错误，Agent 标记 `closing`，停止处理后续客户端业务；私有 [failureCloser](../nodes/access/agent_failure.go) 使用 GSR `After(200ms)` 留出发送窗口，随后关闭会话。Gate 断线通知触发组件 Leave 与条件 Unbind；创建辅助 Service 失败时，Agent 尽力清理后直接退出。发送窗口不保证客户端已经收到错误，清理失败也不代表后端未加入。
+- 认证或登录失败、游戏进入结果未知，以及客户端请求收到非法后端回包时，协议层先尝试排队返回错误，Agent 标记 `closing`，停止处理后续客户端业务；私有 [failureCloser](../nodes/access/agent_failure.go) 使用 GSR `After(200ms)` 留出发送窗口，随后关闭会话。Gate 断线通知触发组件 Leave 与条件 Unbind；创建辅助 Service 失败时，Agent 尽力清理后直接退出。发送窗口不保证客户端已经收到错误，清理失败也不代表后端未加入。
+- 进入流程通过保留原错误的私有标记通知 Agent 关闭，不在 Agent 中硬编码各游戏的进入 MsgID。超时、取消、链路故障及未分类 Handler 失败不能证明未加入；业务明确拒绝、邮箱满和明确未接纳/目标消失仍返回原错误，不触发此关闭规则。斗地主 Join 结果未知时保留已知房间，断线按当前 UserID、LoginID 尽力 Leave；地鼠 Entry 未返回组路由时不能定向 Leave，只能条件 Unbind，残留沿用后续显式登录/进入覆盖。两者都不自动重试或宣称已回滚。
 - Bind 失败或超时不开放游戏，不自动重发 Bind；按候选 LoginID 尽力清理。普通断线依次调用游戏组件 Disconnect，再条件 Unbind，清空身份；OnStop 关闭连接。
 - 进程骤停不能执行清理，Online 或游戏目录可能暂留旧位置，由后续显式登录/进入覆盖。旧 LoginID 的替换通知、操作和解绑不能作用于新登录。
 

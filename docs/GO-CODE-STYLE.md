@@ -134,7 +134,7 @@ const (
 | 3. 实现 Service | 名称和命令块放在 Service 附近，标记整 Service 的 public/private；显式编写 Dispatcher 和 Handler，再由 MainService 组装 | 固定入口用 `name=`；动态实例省略；编号显式且在同一 Service 内唯一，公私标记不代替来源校验 |
 | 4. 生成 RPC 契约 | 执行 README 的 `generate rpc` 入口，核对 `common/rpc/<service>/commands.gen.go` 后再接调用方 | 跨节点引用生成常量，节点内部优先引用源定义；源定义和产物一并入库，不手改生成文件 |
 | 5. 接入客户端协议 | 按实际需要修改现有 `.proto`、生成 Go/TS 协议并接入客户端 | C/S 的 MsgID 与 Service 的 CommandID 分开；如增加 Agent 推送，命令归 `agent.go` 的同一公开命令块，并重新生成 RPC 契约 |
-| 6. 实现接入组件 | 在 access 根目录新增 `com<游戏>.go`，与 Agent 同为 `package main`；实现现有 `gameComponent` 并加入唯一 `games` 清单 | 参考 [commole](../nodes/access/commole.go)、[comlandlord](../nodes/access/comlandlord.go)；通过 `componentDependencies` 取当前身份，不保存父 Agent/self，不复制状态 |
+| 6. 实现接入组件 | 在 access 根目录新增 `com<游戏>.go`，与 Agent 同为 `package main`；实现现有 `gameComponent` 并加入唯一 `games` 清单 | 参考 [commole](../nodes/access/commole.go)、[comlandlord](../nodes/access/comlandlord.go)；通过 `componentDependencies` 取当前身份，不保存父 Agent/self，不复制状态。进入 RPC 的错误交 `enterFailure` 分类并保留已知清理路由；关闭边界见 [DESIGN](DESIGN.md#33-失败替换与断线) |
 | 7. 补齐运行入口 | 新增节点时补 YAML、节点地址及现有工程脚本支持；按业务需要接入结算和已保存请求恢复 | 池化只影响组装，调用仍用逻辑名称；动态游戏实例使用业务返回的名称，禁止猜测实例名或池成员 ID |
 | 8. 验证和同步文档 | 先已有相关用例与关键失败边界，再按影响范围执行工程检查和实际通信验收 | 核对 Handler 接线、参数/回执、旧 LoginID、重复/冲突、超时未知结果；涉及资金时核对原 ID、实际扣返和最终账务。生成同步通过不表示上述行为已验收 |
 

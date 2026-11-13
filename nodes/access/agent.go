@@ -85,9 +85,11 @@ func (agent *agent) HandleClientMessage(self gsr.CommandContext, frame []byte) e
 		return nil
 	}
 	var envelope commonv1.Envelope
-	loginRequest := proto.Unmarshal(frame, &envelope) == nil &&
+	decoded := proto.Unmarshal(frame, &envelope) == nil
+	loginRequest := decoded &&
 		(envelope.MsgId == uint32(demopb.MsgId_C2S_LOGIN) || envelope.MsgId == uint32(demopb.MsgId_C2S_PASSWORD_AUTH))
-	if loginRequest || errors.Is(err, errInvalidBackendReply) {
+	var unknownEnter *unknownEnterError
+	if loginRequest || errors.Is(err, errInvalidBackendReply) || errors.As(err, &unknownEnter) {
 		agent.closeAfterFailure(self)
 	}
 	return err

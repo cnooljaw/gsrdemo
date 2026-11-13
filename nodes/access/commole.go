@@ -40,7 +40,7 @@ func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	value, err := mole.deps.Call(self, "mole", moleentry.ServiceName, moleentry.MoleEnterCommand,
 		identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName))
 	if err != nil {
-		return err
+		return enterFailure(err)
 	}
 	snapshot, err := clientSnapshot(value)
 	if err != nil {

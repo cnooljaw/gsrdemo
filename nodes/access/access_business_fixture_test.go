@@ -15,6 +15,8 @@ import (
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
+	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
+	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
@@ -85,12 +87,38 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 		if command != moleentry.MoleEnterCommand {
 			return nil, runtime.ErrUnknownCommand
 		}
+		if service.scenario == "enter-busy-domain" {
+			return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "mole.busy", "busy")
+		}
+		if service.scenario == "enter-busy-mailbox" {
+			return nil, runtime.ErrMailboxFull
+		}
+		if strings.HasPrefix(service.scenario, "enter-timeout-") {
+			service.hits <- []any{"join-mole"}
+			if service.scenario == "enter-timeout-mole" {
+				return nil, runtime.ErrCallTimeout
+			}
+		}
 		snapshot := fixtureSnapshot()
 		snapshot["silver"] = map[string]any{"balance": int64(1000), "available": int64(1000), "revision": uint64(1)}
 		if service.scenario == "invalid-enter-balance" {
 			snapshot["silver"] = map[string]any{"balance": "invalid"}
 		}
 		return snapshot, nil
+	case landlordrpc.ServiceName:
+		return map[string]any{"room_name": "room", "membership": "member"}, nil
+	case "room":
+		if command == landlordattack.RoomJoinCommand {
+			service.hits <- []any{"join-landlord"}
+			if service.scenario == "enter-timeout-landlord" {
+				return nil, runtime.ErrCallTimeout
+			}
+			return map[string]any{"room_name": "room"}, nil
+		}
+		if command == landlordattack.RoomLeaveCommand {
+			service.hits <- []any{"leave-landlord", args[0], args[1]}
+			return true, nil
+		}
 	case "attack":
 		switch command {
 		case moleattack.AttackHitCommand:
@@ -144,7 +172,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, "attack"} {
+	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, "attack", landlordrpc.ServiceName, "room"} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
 		if err != nil {
 			return err
@@ -200,7 +228,7 @@ func startAccessBusiness(t *testing.T, scenarios ...string) (string, string, <-c
 	case <-time.After(3 * time.Second):
 		t.Fatal("backend startup timed out")
 	}
-	routes := map[cluster.NodeID]string{"access-01": accessAddress, "login": backend, "online": backend, "mole": backend}
+	routes := map[cluster.NodeID]string{"access-01": accessAddress, "login": backend, "online": backend, "mole": backend, "landlord": backend}
 	accessReady, accessDone := make(chan error, 1), make(chan error, 1)
 	accessCtx, stopAccess := context.WithCancel(context.Background())
 	accessLogs := t.TempDir()

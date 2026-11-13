@@ -43,7 +43,7 @@ func (landlord *comLandlord) onEnter(self gsr.CommandContext, reply protocol.Con
 	for attempt := 0; attempt < 2; attempt++ {
 		value, err := landlord.deps.Call(self, "landlord", landlordrpc.ServiceName, landlordrpc.ResolveCommand, identity.UserID, identity.LoginID)
 		if err != nil {
-			return err
+			return enterFailure(err)
 		}
 		fields, ok := value.(map[string]any)
 		if !ok {
@@ -63,7 +63,11 @@ func (landlord *comLandlord) onEnter(self gsr.CommandContext, reply protocol.Con
 				}
 				continue
 			}
-			return err
+			if enterOutcomeUnknown(err) {
+				// Join 可能已经完成，保留已知目标供 Agent 关闭后尽力 Leave。
+				landlord.room = cluster.ServiceName(room)
+			}
+			return enterFailure(err)
 		}
 		// Join 已返回，快照非法也必须保留已知目标，供断线时尝试 Leave。
 		landlord.room = cluster.ServiceName(room)
