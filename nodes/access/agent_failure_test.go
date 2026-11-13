@@ -352,6 +352,53 @@ func TestAccessRejectedEnterKeepsConnection(t *testing.T) {
 	}
 }
 
+// TestAccessProtocolFailurePolicy 保护解码阶段的登录失败也关闭连接，无关联号不伪造响应，未知消息仍允许正常登录。
+func TestAccessProtocolFailurePolicy(t *testing.T) {
+	for _, entry := range []struct {
+		name      string
+		msgID     uint32
+		requestID uint32
+		payload   []byte
+		close     bool
+		response  bool
+		code      commonv1.ErrorCode
+	}{
+		{name: "malformed login", msgID: uint32(demopb.MsgId_C2S_LOGIN), requestID: 23, payload: []byte{0xff}, close: true, response: true, code: commonv1.ErrorCode_ERROR_CODE_INVALID_REQUEST},
+		{name: "missing login request id", msgID: uint32(demopb.MsgId_C2S_LOGIN), close: true},
+		{name: "unsupported message", msgID: 500000, requestID: 23, response: true, code: commonv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			address, backend, _ := startAccessBusiness(t)
+			client := dialAccess(t, address)
+			frame, err := proto.Marshal(&commonv1.Envelope{MsgId: entry.msgID, RequestId: entry.requestID, Payload: entry.payload})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := client.WriteMessage(websocket.BinaryMessage, client.authenticatedFrame(frame)); err != nil {
+				t.Fatal(err)
+			}
+			if entry.response {
+				envelope := readAccessEnvelope(t, client)
+				var failure commonv1.ErrorResponse
+				if envelope.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || envelope.RequestId != entry.requestID || proto.Unmarshal(envelope.Payload, &failure) != nil || failure.Code != entry.code {
+					t.Fatalf("错误响应不匹配: envelope=%v failure=%v", envelope, &failure)
+				}
+			}
+			if entry.close {
+				accessExpectNoMoreMessages(t, client)
+				if accessFixtureRPC(t, backend, 99) != nil {
+					t.Fatal("非法登录建立了 Online 绑定")
+				}
+				return
+			}
+			accessLoginResponse(t, client, "alice", "password", &demopb.LoginResponse{})
+			if accessFixtureRPC(t, backend, 99) == nil {
+				t.Fatal("普通协议错误后无法继续登录")
+			}
+		})
+	}
+}
+
 // accessExpectNoMoreMessages 验证终止错误之后没有第二份响应，连接实际关闭而非读超时。
 func accessExpectNoMoreMessages(t *testing.T, client *accessClient) {
 	t.Helper()
