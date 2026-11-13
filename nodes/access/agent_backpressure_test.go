@@ -46,6 +46,11 @@ func (client *accessPushClient) Close() error {
 	return nil
 }
 
+// 推送背压替身不模拟终止写出，避免用 Send/Close 伪造该契约。
+func (*accessPushClient) SendAndClose(_ []byte) error {
+	return errors.New("unexpected SendAndClose in push-only fixture")
+}
+
 // TestAgentPushFailureIsLocal 保护一个真实 Agent 的出站失败不影响另一个 Agent，且旧 LoginID 不触发写回。
 func TestAgentPushFailureIsLocal(t *testing.T) {
 	for name, sendError := range map[string]error{

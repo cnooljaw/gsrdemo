@@ -23,6 +23,11 @@ func (client *testClientSession) Send(_ []byte) error {
 	return nil
 }
 
+// 此替身只观察普通发送/关闭；末帧顺序由真实 Gate 用例验证。
+func (*testClientSession) SendAndClose(_ []byte) error {
+	return errors.New("unexpected SendAndClose: use a real Gate fixture")
+}
+
 func (client *testClientSession) Close() error {
 	client.closeCount++
 	return client.closeError

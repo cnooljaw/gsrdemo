@@ -21,11 +21,11 @@ Demo 包含持续运行的多人打地鼠和三人随机房斗地主，使用示
 
 ### 2.1 GSR 与参考边界
 
-- 各节点使用独立 Go module，固定 `github.com/cnooljaw/gsr v1.0.3`；源码位于节点根目录。`common` 提供共享配置、生成的 RPC 契约及对应生成工具，`typeclient` 是独立 TypeScript 项目；本地 replace 仅指向本仓库 common。
+- 各节点使用独立 Go module，固定 `github.com/cnooljaw/gsr v1.0.4`；源码位于节点根目录。`common` 提供共享配置、生成的 RPC 契约及对应生成工具，`typeclient` 是独立 TypeScript 项目；本地 replace 仅指向本仓库 common。
 - 节点由 `gsr.Run + MainService` 启动。MainService 创建、命名 Service 并打开 Cluster，组装完成后退出；已创建的 Service 和监听继续运行。外部 MySQL/Redis 客户端由宿主创建，Run 返回后关闭。
 - 每份可变状态归一个 Service，普通组件由其 owner 串行调用。独立 Service 提供独立 Mailbox 和等待边界；组件拆分不提供并行能力。业务使用 GSR `Call/Send/After`，不保存回调上下文或启动业务 goroutine。
 - 客户端使用 Protobuf Registry/Envelope，Cluster 使用 GSR 的规范 Go 参数。节点地址集中在 [nodes.yaml](../configs/nodes.yaml)，实例 YAML 通过 `nodes_file` 引用；相对路径基于配置文件目录。
-- GSR 接入依据为 v1.0.3 的[开发指南](https://github.com/cnooljaw/gsr/blob/v1.0.3/docs/guides/APPLICATION.md)、[Cluster 教程](https://github.com/cnooljaw/gsr/blob/v1.0.3/docs/guides/CLUSTER.md)及 ADR [0012](https://github.com/cnooljaw/gsr/blob/v1.0.3/docs/adr/0012-node-capabilities-and-service-logging.md)、[0013](https://github.com/cnooljaw/gsr/blob/v1.0.3/docs/adr/0013-client-protocol-boundaries.md)。
+- GSR 接入依据为 v1.0.4 的[开发指南](https://github.com/cnooljaw/gsr/blob/v1.0.4/docs/guides/APPLICATION.md)、[Cluster 教程](https://github.com/cnooljaw/gsr/blob/v1.0.4/docs/guides/CLUSTER.md)及 ADR [0012](https://github.com/cnooljaw/gsr/blob/v1.0.4/docs/adr/0012-node-capabilities-and-service-logging.md)、[0013](https://github.com/cnooljaw/gsr/blob/v1.0.4/docs/adr/0013-client-protocol-boundaries.md)。
 
 GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只读。斗地主的普通牌型与叫抢流程参考 nbgameserver/gameofhlddz、ServerLogic/hlddz；地鼠分组与时间线参考 GoServerActorFsm。参考实现不构成兼容目标，也不引入 C/Lua 运行依赖；修改边界见 [AGENTS.md](../AGENTS.md)。
 
@@ -373,7 +373,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 | 方向 | 待完成内容与边界 |
 | --- | --- |
-| Gate 发送后关闭（GSR 候选能力，暂不实现） | 由 GSR 原生提供类似 `client.SendAndClose(frame)` 的能力，用写出完成或有界失败替代业务层固定延时；协议适配与生命周期边界见[下方草案](#102-gate-发送后关闭草案)。 |
+| Gate 发送后关闭（待业务接线） | GSR v1.0.4 已提供 SendAndClose 和 Protobuf 错误策略；gsrdemo 尚使用固定延时，待确认后按[接线计划](#102-gate-发送后关闭接线计划)替换。 |
 | 牌局资金预留（草案，暂不实现） | 为牌局预留额度，附属小游戏实时使用剩余可用余额；不再按“游戏期间禁止整个钱包的其他扣款”推进。额度、封顶基准、并发与异常释放规则待确认，见下方草案。 |
 | 麻将接入 | 结算服已提供按付款明细比例封顶的通用 Group；具体玩法的应付关系、事件时序及客户端尚未实现或验收。 |
 | 第三方认证 | 微信、苹果及渠道尚未接入；接入时再定义身份映射与认证校验，成功后复用平台 Token 登录。不预建空 Provider 或新节点。 |
@@ -392,16 +392,68 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 
 当前实现保持第 6、7 节所述行为：没有牌局资金预留，斗地主按钱包余额封顶结算。后续有明确业务需求时，再确认这份草案及实施范围。
 
-### 10.2 Gate 发送后关闭草案
+### 10.2 Gate 发送后关闭接线计划
 
-更合适的长期方案是由 GSR Gate 原生支持类似 `client.SendAndClose(finalFrame)` 的能力。Gate 已拥有出站队列、实际写入和连接关闭过程，能够在最后一帧写出后关闭连接，业务无需创建辅助 Service 或猜测固定发送窗口。此项属于 GSR 的候选改进，暂不实现，也不修改相邻 GSR 仓库；当前仍使用第 3.3 节的 `failureCloser`。
+GSR v1.0.4 已发布，本项目六个节点的依赖已升级，测试替身补齐新增的 ClientSession 方法；**生产业务接线尚未修改**，当前关闭流程仍见第 3.3 节。本节按正式发布包的 [SEND-AND-CLOSE.md](https://github.com/cnooljaw/gsr/blob/v1.0.4/docs/guides/SEND-AND-CLOSE.md)整理待确认的业务方案，替代原框架提案，不再维护另一份候选 API。
 
-候选契约应明确：
+#### 职责与最少状态
 
-- 最后一帧入队与连接进入关闭阶段是同一个接纳动作；接纳后拒绝后续发送，按明确顺序处理已有队列和最后一帧，再关闭连接。写出等待受 Gate 的时间与容量上限约束。
-- 队列已满、写入失败或超时时仍应有界关闭，并明确返回或诊断失败；不能为了等错误回包而无限等待。重复关闭应幂等，不能重复发送最后一帧。
-- 调用成功只代表 Gate 接纳发送并关闭的请求，不保证客户端已收到或处理消息；正常路径以写出完成为关闭条件，也不等同业务确认。
-- `errorResponse` 是协议层概念，Gate 仍接收已编码的帧。GSR 的协议分发层需配套提供“错误响应并关闭”的接线，避免先自动回错、再重复发送同一错误；具体 API 名称与签名由 GSR 设计确定。
-- 是否关闭由业务决定；Agent 仍需封闭已排队的后续客户端业务，并在断线通知中按已知路由尽力 Leave、条件 Unbind。Gate 不理解游戏成员或替业务回滚超时请求。
+- Gate 拥有出站队列、唯一 writer、发送后关闭的一秒默认总预算、入站接纳和断线通知；SendAndClose 成功仅表示接纳。满队列、超大帧、写失败或超时仍关闭，不保证客户端收到。
+- Dispatcher 根据业务错误策略产生唯一安全错误响应并调用 SendAndClose；无可靠关联号或已知 Notify 时直接关闭，不伪造 RequestID。普通 Response/Send 与终止响应不能混用来重复回错。
+- Agent 仍只保存现有 `closing`、会话身份和组件路由，不新增关闭 Service、Timer、等待状态或 goroutine。closing 用于拦截已经入邮箱的客户端业务，不能阻断必要的清理 Command。
+- 游戏状态、未知 Join、Leave、条件 Unbind 和旧登录隔离继续归现有 owner；不把领域条件或补偿交给 Gate。地鼠未知组路由仍不保证定向 Leave。
 
-GSR 能力发布后，再评估 gsrdemo 的版本升级与替换，删除不再需要的 `failureCloser`，并验证错误回包、慢客户端、队列满和断线清理等边界。
+#### 错误策略与接入位置
+
+在 `agent.mustBindHandlers` 构造协议 Dispatcher 时注册一次 `protocol.WithErrorPolicy(agent.clientErrorPolicy)`；客户端 Handler 继续返回原错误。
+
+| 条件 | 策略 | Agent 行为 |
+| --- | --- | --- |
+| PasswordAuth / Login 的未响应失败 | ReplyErrorAndClose | 先设置 closing，保留会话供后续清理 |
+| `errInvalidBackendReply` | ReplyErrorAndClose | 先设置 closing，组件保留已知目标 |
+| `unknownEnterError` | ReplyErrorAndClose | 先设置 closing，不换游戏、不自动重试 |
+| 普通业务拒绝、非登录路径的繁忙/邮箱满等其他失败 | ReplyError | 保持现有错误返回与连接状态 |
+
+`clientErrorPolicy` 从 Dispatcher 接收 MsgID 和原错误，用 errors.Is/errors.As 复用当前判断；只同步修改所属 Agent 的 closing，不发送字节、不 Close、不 Exit。无法解码 Envelope 时 MsgID 为零，按上述规则处理，不自行恢复部分编号。该策略不是所有错误的拦截器：请求已成功响应后的错误、Handler panic 不保证经过它，不为此扩展本期业务行为。
+
+接线形态如下，代码为待实施方案：
+
+```go
+agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](
+    registry, agent.client, mustMergeHandlers(protocols...),
+    protocol.WithErrorPolicy(agent.clientErrorPolicy),
+)
+```
+
+`HandleClientMessage` 简化为检查 closing，再直接返回 Dispatcher.HandleFrame；删除返回后解析 Envelope、判断错误并创建关闭辅助 Service 的路径。`agent_failure.go` 保留未知进入的错误标记/分类，新增业务错误策略，删除 failureCloser、failureCloseCommand 和 closeAfterFailure；私有关闭命令本来不生成共享契约，不新增或重排 RPC/C/S 编号。
+
+#### 关闭与清理链路
+
+```text
+Handler 返回错误
+  → Dispatcher 同步调用 clientErrorPolicy
+  → Agent 标记 closing，返回 ReplyErrorAndClose
+  → Dispatcher 编码唯一安全 ErrorResponse → Gate.SendAndClose
+  → Gate 写出后关闭，或在失败/超时后提前关闭
+  → 原 ClientDisconnectedCommand
+  → Agent 尽力 Leave、条件 Unbind、self.Exit
+  → OnStop 幂等 Close
+```
+
+Agent 不能在选择关闭后立即 Exit/Close，否则 OnStop 会截断末帧。Handle 中的断线清理、旧登录替换、disconnect 和 OnStop 保持原有职责；旧登录替换当前没有最后提示帧，继续使用现有立即清理退出流程，不顺带增加踢线协议。
+
+第一期沿用 GSR 默认的一秒总预算，先不新增业务 YAML 字段；它覆盖当前阻塞写、旧队列、末帧及关闭，写完立即关闭，不是固定等待一秒。即使末帧未被队列接纳，Gate 也会封闭并异步关闭；业务不再次发送错误或启动延时兜底。
+
+#### 测试与交付
+
+| 调整 | 保护的行为 |
+| --- | --- |
+| 删除关闭辅助 Service 创建失败用例与专用夹具 | 已移除的路径不再作为现有能力维护 |
+| 扩充 Agent 错误策略测试 | 认证/登录、非法回包、未知进入选择关闭；普通拒绝保留连接；closing 不挡清理 Command |
+| 更新测试会话替身 | 只记录终止发送意图或注入明确错误，不用 Send 然后 Close 模拟 Gate 的写出保证；当前依赖兼容桩尚未模拟终止写出 |
+| 更新真实 WebSocket 错误关闭用例 | 实际收到唯一、关联正确且安全的错误，然后断线；同步屏障安排排队请求，不依赖原 200ms 发送窗口或 sleep 猜时序 |
+| 保留并运行路由/身份清理用例 | 地主未知 Join、地鼠非法快照保留已知路由；按当前身份 Leave；旧连接不能解绑新登录 |
+| 终止发送失败与普通拒绝 | 出站接纳失败不产生第二份错误或延时兜底；普通繁忙/目标失效仍可继续请求 |
+| 业务闭环 | 统一 check、access 受影响生命周期 race、真实 TS CLI，以及双接入地鼠/三人斗地主进程验收 |
+
+传输 FIFO、切片快照、容量、总预算、并发关闭等底层契约由 GSR 测试保护；gsrdemo 验证领域条件、请求封闭和业务清理，不复制一套 Gate 实现。实施后更新第 3.3 节、PROTOCOL 和教程讲稿，删除当前固定延时的描述，再报告真实验证结果。

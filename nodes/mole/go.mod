@@ -3,7 +3,7 @@ module github.com/cnooljaw/gsrdemo/nodes/mole
 go 1.24.0
 
 require (
-	github.com/cnooljaw/gsr v1.0.3
+	github.com/cnooljaw/gsr v1.0.4
 	github.com/cnooljaw/gsrdemo/common v0.0.0
 	github.com/redis/go-redis/v9 v9.18.0
 )
