@@ -182,6 +182,8 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 
 快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Ready、Call、Rob、Play、Snapshot 回包的 `room_name` 与本次请求目标一致，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
 
+Join 失败仍可能伴随旧成员回收的更新推送；该推送不代表本次进入成功，Call 继续返回原错误。成功 Join 只推送最终状态，回收通知规则见[设计](DESIGN.md#63-重试清理与恢复)。
+
 ### 2.6 通用银子结算接口
 
 Node 取游戏节点（mole、landlord）的配置 `settlement_node`，默认 `settlement`；access 不直接调用结算。入口见[Call 写入池](../nodes/settlement/settlementwriteservice.go)与[Call 读取池](../nodes/settlement/settlementreadservice.go)。

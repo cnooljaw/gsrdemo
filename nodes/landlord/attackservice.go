@@ -232,7 +232,12 @@ func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, lo
 	}
 	// 目录可能已释放旧成员而本桌丢失了回执；主动 Join 不等待后台回收的退避期。
 	if service.game.Phase == "waiting" {
-		if _, err := service.releaseDetachedPlayers(self); err != nil {
+		reclaimed, err := service.releaseDetachedPlayers(self)
+		if err != nil {
+			// 已完成的回收仍需通知现有成员，Join 继续返回原错误。
+			if reclaimed {
+				service.pushSnapshots(self)
+			}
 			return nil, err
 		}
 	}

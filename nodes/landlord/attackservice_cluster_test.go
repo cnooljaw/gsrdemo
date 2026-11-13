@@ -271,7 +271,7 @@ func (recorder *landlordMemberPushRecorder) Handle(_ gsr.CommandContext, cmd run
 	return nil, nil
 }
 
-// landlordReclaimProbe 不启用周期 Timer，测试显式推进 Tick；可阻止指定成员释放，以观察部分成功的通知。
+// landlordReclaimProbe 不启用周期 Timer，测试显式推进 Tick 或 Join，并观察指定成员释放失败前后的通知。
 type landlordReclaimProbe struct {
 	*attackService
 	blockedUID uint64
@@ -281,15 +281,22 @@ var _ gsr.Service = (*landlordReclaimProbe)(nil)
 
 func (*landlordReclaimProbe) OnStart(context.Context, gsr.ServiceContext) error { return nil }
 func (probe *landlordReclaimProbe) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
-	if cmd != 98 {
+	if cmd != 98 && cmd != landlordattack.RoomJoinCommand {
 		return probe.attackService.Handle(self, cmd, args...)
 	}
-	err := probe.handleTick(&landlordReclaimContext{CommandContext: self, blockedUID: probe.blockedUID})
+	current := &landlordReclaimContext{CommandContext: self, blockedUID: probe.blockedUID}
+	var value any
+	var err error
+	if cmd == 98 {
+		err = probe.handleTick(current)
+	} else {
+		value, err = probe.attackService.Handle(current, cmd, args...)
+	}
 	// 同一推送目标随后处理 Call，确保前面的 Send 已被观察端处理，避免用睡眠猜测送达时间。
 	if _, barrierErr := remote(self, "access", "agent", 99); barrierErr != nil {
-		return nil, barrierErr
+		return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "test.push_observer_unavailable", barrierErr.Error())
 	}
-	return nil, err
+	return value, err
 }
 
 type landlordReclaimContext struct {
@@ -361,6 +368,60 @@ func TestReclaimedMembersPushSnapshot(t *testing.T) {
 			idle := landlordTestValue(t, routes, "access", "agent", 99).(map[string]any)
 			if !reflect.DeepEqual(observed, idle) {
 				t.Fatal("空转或退避 Tick 重复推送")
+			}
+		})
+	}
+}
+
+// TestJoinReclaimPushesCurrentMembers 保护 Join 部分回收后失败仍通知现有玩家，成功只推送最终快照，未回收则不补推。
+func TestJoinReclaimPushesCurrentMembers(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		blockedUID uint64
+		players    int
+		pushes     int64
+	}{
+		{name: "partial_failure", blockedUID: 2, players: 2, pushes: 1},
+		{name: "failure_without_change", blockedUID: 1, players: 3},
+		{name: "joined_after_reclaim", players: 2, pushes: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			table, directory := occupiedLandlordTable()
+			room := table.game.Name
+			// 模拟第一次 Release 已执行而回执丢失：目录已放位，旧座位还在本桌等待回收。
+			if _, err := directory.handleRelease(nil, 1, "login", room, table.game.Players[0].Membership, true); err != nil {
+				t.Fatal(err)
+			}
+			table.game.detach(0)
+			table.game.detach(1)
+			route, err := directory.handleResolve(nil, 4, "login")
+			if err != nil {
+				t.Fatal(err)
+			}
+			routes := make(map[cluster.NodeID]string)
+			startLandlordTestNode(t, routes, "access", map[string]gsr.Service{"agent": &landlordMemberPushRecorder{}})
+			startLandlordTestNode(t, routes, "online", map[string]gsr.Service{onlinerpc.ServiceName: &landlordTestBackend{logins: map[uint64]string{}}})
+			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
+				landlordrpc.ServiceName: directory, room: &landlordReclaimProbe{attackService: table, blockedUID: scenario.blockedUID},
+			})
+			_, err = landlordTestRPC(t, routes, "landlord", room, landlordattack.RoomJoinCommand, uint64(4), "login", "access-01", "agent", route["membership"])
+			if (scenario.blockedUID != 0 && !errors.Is(err, runtime.ErrMailboxFull)) || (scenario.blockedUID == 0 && err != nil) {
+				t.Fatalf("Join 没有保留原处理结果: %v", err)
+			}
+			view := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login").(map[string]any)
+			if len(view["players"].([]any)) != scenario.players {
+				t.Fatal("Join 后的实际成员数量不正确")
+			}
+			observed := landlordTestValue(t, routes, "access", "agent", 99).(map[string]any)
+			if observed["count"] != scenario.pushes {
+				t.Fatalf("成员变化推送次数不符: %v", observed)
+			}
+			if scenario.pushes != 0 && !reflect.DeepEqual(view, observed["snapshot"]) {
+				t.Fatal("推送没有反映最新成员状态")
+			}
+			_, memberErr := landlordTestRPC(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(4), "login")
+			if (scenario.blockedUID != 0 && !errors.Is(memberErr, errLandlordStale)) || (scenario.blockedUID == 0 && memberErr != nil) {
+				t.Fatalf("入座身份与 Join 结果不符: %v", memberErr)
 			}
 		})
 	}
