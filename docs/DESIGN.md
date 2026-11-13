@@ -198,6 +198,10 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 
 目录和牌桌分别整体生成 `landlord`、`landlordattack` 契约，节点内协作仍引用源常量。恢复实例复用牌桌实现，但不注册远程名称；私有 `landlordPulse` 的计时命令不生成共享契约。牌桌 Tick 即使有共享编号，也继续拒绝远程来源。
 
+Resolve 为本次进入生成 Membership，预留固定有效 30 秒；再次 Resolve 更新当前预留和期限，不重复增加人数。目录在每桌 `Pending` 中只存最多三份期限，真实成员仍由牌桌拥有。Join 核对 Online、当前 Membership 及期限，过期预留不能用于迟到 Join。
+
+牌桌通过现有 Pulse 上报不含手牌的三人身份值快照，由目录执行 `ReconcileReservations / 14`：实际成员与当前预留一致时解除期限，Call 回执丢失不影响确认；到期且未入座时条件释放；新登录未完成且到期时恢复实际成员的原路由，保留原手牌和待结算身份。目录只检查该桌待预留，不扫描其他桌，不反向 Call 牌桌。恢复服务不参与进入预留核对。
+
 [attackGame](../nodes/landlord/attackgame.go) 用一个 phase 表示 `waiting → calling → robbing → playing → finished`，规则如下：
 
 1. 三人入座且全部准备后洗牌，每人 17 张，另留 3 张底牌；随机选择首叫者。首个叫地主者成为候选，不叫者本次不再参与抢地主；有资格玩家依次抢，有人抢后首叫者可最终抢回。无其他候选时可直接确定地主，跳过后续询问。
@@ -234,7 +238,8 @@ prepareOperation：固定本局 OperationID 与三人金额
 - 有效回执只确认当前操作的完整终态，确认后不重复调用结算。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，从本次等待结束后至少退避 1 秒再清理；等待期间的 Tick 不访问 Redis，也不重新调用结算。
 - Leave 的 true 表示本桌已接纳离开：先清推送地址，waiting 时同时取消 Ready；目录回收可能尚未完成。进行中或仍有待确认结算时保留三人身份；waiting 或结算已确认时，通过本地 Call 请求目录释放成员，确认无同桌新预留后才移除座位。释放失败不撤销已接纳的离开，保留原 LoginID/Membership 供后续回收，不覆盖新成员。
 - Pulse 一轮回收中实际移除成员后，向剩余在线玩家发起一次最新快照推送；部分回收成功、随后报错时也通知已完成的变化。新预留阻止回收、空转 Tick 或纯 Redis 清理不额外触发此通知。沿用 Send 的接纳语义，推送失败不撤销回收，客户端仍可查询当前快照。
-- 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。目录释放每次最多等待 1 秒，失败后从本次等待结束至少退避 1 秒再由 Pulse 补做，积压 Tick 不反复等待；只增加本桌 `releaseRetryAt`，已离开状态由空推送地址判断。waiting 的 Join 校验 Online 和当前预留后，会立即核对待回收座位，不受后台退避阻挡，避免目录已放位而桌仍占满。空桌在成员及 Redis 待记录清理完成后退出；刚创建等待首次 Join 的桌不提前退出。
+- 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。目录释放每次最多等待 1 秒，失败后用 `releaseRetryAt` 从等待结束至少退避 1 秒再补做；已离开状态由空推送地址判断。waiting 的 Join 会立即核对待回收座位，不受后台退避阻挡，避免目录已放位而桌仍占满。
+- 预留核对最多等待 1 秒，无论成功或失败，均用 `reservationCheckAt` 从本次等待结束至少间隔 1 秒再检查；目录不可用时保留原状态。即使无人入座，牌桌仍继续核对；只有目录确认没有成员或有效预留、桌内无人且无待结算/Redis 清理任务时才退出。最后一个实际成员离开也沿用此边界，空桌不会提前终止其他人的有效预留。
 - 启动时加载 Redis 待请求，为各请求创建恢复专用 AttackService；不发布可加入桌名，也不向旧连接广播，确认并清理后退出。只恢复已保存的局末账务，不恢复进行中手牌。清理前崩溃会再次按原 ID 幂等补交。
 
 ## 7. Settlement：并行执行与权威账务
@@ -326,6 +331,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 地鼠进入、换组与成员实例隔离 | [进入协作用例](../nodes/mole/moleentryservice_cluster_test.go)、[换组回收时序用例](../nodes/mole/moleentryservice_retry_test.go) |
 | 地鼠目录回收、内存余额、回执、重试与检查点恢复 | [目录回收用例](../nodes/mole/moleservice_test.go)、[Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
 | 斗地主成员回收、重登隔离、Join 核对与慢目录退避 | [成员回收用例](../nodes/landlord/attackservice_test.go)、[牌桌通信及 Pulse 用例](../nodes/landlord/attackservice_cluster_test.go) |
+| 斗地主未入座预留到期、空桌退出及超时已入座保护 | [期限规则用例](../nodes/landlord/landlordreservation_test.go)、[真实 TCP 与 Pulse 用例](../nodes/landlord/landlordreservation_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试、暂停与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Journal 故障用例](../nodes/landlord/landlordjournal_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
 | 事务、全局幂等、锁冲突与读写 Call 池并行 | [SQL 用例](../nodes/settlement/settlement_mysql_test.go)、[Call 池用例](../nodes/settlement/settlement_cluster_test.go)、[真实并发用例](../nodes/settlement/settlement_concurrency_live_test.go) |
 | 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |

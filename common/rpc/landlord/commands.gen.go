@@ -6,9 +6,10 @@ package landlord
 const ServiceName = "landlord"
 
 const (
-	ResolveCommand    = 1
-	ReleaseCommand    = 10
-	CheckRouteCommand = 11
-	SealCommand       = 12
-	DiscardCommand    = 13
+	ResolveCommand               = 1
+	ReleaseCommand               = 10
+	CheckRouteCommand            = 11
+	SealCommand                  = 12
+	DiscardCommand               = 13
+	ReconcileReservationsCommand = 14
 )

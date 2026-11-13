@@ -118,6 +118,10 @@ func (game *attackGame) detach(seat int) {
 
 func (game *attackGame) remove(seat int) bool {
 	game.Players[seat] = landlordPlayer{}
+	return game.empty()
+}
+
+func (game *attackGame) empty() bool {
 	for _, player := range game.Players {
 		if player.UserID != 0 {
 			return false

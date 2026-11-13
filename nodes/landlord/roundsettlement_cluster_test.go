@@ -209,7 +209,7 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 			service := newAttackService(game.Name, journal, nil, "settlement")
 			service.game = *game
 			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
-				game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: &landlordTestBackend{},
+				game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: directoryForLandlordTables(service),
 			})
 			var view map[string]any
 			if scenario.timeout {
@@ -281,6 +281,9 @@ func TestSlowCleanupKeepsSnapshotResponsive(t *testing.T) {
 	journal.client.AddHook(fault)
 	defer fault.blocked.Store(false)
 	game := testLandlordGame(t)
+	for i := range game.Players {
+		game.Players[i].AccessNode, game.Players[i].AgentName = "access", "agent"
+	}
 	game.Phase, game.Winner = "finished", game.Landlord
 	service := newAttackService(game.Name, journal, nil, "settlement")
 	service.game = *game
@@ -288,7 +291,7 @@ func TestSlowCleanupKeepsSnapshotResponsive(t *testing.T) {
 	service.settlement.operation.Status = "committed"
 	service.settlement.cleanupPending = true
 	routes := map[cluster.NodeID]string{}
-	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: directoryForLandlordTables(service)})
 	time.Sleep(2 * time.Second)
 	_, err := landlordTestRPC(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login")
 	if err != nil {
@@ -315,7 +318,7 @@ func TestLandlordJournalOutageRetriesOriginalOperation(t *testing.T) {
 	want := operationForGame(finished).wire()
 	service := newAttackService(game.Name, journal, nil, "settlement")
 	service.game = *game
-	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: directoryForLandlordTables(service)})
 	view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
 		game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)}).(map[string]any)
 	if view["settlement"].(map[string]any)["status"] != "pending" || backend.calls.Load() != 0 || journal.client.HLen(context.Background(), journal.key).Val() != 0 {
@@ -368,7 +371,7 @@ func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 			game.Players[game.Seat].Hand = []int64{3}
 			service := newAttackService(game.Name, journal, nil, "settlement")
 			service.game = *game
-			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}})
+			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: directoryForLandlordTables(service)})
 			view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
 				game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)}).(map[string]any)
 			if view["settlement"].(map[string]any)["status"] != "pending" || !journal.client.HExists(context.Background(), journal.key, "landlord-"+game.Name).Val() {
@@ -423,8 +426,12 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 	other := newAttackService("other-table", journal, nil, "settlement")
 	other.game = *testLandlordGame(t)
 	other.game.Name = "other-table"
+	for i := range other.game.Players {
+		other.game.Players[i].UserID += 10
+	}
 	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
 		game.Name: &landlordSettlementProbe{service}, other.game.Name: &landlordSettlementProbe{other},
+		landlordrpc.ServiceName: directoryForLandlordTables(service, other),
 	})
 	type response struct {
 		value any
@@ -447,7 +454,7 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 		t.Fatal("局末 Call 未到达结算")
 	}
 	begin := time.Now()
-	landlordTestValue(t, routes, "landlord", other.game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login")
+	landlordTestValue(t, routes, "landlord", other.game.Name, landlordattack.RoomSnapshotCommand, uint64(11), "login")
 	if time.Since(begin) >= 500*time.Millisecond {
 		t.Fatal("其他桌被结算等待阻塞")
 	}

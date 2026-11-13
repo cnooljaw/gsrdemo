@@ -20,6 +20,8 @@ type tableCleanupContext struct {
 	releaseError      error
 	errorAfterRelease bool
 	releaseCalls      int
+	reconcileError    error
+	reconcileCalls    int
 }
 
 var _ gsr.CommandContext = (*tableCleanupContext)(nil)
@@ -32,7 +34,17 @@ func (*tableCleanupContext) Logger() *logging.ServiceLogger { return nil }
 func (*tableCleanupContext) Cluster() *gsr.Cluster { return &gsr.Cluster{} }
 
 func (self *tableCleanupContext) CallName(_ context.Context, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
-	if name != landlordrpc.ServiceName || command != landlordrpc.ReleaseCommand {
+	if name != landlordrpc.ServiceName {
+		return nil, runtime.ErrUnknownCommand
+	}
+	if command == reconcileReservationsCommand {
+		self.reconcileCalls++
+		if self.reconcileError != nil {
+			return nil, self.reconcileError
+		}
+		return self.directory.Handle(self, command, args...)
+	}
+	if command != landlordrpc.ReleaseCommand {
 		return nil, runtime.ErrUnknownCommand
 	}
 	self.releaseCalls++
@@ -56,6 +68,23 @@ func occupiedLandlordTable() (*attackService, *landlordService) {
 		directory.routes[uid] = landlordRoute{service.game.Name, "login", membership}
 	}
 	return service, directory
+}
+
+// directoryForLandlordTables 为直接创建的牌桌配套真实目录，不用通用后端冒充目录命令。
+func directoryForLandlordTables(tables ...*attackService) *landlordService {
+	directory := newLandlordService(landlordJournal{}, "settlement")
+	for _, service := range tables {
+		table := landlordTable{Sealed: service.game.Phase != "waiting"}
+		for _, player := range service.game.Players {
+			if player.UserID == 0 {
+				continue
+			}
+			table.Count++
+			directory.routes[player.UserID] = landlordRoute{service.game.Name, player.LoginID, player.Membership}
+		}
+		directory.tables[service.game.Name] = table
+	}
+	return directory
 }
 
 func detachedTable(t *testing.T) (*attackService, *tableCleanupContext) {
@@ -166,11 +195,34 @@ func TestDetachedTableKeepsPendingParticipants(t *testing.T) {
 	}
 }
 
-// TestEmptyReservedTableWaitsForFirstJoin 保护刚创建但尚未收到 Join 的空桌不会被 Pulse 提前回收。
-func TestEmptyReservedTableWaitsForFirstJoin(t *testing.T) {
+// TestEmptyTableWaitsOnlyForValidReservations 保护首次 Join 前或最后成员离开后的空桌等待有效预留，预留过期后一起回收。
+func TestEmptyTableWaitsOnlyForValidReservations(t *testing.T) {
 	service := newAttackService("new-table", landlordJournal{}, nil, "settlement")
-	self := &tableCleanupContext{}
+	directory := newLandlordService(landlordJournal{}, "settlement")
+	directory.tables[service.game.Name] = landlordTable{}
+	if _, err := directory.handleResolve(nil, 1, "login"); err != nil {
+		t.Fatal(err)
+	}
+	self := &tableCleanupContext{directory: directory}
 	if err := service.handleTick(self); err != nil || self.exited {
 		t.Fatalf("首次 Join 前桌已退出: %v", err)
+	}
+	route, err := directory.handleResolve(nil, 2, "login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.game.join(2, "login", "access", "agent", route["membership"].(string)); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := service.handleLeave(self, 2, "login"); err != nil || !left || self.exited {
+		t.Fatalf("最后成员离开时忽略了其他预留: %v", err)
+	}
+	if err := service.handleTick(self); err != nil || self.exited {
+		t.Fatalf("有效预留仍在时空桌退出: %v", err)
+	}
+	directory.tables[service.game.Name].Pending[1] = time.Now().Add(-time.Second)
+	service.reservationCheckAt = time.Time{}
+	if err := service.handleTick(self); err != nil || !self.exited || len(directory.routes) != 0 || len(directory.tables) != 0 {
+		t.Fatalf("过期预留没有释放空桌: %v", err)
 	}
 }

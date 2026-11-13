@@ -15,15 +15,17 @@ import (
 //
 //rpc:service landlord public name=landlordName
 const (
-	landlordName                        = "landlord"
-	resolveCommand    runtime.CommandID = 1
-	releaseCommand    runtime.CommandID = 10
-	checkRouteCommand runtime.CommandID = 11
-	sealCommand       runtime.CommandID = 12
-	discardCommand    runtime.CommandID = 13
+	landlordName                                   = "landlord"
+	resolveCommand               runtime.CommandID = 1
+	releaseCommand               runtime.CommandID = 10
+	checkRouteCommand            runtime.CommandID = 11
+	sealCommand                  runtime.CommandID = 12
+	discardCommand               runtime.CommandID = 13
+	reconcileReservationsCommand runtime.CommandID = 14
 )
 
 const callTimeout = time.Second
+const reservationTimeout = 30 * time.Second
 
 var (
 	errLandlordInput = runtime.NewStatusError(runtime.ErrorClassDomain, "landlord.invalid_request", "invalid landlord request")
@@ -36,8 +38,15 @@ var (
 
 type landlordRoute struct{ Room, LoginID, Membership string }
 type landlordTable struct {
-	Count  int
-	Sealed bool
+	Count   int
+	Sealed  bool
+	Pending map[uint64]time.Time // 只保存本桌尚未核对入座的预留期限，最多三份。
+}
+
+// landlordMember 是牌桌当前成员的身份快照，不携带手牌或共享引用。
+type landlordMember struct {
+	UserID              uint64
+	LoginID, Membership string
 }
 
 // landlordService 只拥有随机凑桌的预留目录，不等待 Online、钱包、出牌或结算。
@@ -54,11 +63,12 @@ var _ gsr.Service = (*landlordService)(nil)
 func newLandlordService(journal landlordJournal, settlementNode cluster.NodeID) *landlordService {
 	service := &landlordService{routes: map[uint64]landlordRoute{}, tables: map[string]landlordTable{}, journal: journal, settlementNode: settlementNode}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		resolveCommand:    service.handleResolve,
-		releaseCommand:    service.handleRelease,
-		checkRouteCommand: service.handleCheck,
-		sealCommand:       service.handleSeal,
-		discardCommand:    service.handleDiscard,
+		resolveCommand:               service.handleResolve,
+		releaseCommand:               service.handleRelease,
+		checkRouteCommand:            service.handleCheck,
+		sealCommand:                  service.handleSeal,
+		discardCommand:               service.handleDiscard,
+		reconcileReservationsCommand: service.handleReconcileReservations,
 	})
 	return service
 }
@@ -143,11 +153,21 @@ func (service *landlordService) handleResolve(self gsr.CommandContext, uid uint6
 	}
 	route.LoginID, route.Membership = login, membership
 	service.routes[uid] = route
+	table := service.tables[route.Room]
+	if table.Pending == nil {
+		table.Pending = make(map[uint64]time.Time)
+	}
+	table.Pending[uid] = time.Now().Add(reservationTimeout)
+	service.tables[route.Room] = table
 	return map[string]any{"room_name": route.Room, "membership": membership}, nil
 }
 
 func (service *landlordService) handleCheck(_ gsr.CommandContext, uid uint64, login, room, membership string) (bool, error) {
-	return service.routes[uid] == (landlordRoute{room, login, membership}), nil
+	if service.routes[uid] != (landlordRoute{room, login, membership}) {
+		return false, nil
+	}
+	deadline := service.tables[room].Pending[uid]
+	return deadline.IsZero() || time.Now().Before(deadline), nil
 }
 
 func (service *landlordService) handleSeal(_ gsr.CommandContext, room string, sealed bool) error {
@@ -172,6 +192,7 @@ func (service *landlordService) handleRelease(_ gsr.CommandContext, uid uint64, 
 	delete(service.routes, uid)
 	table := service.tables[room]
 	table.Count--
+	delete(table.Pending, uid)
 	if waiting {
 		table.Sealed = false
 	}
@@ -191,6 +212,68 @@ func (service *landlordService) handleDiscard(_ gsr.CommandContext, room string)
 		}
 	}
 	return nil
+}
+
+func (service *landlordService) handleReconcileReservations(self gsr.CommandContext, room string, members [3]landlordMember) (bool, error) {
+	if self.Source() == 0 {
+		return false, runtime.ErrUnknownCommand
+	}
+	if !validIdentity(room) {
+		return false, errLandlordInput
+	}
+	seen := make(map[uint64]bool, 3)
+	for _, member := range members {
+		if member.UserID == 0 {
+			continue
+		}
+		if seen[member.UserID] || !validIdentity(member.LoginID) || !validIdentity(member.Membership) {
+			return false, errLandlordInput
+		}
+		seen[member.UserID] = true
+	}
+	return service.reconcileReservations(room, members, time.Now()), nil
+}
+
+func (service *landlordService) reconcileReservations(room string, members [3]landlordMember, now time.Time) bool {
+	table, exists := service.tables[room]
+	if !exists {
+		return false
+	}
+	for uid, deadline := range table.Pending {
+		route := service.routes[uid]
+		if route.Room != room {
+			delete(table.Pending, uid)
+			continue
+		}
+		var current landlordMember
+		for _, member := range members {
+			if member.UserID == uid {
+				current = member
+				break
+			}
+		}
+		if current.UserID != 0 && current.LoginID == route.LoginID && current.Membership == route.Membership {
+			delete(table.Pending, uid) // 实际入座已发生，Call 的回执是否收到不影响确认。
+			continue
+		}
+		if now.Before(deadline) {
+			continue
+		}
+		if current.UserID != 0 {
+			// 未完成的新登录不能永久挡住原成员的离开，也不能清掉原手牌。
+			service.routes[uid] = landlordRoute{room, current.LoginID, current.Membership}
+		} else {
+			delete(service.routes, uid)
+			table.Count--
+		}
+		delete(table.Pending, uid)
+	}
+	if table.Count == 0 {
+		delete(service.tables, room)
+		return false
+	}
+	service.tables[room] = table
+	return true
 }
 
 func remote(self gsr.ServiceContext, node, name string, command runtime.CommandID, args ...any) (any, error) {

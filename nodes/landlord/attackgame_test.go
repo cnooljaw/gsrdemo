@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ func testLandlordGame(t *testing.T) *attackGame {
 	t.Helper()
 	g := newAttackGame("table-test")
 	for i := range g.Players {
-		g.Players[i] = landlordPlayer{UserID: uint64(i + 1), LoginID: "login", Ready: true}
+		g.Players[i] = landlordPlayer{UserID: uint64(i + 1), LoginID: "login", Membership: fmt.Sprintf("seat-%d", i), Ready: true}
 	}
 	deck, err := shuffledDeck()
 	if err != nil {

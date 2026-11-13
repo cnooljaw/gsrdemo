@@ -170,8 +170,8 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 
 | Service / Command | 方式 | 顺序参数 | 成功结果 |
 | --- | --- | --- | --- |
-| `landlord / 1` Resolve | Call | `U, L` | map：`room_name/membership string`，服务端预留桌位 |
-| `RoomName / 1` Join | Call | `U, L, N, A, M` | 本人桌快照 map；核对 Online 及目录成员实例 |
+| `landlord / 1` Resolve | Call | `U, L` | map：`room_name/membership string`，本次预留有效 30 秒；重试会生成新 Membership 并更新期限 |
+| `RoomName / 1` Join | Call | `U, L, N, A, M` | 本人桌快照 map；核对 Online、目录成员实例及预留期限；过期返回 stale_login |
 | `RoomName / 2` Ready | Call | `U, L` | 本人桌快照；钱包余额至少 20，未冻结资金；失败保持原桌状态，发牌后再 Ready 返回 busy，详见[准备与发牌](DESIGN.md#61-凑桌规则与可见性) |
 | `RoomName / 6` Call | Call | `U, L, turn uint64, yes bool` | 本人桌快照；叫/不叫 |
 | `RoomName / 7` Rob | Call | `U, L, turn uint64, yes bool` | 本人桌快照；抢/不抢 |
@@ -285,7 +285,20 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | mole-submission / 2、3 | 旧查询入口已移除，编号不复用 |
 | settlement / 5 Summary | 已移除，无汇总查询接口，编号不复用 |
 
-Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等约定为同节点协作，按实际 Handler 使用 owner 私有类型及本地消息，不向客户端开放。公开 Service 的命令编号整体生成，不代表私有类型可远程编解码或取消来源限制；私有 Service 不生成共享契约。地鼠缓存 Resume/SetBalance/Forget 均携带当前选入尝试的 Membership，旧成员的回收不作用于当前缓存；换组时的身份和余额恢复见[进入协调](DESIGN.md#52-进入与即时命中)，目录回收通知的补投与限量边界见[地鼠故障边界](DESIGN.md#54-检查点与故障边界)。斗地主 Release 使用本地 Call 返回 bool，false 表示同桌已有新预留，需要保留原座位等待 Join，true 表示旧成员可移除。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
+### 2.9 节点内协作
+
+Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等约定为同节点协作，按实际 Handler 使用 owner 私有类型及本地消息，不向客户端开放。公开 Service 的命令编号整体生成，不代表私有类型可远程编解码或取消来源限制；私有 Service 不生成共享契约。地鼠缓存 Resume/SetBalance/Forget 均携带当前选入尝试的 Membership，旧成员的回收不作用于当前缓存；换组时的身份和余额恢复见[进入协调](DESIGN.md#52-进入与即时命中)，目录回收通知的补投与限量边界见[地鼠故障边界](DESIGN.md#54-检查点与故障边界)。
+
+以下斗地主调用从 AttackService 发往本节点目录；牌桌 Tick 由本地 Pulse Send，继续拒绝远程来源。
+
+| Service / Command | 方式 | 顺序参数 | 结果 |
+| --- | --- | --- | --- |
+| `landlord / 11` CheckRoute | Call | `U, L, roomName string, M` | bool；当前预留身份匹配且尚未过期，或已解除期限 |
+| `landlord / 12` Seal | Send | `roomName string, sealed bool` | 封桌接纳，无业务回执 |
+| `landlord / 10` Release | Call | `U, L, roomName string, M, waiting bool` | false：同桌有新预留，保留原座位；true：旧成员可移除 |
+| `landlord / 14` ReconcileReservations | Call | `roomName string, members [3]landlordMember`；元素只含 UserID/LoginID/Membership，空位 UserID=0 | bool；true：目录仍占位，false：没有成员或有效预留；仅接收非零本地来源 |
+
+14 号使用 Go 值类型身份快照，不传手牌、不做内部 Protobuf 编解码。入座确认、到期回收、重登保护和空桌退出见[斗地主设计](DESIGN.md#61-凑桌规则与可见性)及[恢复边界](DESIGN.md#63-重试清理与恢复)。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
 
 ## 3. 主要调用链
 

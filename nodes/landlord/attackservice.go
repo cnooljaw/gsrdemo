@@ -28,14 +28,16 @@ const (
 )
 
 const releaseRetryDelay = time.Second
+const reservationCheckInterval = time.Second
 
 // attackService 独占一桌状态；局末直接 Call 结算，确认后推送结果并清理待请求。
 type attackService struct {
-	game           attackGame
-	settlement     roundSettlement
-	recovery       bool
-	releaseRetryAt time.Time
-	dispatcher     *gsr.Dispatcher
+	game               attackGame
+	settlement         roundSettlement
+	recovery           bool
+	releaseRetryAt     time.Time
+	reservationCheckAt time.Time
+	dispatcher         *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*attackService)(nil)
@@ -93,31 +95,57 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 		}
 	}
 	service.retrySettlement(self)
-	if service.settlement.pending() || (service.game.Phase != "waiting" && service.game.Phase != "finished") {
-		return nil
-	}
 	if time.Now().Before(service.releaseRetryAt) {
 		return nil
 	}
-	reclaimed, err := service.releaseDetachedPlayers(self)
-	if reclaimed {
-		service.pushSnapshots(self)
+	if !service.settlement.pending() && (service.game.Phase == "waiting" || service.game.Phase == "finished") {
+		reclaimed, err := service.releaseDetachedPlayers(self)
+		if reclaimed {
+			service.pushSnapshots(self)
+		}
+		if err != nil {
+			return err
+		}
 	}
+	if service.recovery {
+		if !service.settlement.pending() && !service.settlement.cleanupPending {
+			self.Exit()
+			return nil
+		}
+		return nil
+	}
+	if time.Now().Before(service.reservationCheckAt) {
+		return nil
+	}
+	occupied, err := service.reconcileReservations(self)
 	if err != nil {
 		return err
 	}
-	if (reclaimed || service.settlement.operation != nil) && !service.settlement.cleanupPending {
-		if !service.recovery {
-			for _, player := range service.game.Players {
-				if player.UserID != 0 {
-					return nil
-				}
-			}
-		}
+	if !occupied && service.game.empty() && !service.settlement.pending() && !service.settlement.cleanupPending {
 		self.Exit()
 		return nil
 	}
 	return nil
+}
+
+// reconcileReservations 上报值类型身份快照；目录不反向 Call 本桌，避免相互等待。
+func (service *attackService) reconcileReservations(self gsr.ServiceContext) (bool, error) {
+	defer func() { service.reservationCheckAt = time.Now().Add(reservationCheckInterval) }()
+	var members [3]landlordMember
+	for seat, player := range service.game.Players {
+		members[seat] = landlordMember{player.UserID, player.LoginID, player.Membership}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	value, err := self.CallName(ctx, landlordName, reconcileReservationsCommand, service.game.Name, members)
+	if err != nil {
+		return false, err
+	}
+	occupied, ok := value.(bool)
+	if !ok {
+		return false, errLandlordInput
+	}
+	return occupied, nil
 }
 
 // releaseDetachedPlayers 在牌局不再需要手牌后回收已离开成员；尚未完成的结算仍保留全部参与者。
@@ -269,13 +297,8 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 	if !released {
 		return true, nil
 	}
-	if service.game.remove(seat) {
-		if service.settlement.cleanupPending {
-			return true, nil
-		}
-		self.Exit()
-		return true, nil
-	}
+	service.game.remove(seat)
+	// 即使本桌已空，也由 Pulse 核对其他有效预留后再退出。
 	service.pushSnapshots(self)
 	return true, nil
 }
