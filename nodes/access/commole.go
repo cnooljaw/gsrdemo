@@ -42,13 +42,20 @@ func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	if err != nil {
 		return enterFailure(err)
 	}
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return errInvalidBackendReply
+	}
+	attackName, ok := fields["attack_name"].(string)
+	if !ok || attackName == "" {
+		return errInvalidBackendReply
+	}
+	// Join 已返回，先保留可用清理目标；其余字段非法时仍能按原身份 Leave。
+	mole.attackName = cluster.ServiceName(attackName)
 	snapshot, err := clientSnapshot(value)
 	if err != nil {
 		return err
 	}
-	// Join 已返回，先保留断线清理路由；余额非法时由 Agent 封闭业务并关闭连接。
-	mole.attackName = cluster.ServiceName(snapshot.AttackName)
-	fields := value.(map[string]any)
 	silver, err := clientBalance(fields["silver"])
 	if err != nil {
 		return err

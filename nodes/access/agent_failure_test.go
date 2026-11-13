@@ -61,7 +61,7 @@ func TestAgentFailureCloserStartupFailureCleansSession(t *testing.T) {
 
 // TestGameInvalidEnterReplyKeepsCleanupRoute 保护 Join 后回包非法时保留已知路由，断线仍按当前身份向原目标尝试 Leave。
 func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
-	for _, name := range []string{"mole balance", "landlord snapshot", "landlord wrong room"} {
+	for _, name := range []string{"mole balance", "mole snapshot", "mole missing route", "mole invalid route", "mole empty route", "mole nonmap", "landlord snapshot", "landlord wrong room"} {
 		t.Run(name, func(t *testing.T) {
 			leaves := 0
 			deps := componentDependencies{
@@ -71,7 +71,21 @@ func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
 					switch {
 					case node == "mole" && service == moleentry.ServiceName && command == moleentry.MoleEnterCommand:
 						snapshot := fixtureSnapshot()
-						snapshot["silver"] = map[string]any{"balance": "invalid"}
+						snapshot["silver"] = map[string]any{"balance": int64(1000)}
+						switch name {
+						case "mole balance":
+							snapshot["silver"] = map[string]any{"balance": "invalid"}
+						case "mole snapshot":
+							snapshot["seat"] = "invalid"
+						case "mole missing route":
+							delete(snapshot, "attack_name")
+						case "mole invalid route":
+							snapshot["attack_name"] = uint64(7)
+						case "mole empty route":
+							snapshot["attack_name"] = ""
+						case "mole nonmap":
+							return nil, nil
+						}
 						return snapshot, nil
 					case node == "landlord" && service == landlordrpc.ServiceName && command == landlordrpc.ResolveCommand:
 						return map[string]any{"room_name": "original-room", "membership": "member"}, nil
@@ -94,11 +108,16 @@ func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
 			}
 			var game gameComponent
 			id := demopb.MsgId_C2S_ENTER
-			if name == "mole balance" {
-				game = newComMole(deps)
-			} else {
+			if name == "landlord snapshot" || name == "landlord wrong room" {
 				game = newComLandlord(deps)
 				id = demopb.MsgId_C2S_LANDLORD_ENTER
+			} else {
+				mole := newComMole(deps)
+				if name != "mole balance" && name != "mole snapshot" {
+					// 无可用新路由时，非法回包不得抹掉原有清理目标。
+					mole.attackName = "attack"
+				}
+				game = mole
 			}
 			registry, err := protocol.NewRegistry(demopb.MessageCatalogDemoV1Game)
 			if err != nil {
