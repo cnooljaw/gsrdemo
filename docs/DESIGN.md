@@ -88,7 +88,7 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 - 进入流程通过保留原错误的私有标记交给错误策略，不在 Agent 中硬编码各游戏的进入 MsgID。超时、取消、链路故障及未分类 Handler 失败不能证明未加入；业务明确拒绝、邮箱满和明确未接纳/目标消失仍返回原错误，不触发此关闭规则。斗地主 Join 结果未知时保留已知房间，断线按当前 UserID、LoginID 尽力 Leave；地鼠 Entry 未返回组路由时不能定向 Leave，只能条件 Unbind，残留沿用后续显式登录/进入覆盖。两者都不自动重试或宣称已回滚。
 - `HandleClientMessage` 在 closing 时丢弃已入邮箱的后续客户端请求，必要清理 Command 仍正常处理。选择关闭后不立即 Exit/Close，等待原 `ClientDisconnectedCommand`，尽力 Leave、条件 Unbind 后退出；OnStop 幂等 Close。清理失败不代表后端未加入。
 - Gate 沿用默认一秒总预算，覆盖当前写入、旧队列、末帧和关闭；写完立即关闭，接纳失败/写失败/超时仍有界关闭。SendAndClose 的 nil 只表示接纳，不保证客户端送达；无可靠 RequestID、已知 Notify 或错误编码失败只关闭，不伪造响应。请求已成功响应后的错误、Handler panic 不保证经过错误策略。正式边界见 GSR [发送后关闭指南](https://github.com/cnooljaw/gsr/blob/v1.0.4/docs/guides/SEND-AND-CLOSE.md)。
-- Bind 失败或超时不开放游戏，不自动重发 Bind；按候选 LoginID 尽力清理。普通断线依次调用游戏组件 Disconnect，再条件 Unbind，清空身份；OnStop 关闭连接。
+- Bind 失败或超时不开放游戏，不自动重发 Bind；按候选 LoginID 尽力清理。Bind 可能已替换旧位置，清理不会恢复旧绑定，旧连接也可能尚未收到替换通知；需要后续显式登录重建位置，不能重放旧 Bind 覆盖较新登录。普通断线依次调用游戏组件 Disconnect，再条件 Unbind，清空身份；OnStop 关闭连接。
 - 进程骤停不能执行清理，Online 或游戏目录可能暂留旧位置，由后续显式登录/进入覆盖。旧 LoginID 的替换通知、操作和解绑不能作用于新登录。
 
 实现入口：[agent_login.go](../nodes/access/agent_login.go)、[agentSession](../nodes/access/agentsession.go)。

@@ -30,7 +30,7 @@
 
 用户名为 1～64 字节，仅允许 `A-Z`、`a-z`、`0-9`、`_-.`，密码为 1～128 字节。Token 是 43 字符的 Base64URL 字符串；有有效 Token 时可直接 Login，无需再次提交密码。Login 的字段 1/2 及名称 username/password 已 reserved，不接受旧密码登录。
 
-未响应的认证或 Login 失败时，错误策略先封闭后续客户端业务，Dispatcher 经 Gate SendAndClose 尝试写出唯一 ErrorResponse 后有界关闭；接纳不保证送达。失败连接不会替换已有登录。普通断线不撤销 Token，Token 过期也不自动中断已登录连接。
+未响应的认证或 Login 失败时，错误策略先封闭后续客户端业务，Dispatcher 经 Gate SendAndClose 尝试写出唯一 ErrorResponse 后有界关闭；接纳不保证送达。未登录新连接在密码认证或 Token 校验阶段失败，不会修改其他连接的在线绑定；Bind 后的失败边界见[失败、替换与断线](DESIGN.md#33-失败替换与断线)。普通断线不撤销 Token，Token 过期也不自动中断已登录连接。
 
 ### 1.3 地鼠协议
 

@@ -99,6 +99,10 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			}
 			previous := service.current
 			service.current = map[string]any{"login_id": args[1], "access_node": args[2], "agent_name": args[3]}
+			if service.scenario == "bind-result-unknown" && previous != nil {
+				// 注入目录已替换、调用方未取得成功回执的情况。
+				return nil, runtime.ErrCallTimeout
+			}
 			if previous == nil {
 				return nil, nil
 			}

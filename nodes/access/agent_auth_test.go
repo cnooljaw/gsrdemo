@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
@@ -80,4 +81,36 @@ func TestAccessAuthFailureClosesOnlyFailedConnection(t *testing.T) {
 		}
 	}
 	accessProcessResponse(t, healthy, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &demopb.EnterResponse{})
+}
+
+// TestAccessUnknownBindCleansCandidate 保护 Bind 已替换但结果未知时关闭失败连接、清理候选身份，后续显式登录可重建目录。
+func TestAccessUnknownBindCleansCandidate(t *testing.T) {
+	address, backend, _ := startAccessBusiness(t, "bind-result-unknown")
+	old := dialAccess(t, address)
+	accessLoginResponse(t, old, "alice", "password", &demopb.LoginResponse{})
+	previous := accessFixtureRPC(t, backend, 99).(map[string]any)
+
+	failed := dialAccess(t, address)
+	response := accessLogin(t, failed, "alice", "password")
+	if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+		t.Fatal("Bind 结果未知却返回登录成功", response)
+	}
+	accessExpectNoMoreMessages(t, failed)
+	deadline := time.Now().Add(time.Second)
+	for current := accessFixtureRPC(t, backend, 99); current != nil; current = accessFixtureRPC(t, backend, 99) {
+		if current.(map[string]any)["login_id"] == previous["login_id"] {
+			t.Fatal("恢复了旧绑定，掩盖了已执行的替换")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("未按候选 LoginID 清理已生效的绑定", current)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	rebuilt := dialAccess(t, address)
+	accessLoginResponse(t, rebuilt, "alice", "password", &demopb.LoginResponse{})
+	current := accessFixtureRPC(t, backend, 99).(map[string]any)
+	if current["login_id"] == previous["login_id"] {
+		t.Fatal("显式重登复用了旧身份")
+	}
 }
