@@ -58,6 +58,7 @@ func TestAgentDisconnectExitsAndStopClosesClient(t *testing.T) {
 	if _, err := agent.Handle(self, runtime.CommandID(0)); !errors.Is(err, runtime.ErrUnknownCommand) || self.exited {
 		t.Fatalf("unknown command: exited=%v, err=%v", self.exited, err)
 	}
+	agent.closing = true // closing 只封闭客户端请求，断线 Command 仍须执行。
 	if _, err := agent.Handle(self, gate.ClientDisconnectedCommand); err != nil || !self.exited {
 		t.Fatalf("disconnect: exited=%v, err=%v", self.exited, err)
 	}

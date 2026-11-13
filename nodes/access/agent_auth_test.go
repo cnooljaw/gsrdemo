@@ -74,7 +74,7 @@ func TestAccessAuthFailureClosesOnlyFailedConnection(t *testing.T) {
 		if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 			t.Fatal("未收到认证错误")
 		}
-		accessExpectClosed(t, failed)
+		accessExpectNoMoreMessages(t, failed)
 		if current := accessFixtureRPC(t, backend, 99).(map[string]any); current["login_id"] != before["login_id"] {
 			t.Fatal("失败连接影响旧登录")
 		}

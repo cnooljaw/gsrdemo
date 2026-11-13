@@ -9,7 +9,7 @@ import (
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
-	"github.com/cnooljaw/gsr/logging"
+	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
@@ -22,40 +22,100 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// rejectCreateContext 只注入辅助 Service 创建失败，清理仍使用当前真实回调的能力。
-type rejectCreateContext struct {
-	gsr.ServiceContext
-	exited bool
+// terminalClient 仅记录 Agent 选择的发送入口，不模拟 Gate 排队和网络写出。
+type terminalClient struct {
+	normal, terminal, closes int
+	frame                    []byte
+	terminalErr              error
 }
 
-func (*rejectCreateContext) CreateService(context.Context, gsr.Service) (runtime.ServiceID, error) {
-	return 0, errors.New("service creation refused")
+func (client *terminalClient) Send(frame []byte) error {
+	client.normal++
+	client.frame = append([]byte(nil), frame...)
+	return nil
+}
+func (client *terminalClient) SendAndClose(frame []byte) error {
+	client.terminal++
+	client.frame = append([]byte(nil), frame...)
+	return client.terminalErr
+}
+func (client *terminalClient) Close() error {
+	client.closes++
+	return nil
 }
 
-func (self *rejectCreateContext) Exit() { self.exited = true }
-
-// TestAgentFailureCloserStartupFailureCleansSession 保护关闭辅助 Service 创建失败时仍尝试游戏清理，清空身份并退出。
-func TestAgentFailureCloserStartupFailureCleansSession(t *testing.T) {
-	cleaned := false
-	agent := &agent{
-		session: agentSession{userID: 7, loginID: "current"},
-		games: []gameComponent{&fixtureGame{name: "game", disconnect: func(gsr.ServiceContext) error {
-			cleaned = true
-			return errors.New("leave unavailable")
-		}}},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	main := &accessFixtureCaller{cancel: cancel, work: func(self gsr.ServiceContext) error {
-		failed := &rejectCreateContext{ServiceContext: self}
-		agent.closeAfterFailure(failed)
-		if !failed.exited || !agent.closing || !cleaned || agent.session.userID != 0 || agent.session.loginID != "" {
-			t.Fatalf("创建失败后未清理并退出: exited=%v closing=%v cleaned=%v session=%+v", failed.exited, agent.closing, cleaned, agent.session)
-		}
-		return nil
-	}}
-	if err := gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: t.TempDir()}}, main); err != nil {
-		t.Fatal(err)
+// TestAgentErrorPolicy 保护错误策略使用唯一安全响应，末帧接纳失败不回错两次，closing 拦截后续客户端请求。
+func TestAgentErrorPolicy(t *testing.T) {
+	for _, entry := range []struct {
+		name           string
+		id             demopb.MsgId
+		cause, sendErr error
+		close          bool
+	}{
+		{name: "login", id: demopb.MsgId_C2S_LOGIN, close: true},
+		{name: "password auth", id: demopb.MsgId_C2S_PASSWORD_AUTH, close: true},
+		{name: "invalid backend", cause: errInvalidBackendReply, close: true},
+		{name: "unknown enter", cause: enterFailure(runtime.ErrCallTimeout), close: true},
+		{name: "terminal queue full", cause: errInvalidBackendReply, sendErr: gate.ErrClientQueueFull, close: true},
+		{name: "terminal frame too large", cause: errInvalidBackendReply, sendErr: gate.ErrFrameTooLarge, close: true},
+		{name: "busy", cause: runtime.NewStatusError(runtime.ErrorClassDomain, "mole.busy", "private diagnostic")},
+		{name: "mailbox full", cause: runtime.ErrMailboxFull},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			id := entry.id
+			if id == 0 {
+				id = demopb.MsgId_C2S_ENTER
+			}
+			calls := 0
+			client := &terminalClient{terminalErr: entry.sendErr}
+			agent := &agent{client: client, session: agentSession{userID: 7, loginID: "current"}, games: []gameComponent{
+				&fixtureGame{name: "fixture", protocols: map[uint32]any{
+					uint32(demopb.MsgId_C2S_ENTER): func(_ gsr.CommandContext, _ protocol.Context, _ *demopb.EnterRequest) error {
+						calls++
+						return entry.cause
+					},
+				}},
+			}}
+			registry, err := protocol.NewRegistry(demopb.MessageCatalogDemoV1Game)
+			if err != nil {
+				t.Fatal(err)
+			}
+			agent.mustBindHandlers(registry)
+			frame, err := proto.Marshal(&commonv1.Envelope{MsgId: uint32(id), RequestId: 17})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = agent.protocolDispatcher.HandleFrame(nil, frame)
+			cause := entry.cause
+			if entry.id != 0 {
+				cause = errAlreadyLoggedIn
+			}
+			if !errors.Is(err, cause) || entry.sendErr != nil && !errors.Is(err, entry.sendErr) {
+				t.Fatalf("原错误/发送错误丢失: %v", err)
+			}
+			if agent.closing != entry.close || client.normal+client.terminal != 1 || (client.terminal == 1) != entry.close {
+				t.Fatalf("策略未接线: closing=%v normal=%d terminal=%d", agent.closing, client.normal, client.terminal)
+			}
+			if client.closes != 0 {
+				t.Fatal("错误策略提前 Close，中止了末帧")
+			}
+			var envelope commonv1.Envelope
+			var failure commonv1.ErrorResponse
+			if proto.Unmarshal(client.frame, &envelope) != nil || envelope.RequestId != 17 || envelope.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || proto.Unmarshal(envelope.Payload, &failure) != nil {
+				t.Fatal("错误未关联原请求")
+			}
+			if failure.Message != "request could not be processed" {
+				t.Fatalf("错误文案不安全: %v", &failure)
+			}
+			if entry.close {
+				if err := agent.HandleClientMessage(nil, frame); err != nil {
+					t.Fatal(err)
+				}
+				if client.normal+client.terminal != 1 || calls > 1 {
+					t.Fatal("closing 后仍处理客户端请求")
+				}
+			}
+		})
 	}
 }
 
@@ -139,9 +199,11 @@ func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
 	}
 }
 
-// TestAccessInvalidGameReplyClosesConnection 保护非法进入回包先返回错误，封闭排队中的命中请求，再延时断线并清理 Online。
+// TestAccessInvalidGameReplyClosesConnection 保护非法进入回包先返回错误，封闭排队中的命中请求，再由 Gate 写出后关闭并清理 Online。
 func TestAccessInvalidGameReplyClosesConnection(t *testing.T) {
-	address, backend, hits := startAccessBusiness(t, "invalid-enter-balance")
+	barrier := newAccessEntryBarrier()
+	address, backend, hits := startAccessBusinessFixture(t, "invalid-enter-balance", barrier)
+	t.Cleanup(barrier.release)
 	client := dialAccess(t, address)
 	accessLoginResponse(t, client, "alice", "password", &demopb.LoginResponse{})
 	for index, request := range []struct {
@@ -151,6 +213,9 @@ func TestAccessInvalidGameReplyClosesConnection(t *testing.T) {
 		{demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}},
 		{demopb.MsgId_C2S_HIT, &demopb.HitRequest{ActionId: "must-not-run", SpawnSeq: 9, Hole: 0}},
 	} {
+		if index == 1 {
+			barrier.wait(t)
+		}
 		payload, err := proto.Marshal(request.message)
 		if err != nil {
 			t.Fatal(err)
@@ -164,19 +229,12 @@ func TestAccessInvalidGameReplyClosesConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	barrier.release()
 	response := readAccessEnvelope(t, client)
 	if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || response.RequestId != 1 {
 		t.Fatalf("非法回包未返回进入错误: %v", response)
 	}
-	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
-	if _, _, err := client.ReadMessage(); err == nil {
-		t.Fatal("错误后仍收到业务响应")
-	} else {
-		var networkError net.Error
-		if errors.As(err, &networkError) && networkError.Timeout() {
-			t.Fatal("非法回包后未关闭连接")
-		}
-	}
+	accessExpectNoMoreMessages(t, client)
 	if len(hits) != 0 {
 		t.Fatal("非法回包后仍向后端发送了命中")
 	}
@@ -193,7 +251,9 @@ func TestAccessInvalidGameReplyClosesConnection(t *testing.T) {
 func TestAccessUnknownEnterClosesConnection(t *testing.T) {
 	for _, game := range []string{"mole", "landlord"} {
 		t.Run(game, func(t *testing.T) {
-			address, backend, events := startAccessBusiness(t, "enter-timeout-"+game)
+			barrier := newAccessEntryBarrier()
+			address, backend, events := startAccessBusinessFixture(t, "enter-timeout-"+game, barrier)
+			t.Cleanup(barrier.release)
 			client := dialAccess(t, address)
 			accessLoginResponse(t, client, "alice", "password", &demopb.LoginResponse{})
 			login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
@@ -202,6 +262,9 @@ func TestAccessUnknownEnterClosesConnection(t *testing.T) {
 				ids[0], ids[1] = ids[1], ids[0]
 			}
 			for i, id := range ids {
+				if i == 1 {
+					barrier.wait(t)
+				}
 				frame, err := proto.Marshal(&commonv1.Envelope{MsgId: uint32(id), RequestId: uint32(i + 1)})
 				if err != nil {
 					t.Fatal(err)
@@ -210,11 +273,12 @@ func TestAccessUnknownEnterClosesConnection(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			barrier.release()
 			response := readAccessEnvelope(t, client)
 			if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || response.RequestId != 1 {
 				t.Fatalf("未返回原进入错误: %v", response)
 			}
-			accessExpectClosed(t, client)
+			accessExpectNoMoreMessages(t, client)
 			deadline := time.Now().Add(time.Second)
 			for accessFixtureRPC(t, backend, 99) != nil {
 				if time.Now().After(deadline) {
@@ -285,5 +349,19 @@ func TestAccessRejectedEnterKeepsConnection(t *testing.T) {
 			}
 			accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_ENTER, &demopb.LandlordEnterRequest{}, &demopb.LandlordEnterResponse{})
 		})
+	}
+}
+
+// accessExpectNoMoreMessages 验证终止错误之后没有第二份响应，连接实际关闭而非读超时。
+func accessExpectNoMoreMessages(t *testing.T, client *accessClient) {
+	t.Helper()
+	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, _, err := client.ReadMessage(); err == nil {
+		t.Fatal("终止错误后仍收到额外消息")
+	} else {
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			t.Fatal("终止错误后未关闭连接")
+		}
 	}
 }

@@ -43,5 +43,8 @@ func (agent *agent) mustBindHandlers(registry *protocol.Registry) {
 		panic(fmt.Sprintf("access: reserved command ID %d", gate.ClientDisconnectedCommand))
 	}
 	agent.commandDispatcher = gsr.MustDispatcher(commandHandlers)
-	agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](registry, agent.client, mustMergeHandlers(protocols...))
+	agent.protocolDispatcher = protocol.MustDispatcher[gsr.CommandContext](
+		registry, agent.client, mustMergeHandlers(protocols...),
+		protocol.WithErrorPolicy(agent.clientErrorPolicy),
+	)
 }

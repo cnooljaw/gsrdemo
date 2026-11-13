@@ -4,15 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/gate"
 	"github.com/cnooljaw/gsr/protocol"
-	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
-	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -80,19 +77,7 @@ func (agent *agent) HandleClientMessage(self gsr.CommandContext, frame []byte) e
 	if agent.closing {
 		return nil
 	}
-	err := agent.protocolDispatcher.HandleFrame(self, frame)
-	if err == nil {
-		return nil
-	}
-	var envelope commonv1.Envelope
-	decoded := proto.Unmarshal(frame, &envelope) == nil
-	loginRequest := decoded &&
-		(envelope.MsgId == uint32(demopb.MsgId_C2S_LOGIN) || envelope.MsgId == uint32(demopb.MsgId_C2S_PASSWORD_AUTH))
-	var unknownEnter *unknownEnterError
-	if loginRequest || errors.Is(err, errInvalidBackendReply) || errors.As(err, &unknownEnter) {
-		agent.closeAfterFailure(self)
-	}
-	return err
+	return agent.protocolDispatcher.HandleFrame(self, frame)
 }
 
 func (agent *agent) OnStop(_ context.Context) error {

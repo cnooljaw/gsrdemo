@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,8 +27,33 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// accessEntryBarrier 让测试在进入处理返回前安排第二个请求，不依赖发送窗口。
+type accessEntryBarrier struct {
+	started chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func newAccessEntryBarrier() *accessEntryBarrier {
+	return &accessEntryBarrier{started: make(chan struct{}, 1), resume: make(chan struct{})}
+}
+
+func (barrier *accessEntryBarrier) release() {
+	barrier.once.Do(func() { close(barrier.resume) })
+}
+
+func (barrier *accessEntryBarrier) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-barrier.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("进入请求未到达屏障")
+	}
+}
+
 // accessBackendFixture 用真实 TCP 接口替代业务节点，所有目录记录由 online 实例独占。
 type accessBackendFixture struct {
+	barrier  *accessEntryBarrier
 	role     string
 	current  map[string]any
 	hits     chan<- []any
@@ -43,6 +69,17 @@ func (service *accessBackendFixture) OnStart(context.Context, gsr.ServiceContext
 func (service *accessBackendFixture) OnStop(context.Context) error { return nil }
 
 func (service *accessBackendFixture) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
+	if service.barrier != nil && (service.role == moleentry.ServiceName || service.role == "room" && command == landlordattack.RoomJoinCommand) {
+		select {
+		case service.barrier.started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-service.barrier.resume:
+		case <-time.After(3 * time.Second):
+			return nil, errors.New("entry barrier was not released")
+		}
+	}
 	switch service.role {
 	case authrpc.ServiceName:
 		if args[0] != "alice" || args[1] != "password" {
@@ -164,6 +201,7 @@ func fixtureSnapshot() map[string]any {
 }
 
 type accessFixtureMain struct {
+	barrier  *accessEntryBarrier
 	ready    chan<- string
 	hits     chan<- []any
 	scenario string
@@ -173,7 +211,7 @@ var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
 	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, "attack", landlordrpc.ServiceName, "room"} {
-		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario})
+		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario, barrier: service.barrier})
 		if err != nil {
 			return err
 		}
@@ -201,17 +239,22 @@ func (*accessFixtureMain) OnStop(context.Context) error { return nil }
 
 func startAccessBusiness(t *testing.T, scenarios ...string) (string, string, <-chan []any) {
 	t.Helper()
-	accessAddress, gateAddress := testAddresses(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	ready, hits := make(chan string, 1), make(chan []any, 8)
 	scenario := ""
 	if len(scenarios) != 0 {
 		scenario = scenarios[0]
 	}
+	return startAccessBusinessFixture(t, scenario, nil)
+}
+
+func startAccessBusinessFixture(t *testing.T, scenario string, barrier *accessEntryBarrier) (string, string, <-chan []any) {
+	t.Helper()
+	accessAddress, gateAddress := testAddresses(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	ready, hits := make(chan string, 1), make(chan []any, 8)
 	backendDone := make(chan error, 1)
 	backendLogs := t.TempDir()
 	go func() {
-		backendDone <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: backendLogs}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"backend": "127.0.0.1:0", "access-01": accessAddress}}}, &accessFixtureMain{ready: ready, hits: hits, scenario: scenario})
+		backendDone <- gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: backendLogs}, Cluster: gsr.ClusterConfig{Nodes: map[cluster.NodeID]string{"backend": "127.0.0.1:0", "access-01": accessAddress}}}, &accessFixtureMain{ready: ready, hits: hits, scenario: scenario, barrier: barrier})
 	}()
 	t.Cleanup(func() {
 		cancel()
