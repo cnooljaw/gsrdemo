@@ -10,11 +10,11 @@ const (
 	MoleHitCommand               = 2
 	MoleSnapshotCommand          = 3
 	MoleLeaveCommand             = 4
-	MoleTickCommand              = 16
-	MoleInitAccountingCommand    = 17
-	MoleSettlementReceiptCommand = 18
-	MolePauseCommand             = 19
-	MoleBalanceCommand           = 20
-	MolePoolCommand              = 21
-	MoleOperationStatusCommand   = 22
+	MoleTickCommand              = 5
+	MoleInitAccountingCommand    = 6
+	MoleSettlementReceiptCommand = 7
+	MolePauseCommand             = 8
+	MoleBalanceCommand           = 9
+	MolePoolCommand              = 10
+	MoleOperationStatusCommand   = 11
 )

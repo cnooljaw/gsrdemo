@@ -204,6 +204,8 @@ unset demo_password
 
 测试按行为归属组织：纯规则用例就近放在被测文件对应的 `*_test.go`，`*_cluster_test.go` 验证节点调用契约，`*_live_test.go` / `*_process_test.go` 验证真实存储或进程协作，`*_load_test.go` 提供显式启用的容量样本。共享启动与后端替身放在 `*_fixture_test.go`。不同层只保留各自特有的失败边界，避免重复验证同一成功流程。
 
+地鼠入场的可选内存基准：`GOWORK=off go -C nodes/mole test -run '^$' -bench '^BenchmarkMoleEnterFullGroups$' -benchmem`。它比较不同满组数量下的一次入场再离开，仅包含内存路径，不包含广播、通信或存储，不能据此推算真实在线容量。
+
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 
 公开 Service 的 RPC 名称与命令在对应 Service 文件中维护，生成到 `common/rpc/<service>/commands.gen.go` 并入库；修改源定义后执行 `generate rpc`。`check` 会只读核对生成结果，缺失、过期或多余的生成文件都会报错。定义方式见 [Service 命令与共享契约](docs/GO-CODE-STYLE.md#331-service-命令与共享契约)，当前入口见 [Service 契约与寻址](docs/DESIGN.md#23-service-契约与寻址)。

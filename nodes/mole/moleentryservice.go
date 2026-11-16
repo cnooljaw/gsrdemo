@@ -17,7 +17,6 @@ import (
 const (
 	moleEntryName                      = "mole-entry"
 	moleEnterCommand runtime.CommandID = 1
-	// 原 3 号查询与 10 号补偿唤醒已停用，不复用。
 )
 
 type moleEntryService struct {

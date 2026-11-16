@@ -18,8 +18,8 @@ import (
 const (
 	moleSubmissionName                       = "mole-submission"
 	submissionBatchCommand runtime.CommandID = 1
-	submissionTickCommand  runtime.CommandID = 10
-	submissionStateCommand runtime.CommandID = 11
+	submissionTickCommand  runtime.CommandID = 2
+	submissionStateCommand runtime.CommandID = 3
 )
 
 const moleSettlementTimeout = 3 * time.Second

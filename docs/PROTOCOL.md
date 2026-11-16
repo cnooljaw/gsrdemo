@@ -1,6 +1,6 @@
 # 业务协议与节点调用
 
-本文分为客户端 C/S 协议和节点间 RPC 两类，最后附主要调用链。只列当前接线及必要的停用编号；节点职责、存储与恢复设计见 [DESIGN.md](DESIGN.md)，运行和生成命令见 [README.md](../README.md)。
+本文分为客户端 C/S 协议和节点间 RPC 两类，最后附主要调用链。只列当前接线；节点职责、存储与恢复设计见 [DESIGN.md](DESIGN.md)，运行和生成命令见 [README.md](../README.md)。
 
 ## 1. 客户端 C/S 协议
 
@@ -95,8 +95,8 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 | 通用错误 | S2C 9001 `ErrorResponse{code, message}`，关联原 request_id；不是正常业务响应 |
 | 客户端错误类别 | 1=INVALID_REQUEST、2=UNSUPPORTED_MESSAGE、3=INTERNAL；使用框架安全文案，不直接暴露内部 Domain Code 或 SQL 诊断 |
 | 错误的执行含义 | 收到错误或连接中断不能一概解释为操作未执行；明确的 target_unavailable 业务拒绝另见地鼠表 |
-| 1051 / 1052 | 旧地鼠 Operation 类型仍生成，access 不注册请求 Handler；编号不复用 |
-| 1151 / 1152 | 旧斗地主 Operation 类型仍生成，access 不注册请求 Handler；编号不复用 |
+| 1051 / 1052 | 旧地鼠 Operation 类型仍生成，access 不注册请求 Handler |
+| 1151 / 1152 | 旧斗地主 Operation 类型仍生成，access 不注册请求 Handler |
 
 ## 2. 节点间 RPC 调用
 
@@ -258,7 +258,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
 
-### 2.8 内部错误与停用入口
+### 2.8 内部错误
 
 以下是服务端稳定 Domain Code 及相关 GSR 错误；C/S 只收到第 1.5 节的框架安全错误。参数类型/数量错误与未知命令沿用 GSR `runtime.invalid_command_arguments / runtime.unknown_command`。
 
@@ -280,13 +280,6 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 表中同一行的省略项沿用第一个完整前缀，例如 `login.store_unavailable`。本地 Redis/通知失败的恢复与退避由各游戏管理，详见设计文档，不新增通用重试器。
 
-| 停用入口 | 当前行为 |
-| --- | --- |
-| mole Entry / 3、10 | 原 HitID 查询及准备补偿 Tick 已移除，编号不复用 |
-| mole / 10～15 | 原目录、Reserve 与准备补偿命令已移除，编号不复用 |
-| mole-submission / 2、3 | 旧查询入口已移除，编号不复用 |
-| settlement / 5 Summary | 已移除，无汇总查询接口，编号不复用 |
-
 ### 2.9 节点内协作
 
 公开 Service 的命令编号整体生成，不代表私有类型可以远程编解码或取消来源限制。地鼠内部消息均发往固定 MoleService，组与内存账之间使用普通函数；没有 Reserve、Resume、Forget 或准备补偿命令。
@@ -294,14 +287,14 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | 调用方 → Service / Command | 方式 | 顺序参数 | 结果与来源限制 |
 | --- | --- | --- | --- |
 | Entry → `mole / 1` Enter | Call | `U, L, N, A, seed map`；seed 可为 nil，否则为 `amount int64, version uint64` | 完整快照及 silver；缺账户且无 seed 返回 balance_required，不改状态；仅非零本地来源 |
-| Pulse → `mole / 16` Tick | Send | 无 | 刷目标及归批；仅非零本地来源 |
-| Submission → `mole / 17` InitAccounting | Send | `pool molePool, sequence uint64` | 初始化恢复统计；仅非零本地来源 |
-| Submission → `mole / 18` SettlementReceipt | Send | `receipt batchReceipt` 独立快照 | 应用回执与余额校正；仅非零本地来源 |
-| Submission / Pulse → `mole / 19` Pause | Send | 无 | 暂停新记账；仅非零本地来源 |
+| Pulse → `mole / 5` Tick | Send | 无 | 刷目标及归批；仅非零本地来源 |
+| Submission → `mole / 6` InitAccounting | Send | `pool molePool, sequence uint64` | 初始化恢复统计；仅非零本地来源 |
+| Submission → `mole / 7` SettlementReceipt | Send | `receipt batchReceipt` 独立快照 | 应用回执与余额校正；仅非零本地来源 |
+| Submission / Pulse → `mole / 8` Pause | Send | 无 | 暂停新记账；仅非零本地来源 |
 | MoleService → `mole-submission / 1` Submit | Send | `batch moleBatch` 独立快照 | 接纳原批次，不代表完成结算 |
-| Pulse → `mole-submission / 10` Tick | Send | 无 | 恢复、结算重试及回执交付 |
+| Pulse → `mole-submission / 2` Tick | Send | 无 | 恢复、结算重试及回执交付 |
 
-内部验收入口为 `mole / 20` Balance（`U` → 余额视图）、`mole / 21` Pool（无参数 → 确认统计）、`mole / 22` OperationStatus（`U, hitID string` → 状态 map 或 nil）及 `mole-submission / 11` State。它们未接入客户端 MsgID，也不形成网络访问隔离。
+内部验收入口为 `mole / 9` Balance（`U` → 余额视图）、`mole / 10` Pool（无参数 → 确认统计）、`mole / 11` OperationStatus（`U, hitID string` → 状态 map 或 nil）及 `mole-submission / 3` State。它们未接入客户端 MsgID，也不形成网络访问隔离。
 
 以下斗地主调用从 AttackService 发往本节点目录；牌桌 Tick 由本地 Pulse Send，继续拒绝远程来源。
 

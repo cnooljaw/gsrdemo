@@ -102,7 +102,7 @@ func (mole *comMole) ProtocolHandlers() map[uint32]any {
 #### 3.3.1 Service 命令与共享契约
 
 - 以 Service 为公开/私有边界，命令不再逐条区分公私。公开 Service 的命令块整体生成共享契约；私有 Service 的命令留在节点内部。未标记的命令块不参与生成；无业务命令的 MainService 无须定义命令块。
-- 每个 Service 使用独立命令块，和 Dispatcher 就近维护；块内所有命令都显式赋值。同一 Service 编号唯一，不同 Service 可以复用编号；停用编号按协议约定保留，不通过重排或 `iota` 改变既有编号。
+- 每个 Service 使用独立命令块，和 Dispatcher 就近维护；块内所有命令都显式赋值。同一 Service 编号唯一，不同 Service 可以复用编号。当前为未部署的 demo，CommandID 可重新整理，无需为已删除接口保留编号；调整时同步生成契约、调用方、测试和协议文档。
 - 标记格式为 `//rpc:service <契约包名> public|private [name=<本地名称常量>]`。包名使用小写字母，公开契约包名在仓库中唯一。`name=` 引用同一块内显式定义的非空字符串，生成固定 `ServiceName`；其他项为 uint32 范围的显式整数，首字母大写后导出。生成器只提取常量，不生成 Handler、参数编解码、调用包装或重试策略。
 - 契约包名应与现有 Service 名称对应；不同节点有同名 Service 时加节点前缀，例如 `mole` 对应 MoleService，`landlordattack` 对应斗地主 AttackService，避免再引入一套角色名称。
 - 固定单实例和服务池生成固定逻辑名称；池成员共享一份契约，数量和成员 ID 不进入生成文件。动态房间省略 `name=`，只生成命令，调用使用业务返回的实例名称。节点地址从配置取得。

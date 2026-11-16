@@ -6,17 +6,8 @@ import (
 
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
-
-// TestMoleEntryDoesNotExposeOperationQuery 保护旧 Entry 查询命令明确拒绝，内部结算查询不再从进入入口转发。
-func TestMoleEntryDoesNotExposeOperationQuery(t *testing.T) {
-	routes, _ := prepareMoleCluster(t, newSettlementFixture())
-	if _, err := moleRPC(t, routes, "mole", moleentry.ServiceName, 3, uint64(1), "old-hit"); !errors.Is(err, runtime.ErrUnknownCommand) {
-		t.Fatalf("旧账务查询命令仍可调用: %v", err)
-	}
-}
 
 // TestMoleSharedGroupsAndReconnect 保护真实 TCP 下分组补位、跨接入重连、迟到进入和旧连接操作隔离。
 func TestMoleSharedGroupsAndReconnect(t *testing.T) {

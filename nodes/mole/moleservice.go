@@ -2,30 +2,30 @@ package main
 
 import (
 	"context"
+	"time"
+
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
-	"time"
 )
 
 // MoleService 是本节点组、成员和内存账务的唯一 owner。
 //
 //rpc:service mole public name=moleServiceName
 const (
-	moleServiceName                       = "mole"
-	moleJoinCommand     runtime.CommandID = 1
-	moleHitCommand      runtime.CommandID = 2
-	moleSnapshotCommand runtime.CommandID = 3
-	moleLeaveCommand    runtime.CommandID = 4
-	// 原 10～15 号目录、预留和补偿命令已停用，不复用。
-	moleTickCommand              runtime.CommandID = 16
-	moleInitAccountingCommand    runtime.CommandID = 17
-	moleSettlementReceiptCommand runtime.CommandID = 18
-	molePauseCommand             runtime.CommandID = 19
-	moleBalanceCommand           runtime.CommandID = 20
-	molePoolCommand              runtime.CommandID = 21
-	moleOperationStatusCommand   runtime.CommandID = 22
+	moleServiceName                                = "mole"
+	moleJoinCommand              runtime.CommandID = 1
+	moleHitCommand               runtime.CommandID = 2
+	moleSnapshotCommand          runtime.CommandID = 3
+	moleLeaveCommand             runtime.CommandID = 4
+	moleTickCommand              runtime.CommandID = 5
+	moleInitAccountingCommand    runtime.CommandID = 6
+	moleSettlementReceiptCommand runtime.CommandID = 7
+	molePauseCommand             runtime.CommandID = 8
+	moleBalanceCommand           runtime.CommandID = 9
+	molePoolCommand              runtime.CommandID = 10
+	moleOperationStatusCommand   runtime.CommandID = 11
 )
 const (
 	maxMoleUsers    = 100000
@@ -46,17 +46,21 @@ var (
 )
 
 type moleService struct {
-	groups     map[string]*moleGroup
-	users      map[uint64]string // 用户到实际组的索引；与组内成员在同一回调更新。
-	accounting moleAccounting
-	dispatcher *gsr.Dispatcher
-	onStopped  func(error)
+	groups          map[string]*moleGroup
+	availableGroups [attackSeats]map[string]*moleGroup // 按实际人数索引可补位组，0 人和满组不入索引。
+	users           map[uint64]string                  // 用户到实际组的索引；与组内成员在同一回调更新。
+	accounting      moleAccounting
+	dispatcher      *gsr.Dispatcher
+	onStopped       func(error)
 }
 
 var _ gsr.Service = (*moleService)(nil)
 
 func newMoleService() *moleService {
 	service := &moleService{groups: make(map[string]*moleGroup), users: make(map[uint64]string), accounting: newMoleAccounting()}
+	for size := 1; size < attackSeats; size++ {
+		service.availableGroups[size] = make(map[string]*moleGroup)
+	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		moleJoinCommand:              service.handleEnter,
 		moleHitCommand:               service.handleHit,
@@ -134,12 +138,7 @@ func (service *moleService) enter(userID uint64, loginID, accessNode, agentName 
 		}
 		member.Seat = old.Seat
 	} else {
-		// 组内人数就是实际成员数，不再存在已占位但尚未 Join 的座位。
-		for name, candidate := range service.groups {
-			if len(candidate.members) < attackSeats && (group == nil || len(candidate.members) > len(group.members) || len(candidate.members) == len(group.members) && name < group.game.name) {
-				group = candidate
-			}
-		}
+		group = service.availableGroup()
 		if group == nil {
 			name, err := randomInstance("attack-")
 			if err != nil {
@@ -159,15 +158,41 @@ func (service *moleService) enter(userID uint64, loginID, accessNode, agentName 
 		}
 	}
 	// 此后只提交已验证的内存状态；快照和余额来自同一次回调。
+	previousSize := len(group.members)
 	if account == nil {
 		service.accounting.updateBalance(userID, confirmed)
 	}
 	group.members[userID] = member
+	service.updateAvailableGroup(group, previousSize)
 	service.groups[group.game.name] = group
 	service.users[userID] = group.game.name
 	view := group.view(userID)
 	view["silver"] = balance
 	return view, nil
+}
+
+// availableGroup 优先补人数较多的组；同人数任选，不遍历满组或按名称排序。
+func (service *moleService) availableGroup() *moleGroup {
+	for size := attackSeats - 1; size > 0; size-- {
+		for _, group := range service.availableGroups[size] {
+			return group
+		}
+	}
+	return nil
+}
+
+// updateAvailableGroup 与成员修改在同一 owner 回调执行；重进不改变人数或索引。
+func (service *moleService) updateAvailableGroup(group *moleGroup, previousSize int) {
+	size := len(group.members)
+	if size == previousSize {
+		return
+	}
+	if previousSize > 0 && previousSize < attackSeats {
+		delete(service.availableGroups[previousSize], group.game.name)
+	}
+	if size > 0 && size < attackSeats {
+		service.availableGroups[size][group.game.name] = group
+	}
 }
 
 func (service *moleService) memberGroup(userID uint64, loginID, groupName string) (*moleGroup, error) {
@@ -222,7 +247,9 @@ func (service *moleService) leave(userID uint64, loginID string) (*moleGroup, er
 	if group.members[userID].LoginID != loginID {
 		return nil, errMoleStaleLogin
 	}
+	previousSize := len(group.members)
 	delete(group.members, userID)
+	service.updateAvailableGroup(group, previousSize)
 	delete(service.users, userID)
 	if len(group.members) == 0 {
 		delete(service.groups, group.game.name)

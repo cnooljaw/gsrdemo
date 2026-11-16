@@ -113,3 +113,45 @@ func TestMoleLeaveWithoutGroupIsIdempotent(t *testing.T) {
 		t.Fatal("离开残留状态")
 	}
 }
+
+// TestMoleFillsMostOccupiedGroup 保护优先补两人组，其次补一人组；补满和清空的组不会继续被选中。
+func TestMoleFillsMostOccupiedGroup(t *testing.T) {
+	service := readyMole()
+	first := enterMemory(t, service, 1, "login")
+	enterMemory(t, service, 2, "login")
+	enterMemory(t, service, 3, "login")
+	second := enterMemory(t, service, 4, "login")
+	enterMemory(t, service, 5, "login")
+	enterMemory(t, service, 6, "login")
+	for _, uid := range []uint64{1, 4, 5} {
+		if _, err := service.leave(uid, "login"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 同人数的重进不改变可补位状态，旧身份离开也不能影响它。
+	if _, err := service.enter(2, "new-login", "access-02", "agent", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.leave(2, "login"); !errors.Is(err, errMoleStaleLogin) {
+		t.Fatal("旧身份离开未拒绝", err)
+	}
+	if enterMemory(t, service, 7, "login")["attack_name"] != first["attack_name"] {
+		t.Fatal("未优先补两人组")
+	}
+	for _, uid := range []uint64{8, 9} {
+		if enterMemory(t, service, uid, "login")["attack_name"] != second["attack_name"] {
+			t.Fatal("一人组未连续补满")
+		}
+	}
+	third := enterMemory(t, service, 10, "login")
+	if third["attack_name"] == first["attack_name"] || third["attack_name"] == second["attack_name"] {
+		t.Fatal("满组仍被选中")
+	}
+	if _, err := service.leave(10, "login"); err != nil {
+		t.Fatal(err)
+	}
+	fourth := enterMemory(t, service, 11, "login")
+	if fourth["attack_name"] == third["attack_name"] {
+		t.Fatal("空组已回收却仍被选中")
+	}
+}
