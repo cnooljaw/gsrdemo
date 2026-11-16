@@ -62,7 +62,7 @@ func startReservationTable(t *testing.T, users int, login string, delay time.Dur
 	t.Helper()
 	const room = "reservation-table"
 	directory := newLandlordService(landlordJournal{}, "settlement")
-	directory.tables[room] = landlordTable{}
+	directory.setTable(room, landlordTable{})
 	memberships := make(map[uint64]string)
 	for uid := uint64(1); uid <= uint64(users); uid++ {
 		route, err := directory.handleResolve(nil, uid, login)

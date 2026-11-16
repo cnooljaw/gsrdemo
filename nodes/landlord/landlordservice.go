@@ -51,17 +51,21 @@ type landlordMember struct {
 
 // landlordService 只拥有随机凑桌的预留目录，不等待 Online、钱包、出牌或结算。
 type landlordService struct {
-	routes         map[uint64]landlordRoute
-	tables         map[string]landlordTable
-	journal        landlordJournal
-	settlementNode cluster.NodeID
-	dispatcher     *gsr.Dispatcher
+	routes          map[uint64]landlordRoute
+	tables          map[string]landlordTable
+	availableTables [3]map[string]struct{} // 按占位数索引未封桌的可加入牌桌，人数包含有效预留。
+	journal         landlordJournal
+	settlementNode  cluster.NodeID
+	dispatcher      *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*landlordService)(nil)
 
 func newLandlordService(journal landlordJournal, settlementNode cluster.NodeID) *landlordService {
 	service := &landlordService{routes: map[uint64]landlordRoute{}, tables: map[string]landlordTable{}, journal: journal, settlementNode: settlementNode}
+	for count := range service.availableTables {
+		service.availableTables[count] = make(map[string]struct{})
+	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		resolveCommand:               service.handleResolve,
 		releaseCommand:               service.handleRelease,
@@ -105,6 +109,33 @@ func validIdentity(value string) bool {
 	return true
 }
 
+// availableTable 优先补两人桌、再补一人桌；空闲桌最后选择，同占位数任选。
+func (service *landlordService) availableTable() string {
+	for count := len(service.availableTables) - 1; count >= 0; count-- {
+		for room := range service.availableTables[count] {
+			return room
+		}
+	}
+	return ""
+}
+
+// setTable 在目录回调内一起更新牌桌和派生索引，预留也计入占位数。
+func (service *landlordService) setTable(room string, table landlordTable) {
+	if old, exists := service.tables[room]; exists && old.Count >= 0 && old.Count < len(service.availableTables) {
+		delete(service.availableTables[old.Count], room)
+	}
+	service.tables[room] = table
+	if !table.Sealed && table.Count >= 0 && table.Count < len(service.availableTables) {
+		service.availableTables[table.Count][room] = struct{}{}
+	}
+}
+func (service *landlordService) deleteTable(room string) {
+	if table, exists := service.tables[room]; exists && table.Count >= 0 && table.Count < len(service.availableTables) {
+		delete(service.availableTables[table.Count], room)
+	}
+	delete(service.tables, room)
+}
+
 func (service *landlordService) handleResolve(self gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
 	if uid == 0 || !validIdentity(login) {
 		return nil, errLandlordInput
@@ -114,16 +145,7 @@ func (service *landlordService) handleResolve(self gsr.CommandContext, uid uint6
 		if len(service.routes) >= 3000 {
 			return nil, errLandlordBusy
 		}
-		mostPlayers := -1
-		for name, table := range service.tables {
-			if table.Sealed || table.Count >= 3 {
-				continue
-			}
-			if table.Count > mostPlayers || (table.Count == mostPlayers && name < route.Room) {
-				route.Room = name
-				mostPlayers = table.Count
-			}
-		}
+		route.Room = service.availableTable()
 		if route.Room == "" {
 			if len(service.tables) >= 1000 {
 				return nil, errLandlordBusy
@@ -139,26 +161,24 @@ func (service *landlordService) handleResolve(self gsr.CommandContext, uid uint6
 				return nil, err
 			}
 			route.Room = name
-			service.tables[name] = landlordTable{}
+			service.setTable(name, landlordTable{})
 		}
 	}
 	membership, err := identifier("seat-")
 	if err != nil {
 		return nil, err
 	}
+	table := service.tables[route.Room]
 	if !exists {
-		table := service.tables[route.Room]
 		table.Count++
-		service.tables[route.Room] = table
 	}
 	route.LoginID, route.Membership = login, membership
 	service.routes[uid] = route
-	table := service.tables[route.Room]
 	if table.Pending == nil {
 		table.Pending = make(map[uint64]time.Time)
 	}
 	table.Pending[uid] = time.Now().Add(reservationTimeout)
-	service.tables[route.Room] = table
+	service.setTable(route.Room, table)
 	return map[string]any{"room_name": route.Room, "membership": membership}, nil
 }
 
@@ -176,7 +196,7 @@ func (service *landlordService) handleSeal(_ gsr.CommandContext, room string, se
 		return errLandlordStale
 	}
 	table.Sealed = sealed
-	service.tables[room] = table
+	service.setTable(room, table)
 	return nil
 }
 
@@ -197,15 +217,15 @@ func (service *landlordService) handleRelease(_ gsr.CommandContext, uid uint64, 
 		table.Sealed = false
 	}
 	if table.Count == 0 {
-		delete(service.tables, room)
+		service.deleteTable(room)
 	} else {
-		service.tables[room] = table
+		service.setTable(room, table)
 	}
 	return true, nil
 }
 
 func (service *landlordService) handleDiscard(_ gsr.CommandContext, room string) error {
-	delete(service.tables, room)
+	service.deleteTable(room)
 	for uid, route := range service.routes {
 		if route.Room == room {
 			delete(service.routes, uid)
@@ -269,10 +289,10 @@ func (service *landlordService) reconcileReservations(room string, members [3]la
 		delete(table.Pending, uid)
 	}
 	if table.Count == 0 {
-		delete(service.tables, room)
+		service.deleteTable(room)
 		return false
 	}
-	service.tables[room] = table
+	service.setTable(room, table)
 	return true
 }
 

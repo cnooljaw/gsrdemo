@@ -61,7 +61,7 @@ func (self *tableCleanupContext) CallName(_ context.Context, name cluster.Servic
 func occupiedLandlordTable() (*attackService, *landlordService) {
 	service := newAttackService("table-cleanup", landlordJournal{}, nil, "settlement")
 	directory := newLandlordService(landlordJournal{}, "settlement")
-	directory.tables[service.game.Name] = landlordTable{Count: 3}
+	directory.setTable(service.game.Name, landlordTable{Count: 3})
 	for i := range service.game.Players {
 		uid, membership := uint64(i+1), fmt.Sprintf("member-%d", i)
 		service.game.Players[i] = landlordPlayer{UserID: uid, LoginID: "login", AccessNode: "access", AgentName: "agent", Membership: membership}
@@ -82,7 +82,7 @@ func directoryForLandlordTables(tables ...*attackService) *landlordService {
 			table.Count++
 			directory.routes[player.UserID] = landlordRoute{service.game.Name, player.LoginID, player.Membership}
 		}
-		directory.tables[service.game.Name] = table
+		directory.setTable(service.game.Name, table)
 	}
 	return directory
 }
@@ -91,7 +91,7 @@ func detachedTable(t *testing.T) (*attackService, *tableCleanupContext) {
 	t.Helper()
 	service, directory := occupiedLandlordTable()
 	service.game.Phase, service.game.Landlord = "playing", 0
-	directory.tables[service.game.Name] = landlordTable{Count: 3, Sealed: true}
+	directory.setTable(service.game.Name, landlordTable{Count: 3, Sealed: true})
 	self := &tableCleanupContext{directory: directory}
 	for _, player := range service.game.Players {
 		if left, err := service.handleLeave(self, player.UserID, "login"); err != nil || !left {
@@ -199,7 +199,7 @@ func TestDetachedTableKeepsPendingParticipants(t *testing.T) {
 func TestEmptyTableWaitsOnlyForValidReservations(t *testing.T) {
 	service := newAttackService("new-table", landlordJournal{}, nil, "settlement")
 	directory := newLandlordService(landlordJournal{}, "settlement")
-	directory.tables[service.game.Name] = landlordTable{}
+	directory.setTable(service.game.Name, landlordTable{})
 	if _, err := directory.handleResolve(nil, 1, "login"); err != nil {
 		t.Fatal(err)
 	}

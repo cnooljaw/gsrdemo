@@ -195,7 +195,7 @@ MoleService 的 `handleSettlementReceipt → accounting.applyReceipt` 更新较�
 
 ### 6.1 凑桌、规则与可见性
 
-[LandlordService](../nodes/landlord/landlordservice.go) 只管理桌预留、人数和用户路由，优先填充可加入的桌；客户端不指定桌号。每桌一个 [AttackService](../nodes/landlord/attackservice.go)，具名组合私有 `attackGame` 和 `roundSettlement`，由本桌串行修改，不增加规则 Service 或共享游戏基类。
+[LandlordService](../nodes/landlord/landlordservice.go) 只管理桌预留、人数和用户路由。目录按占位数维护可加入牌桌索引，人数包含有效预留；优先补两人桌、再补一人桌，空闲桌最后选择，同占位数任选。封桌、满桌不参与补位；预留、释放、封桌/解封和到期核对均在同一目录回调更新索引，删除桌时一起清理。客户端不指定桌号。每桌一个 [AttackService](../nodes/landlord/attackservice.go)，具名组合私有 `attackGame` 和 `roundSettlement`，由本桌串行修改，不增加规则 Service 或共享游戏基类。
 
 目录和牌桌分别整体生成 `landlord`、`landlordattack` 契约，节点内协作仍引用源常量。恢复实例复用牌桌实现，但不注册远程名称；私有 `landlordPulse` 的计时命令不生成共享契约。牌桌 Tick 即使有共享编号，也继续拒绝远程来源。
 

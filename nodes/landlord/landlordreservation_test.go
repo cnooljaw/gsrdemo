@@ -19,7 +19,7 @@ func (*remoteReservationContext) Source() runtime.ServiceID { return 0 }
 // TestReservationReconcileRejectsInvalidSourceOrRoster 保护零来源和重复成员快照不能驱动目录回收。
 func TestReservationReconcileRejectsInvalidSourceOrRoster(t *testing.T) {
 	service := newLandlordService(landlordJournal{}, "settlement")
-	service.tables["table"] = landlordTable{Count: 1, Pending: map[uint64]time.Time{1: time.Now().Add(-time.Second)}}
+	service.setTable("table", landlordTable{Count: 1, Pending: map[uint64]time.Time{1: time.Now().Add(-time.Second)}})
 	service.routes[1] = landlordRoute{"table", "login", "member"}
 	if _, err := service.handleReconcileReservations(&remoteReservationContext{}, "table", [3]landlordMember{}); err != runtime.ErrUnknownCommand {
 		t.Fatalf("零来源未被拒绝: %v", err)
@@ -37,7 +37,7 @@ func TestReservationReconcileRejectsInvalidSourceOrRoster(t *testing.T) {
 func TestReservationReconcileFailureKeepsEmptyTable(t *testing.T) {
 	service := newAttackService("table", landlordJournal{}, nil, "settlement")
 	directory := newLandlordService(landlordJournal{}, "settlement")
-	directory.tables["table"] = landlordTable{Count: 1, Pending: map[uint64]time.Time{1: time.Now().Add(-time.Second)}}
+	directory.setTable("table", landlordTable{Count: 1, Pending: map[uint64]time.Time{1: time.Now().Add(-time.Second)}})
 	directory.routes[1] = landlordRoute{"table", "login", "member"}
 	self := &tableCleanupContext{directory: directory, reconcileError: context.DeadlineExceeded}
 	if err := service.handleTick(self); err != context.DeadlineExceeded || self.exited || len(directory.routes) != 1 {
@@ -61,7 +61,7 @@ func TestReservationReconcileFailureKeepsEmptyTable(t *testing.T) {
 // TestUnjoinedReservationsExpire 保护未调用或明确拒绝 Join 的预留在三十秒到期后释放，重复核对不重复回收。
 func TestUnjoinedReservationsExpire(t *testing.T) {
 	service := newLandlordService(landlordJournal{}, "settlement")
-	service.tables["table"] = landlordTable{}
+	service.setTable("table", landlordTable{})
 	for uid := uint64(1); uid <= 3; uid++ {
 		if _, err := service.handleResolve(nil, uid, "login"); err != nil {
 			t.Fatal(err)
@@ -80,7 +80,7 @@ func TestUnjoinedReservationsExpire(t *testing.T) {
 // TestReservationReconciliationPreservesMembers 保护已入座身份不被到期清理，重登未完成时先保护新预留、到期后恢复原成员路由。
 func TestReservationReconciliationPreservesMembers(t *testing.T) {
 	service := newLandlordService(landlordJournal{}, "settlement")
-	service.tables["table"] = landlordTable{}
+	service.setTable("table", landlordTable{})
 	first, err := service.handleResolve(nil, 1, "login")
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestReservationReconciliationPreservesMembers(t *testing.T) {
 // TestNewReservationSupersedesOldDeadline 保护新 Resolve 更新期限，旧快照核对不能按上一次到期时间清掉新尝试，过期旧 Join 立即拒绝。
 func TestNewReservationSupersedesOldDeadline(t *testing.T) {
 	service := newLandlordService(landlordJournal{}, "settlement")
-	service.tables["table"] = landlordTable{}
+	service.setTable("table", landlordTable{})
 	first, err := service.handleResolve(nil, 1, "old-login")
 	if err != nil {
 		t.Fatal(err)
