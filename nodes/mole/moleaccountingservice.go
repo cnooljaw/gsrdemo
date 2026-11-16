@@ -14,18 +14,19 @@ import (
 //
 //rpc:service moleaccounting private name=moleAccountingName
 const (
-	moleAccountingName                                   = "mole-accounting"
-	accountingLoadCommand              runtime.CommandID = 1
-	accountingStatusCommand            runtime.CommandID = 2
-	accountingSetBalanceCommand        runtime.CommandID = 3
-	accountingPoolCommand              runtime.CommandID = 4
-	accountingInitPoolCommand          runtime.CommandID = 5
-	accountingResumeCommand            runtime.CommandID = 6
-	accountingHitCommand               runtime.CommandID = 10
-	accountingTickCommand              runtime.CommandID = 11
-	accountingForgetCommand            runtime.CommandID = 12
-	accountingSettlementReceiptCommand runtime.CommandID = 13
-	accountingPauseCommand             runtime.CommandID = 14
+	moleAccountingName                                      = "mole-accounting"
+	accountingLoadCommand                 runtime.CommandID = 1
+	accountingStatusCommand               runtime.CommandID = 2
+	accountingSetBalanceCommand           runtime.CommandID = 3
+	accountingPoolCommand                 runtime.CommandID = 4
+	accountingInitPoolCommand             runtime.CommandID = 5
+	accountingResumeCommand               runtime.CommandID = 6
+	accountingHitCommand                  runtime.CommandID = 10
+	accountingTickCommand                 runtime.CommandID = 11
+	accountingForgetCommand               runtime.CommandID = 12
+	accountingSettlementReceiptCommand    runtime.CommandID = 13
+	accountingPauseCommand                runtime.CommandID = 14
+	accountingReconcilePreparationCommand runtime.CommandID = 15
 )
 
 const (
@@ -129,17 +130,18 @@ func newMoleAccountingService() *moleAccountingService {
 		completed: make(map[string]accountingEntry),
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		accountingLoadCommand:              service.handleLoadBalance,
-		accountingStatusCommand:            service.handleOperationStatus,
-		accountingSetBalanceCommand:        service.handleSetBalance,
-		accountingPoolCommand:              service.handlePoolSnapshot,
-		accountingInitPoolCommand:          service.handleInitPool,
-		accountingPauseCommand:             service.handlePause,
-		accountingResumeCommand:            service.handleResumeBalance,
-		accountingHitCommand:               service.handleHit,
-		accountingTickCommand:              service.handleTick,
-		accountingForgetCommand:            service.handleForgetBalance,
-		accountingSettlementReceiptCommand: service.handleSettlementReceipt,
+		accountingLoadCommand:                 service.handleLoadBalance,
+		accountingStatusCommand:               service.handleOperationStatus,
+		accountingSetBalanceCommand:           service.handleSetBalance,
+		accountingPoolCommand:                 service.handlePoolSnapshot,
+		accountingInitPoolCommand:             service.handleInitPool,
+		accountingPauseCommand:                service.handlePause,
+		accountingReconcilePreparationCommand: service.handleReconcilePreparation,
+		accountingResumeCommand:               service.handleResumeBalance,
+		accountingHitCommand:                  service.handleHit,
+		accountingTickCommand:                 service.handleTick,
+		accountingForgetCommand:               service.handleForgetBalance,
+		accountingSettlementReceiptCommand:    service.handleSettlementReceipt,
 	})
 	return service
 }
@@ -432,6 +434,24 @@ func (service *moleAccountingService) handleForgetBalance(_ gsr.CommandContext, 
 		account.Departed = true
 		service.evictIfIdle(userID)
 	}
+	return nil
+}
+
+// handleReconcilePreparation 只修改仍属于本次失败准备的归属，不改余额、版本或待操作。
+func (service *moleAccountingService) handleReconcilePreparation(self gsr.CommandContext, userID uint64, membership, current string) error {
+	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(membership) || current != "" && !validMoleIdentifier(current) {
+		return errInvalidMoleInput
+	}
+	account := service.accounts[userID]
+	if account == nil || account.Membership != membership {
+		return nil
+	}
+	if current != "" {
+		account.Membership, account.Departed = current, false
+		return nil
+	}
+	account.Departed = true
+	service.evictIfIdle(userID)
 	return nil
 }
 

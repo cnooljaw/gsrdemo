@@ -13,12 +13,13 @@ import (
 //
 //rpc:service mole public name=moleServiceName
 const (
-	moleServiceName                           = "mole"
-	moleDepartedCommand     runtime.CommandID = 10
-	moleBalanceCommand      runtime.CommandID = 11
-	moleReserveCommand      runtime.CommandID = 12
-	moleDiscardGroupCommand runtime.CommandID = 13
-	moleHealthCommand       runtime.CommandID = 14
+	moleServiceName                                   = "mole"
+	moleDepartedCommand             runtime.CommandID = 10
+	moleBalanceCommand              runtime.CommandID = 11
+	moleReserveCommand              runtime.CommandID = 12
+	moleDiscardGroupCommand         runtime.CommandID = 13
+	moleHealthCommand               runtime.CommandID = 14
+	moleReconcilePreparationCommand runtime.CommandID = 15
 )
 
 const (
@@ -61,11 +62,12 @@ func newMoleService() *moleService {
 		routes: make(map[uint64]moleRoute), groups: make(map[string]int), pendingForget: make(map[uint64]string),
 	}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		moleHealthCommand:       service.handleHealth,
-		moleReserveCommand:      service.handleReserve,
-		moleDiscardGroupCommand: service.handleDiscardGroup,
-		moleDepartedCommand:     service.handleDeparted,
-		moleBalanceCommand:      service.handleBalanceCorrection,
+		moleHealthCommand:               service.handleHealth,
+		moleReconcilePreparationCommand: service.handleReconcilePreparation,
+		moleReserveCommand:              service.handleReserve,
+		moleDiscardGroupCommand:         service.handleDiscardGroup,
+		moleDepartedCommand:             service.handleDeparted,
+		moleBalanceCommand:              service.handleBalanceCorrection,
 	})
 	return service
 }
@@ -118,6 +120,16 @@ func (service *moleService) handleReserve(self gsr.CommandContext, userID uint64
 	route := moleRoute{Attack: name, LoginID: loginID, Membership: membership}
 	service.routes[userID] = route
 	return route, nil
+}
+
+// handleReconcilePreparation 在目录 owner 内取当前归属并立即 Send，避免快照在转发期间过时。
+// 同一目录后续发送的 Leave/Forget 会排在本次修正之后，不等待 Accounting 执行。
+func (service *moleService) handleReconcilePreparation(self gsr.CommandContext, userID uint64, membership string) error {
+	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(membership) {
+		return errInvalidMoleInput
+	}
+	current := service.routes[userID].Membership
+	return self.SendName(moleAccountingName, accountingReconcilePreparationCommand, userID, membership, current)
 }
 
 func (service *moleService) handleDiscardGroup(self gsr.CommandContext, name string) error {

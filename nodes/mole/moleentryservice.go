@@ -15,28 +15,38 @@ import (
 //
 //rpc:service moleentry public name=moleEntryName
 const (
-	moleEntryName                      = "mole-entry"
-	moleEnterCommand runtime.CommandID = 1
+	moleEntryName                             = "mole-entry"
+	moleEnterCommand        runtime.CommandID = 1
+	entryCleanupTickCommand runtime.CommandID = 10
 )
 
-// moleEntryService 只协调低频进入，不拥有目录、余额或房间状态。
+// moleEntryService 协调低频进入及未入队准备的补偿，不拥有目录、余额或房间状态。
 type moleEntryService struct {
 	settlementNode cluster.NodeID
+	pendingCleanup map[uint64]string // 仅保留每个用户最新失败尝试的 Membership。
+	onStopped      func(error)
 	dispatcher     *gsr.Dispatcher
 }
 
 var _ gsr.Service = (*moleEntryService)(nil)
 
 func newMoleEntryService(settlementNode cluster.NodeID) *moleEntryService {
-	service := &moleEntryService{settlementNode: settlementNode}
+	service := &moleEntryService{settlementNode: settlementNode, pendingCleanup: make(map[uint64]string)}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		moleEnterCommand: service.handleEnter,
+		moleEnterCommand:        service.handleEnter,
+		entryCleanupTickCommand: service.handleCleanupTick,
 	})
 	return service
 }
 
-func (service *moleEntryService) OnStart(context.Context, gsr.ServiceContext) error { return nil }
-func (service *moleEntryService) OnStop(context.Context) error                      { return nil }
+func (service *moleEntryService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	return startMolePulse(ctx, self, accountingPeriod, entryCleanupTickCommand, service.onStopped)
+}
+
+func (service *moleEntryService) OnStop(context.Context) error {
+	return nil
+}
+
 func (service *moleEntryService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	return service.dispatcher.Handle(self, command, args...)
 }
@@ -44,6 +54,9 @@ func (service *moleEntryService) Handle(self gsr.CommandContext, command runtime
 func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uint64, loginID, accessNode, agentName string) (map[string]any, error) {
 	if !validMember(userID, loginID, accessNode, agentName) {
 		return nil, errInvalidMoleInput
+	}
+	if _, exists := service.pendingCleanup[userID]; !exists && len(service.pendingCleanup) >= maxMoleUsers {
+		return nil, errMoleBusy
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
 	location, err := self.Cluster().Call(ctx, "online", onlinerpc.ServiceName, onlinerpc.LookupCommand, userID)
@@ -65,10 +78,16 @@ func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uin
 		if err != nil {
 			return nil, err
 		}
+		// 新准备已得到确认，旧补偿再到达也只能按旧 Membership 空操作。
+		delete(service.pendingCleanup, userID)
 		ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
 		value, err := self.CallName(ctx, moleServiceName, moleReserveCommand, userID, loginID, membership)
 		cancel()
 		if err != nil {
+			if reserveNotAccepted(err) {
+				service.pendingCleanup[userID] = membership
+				service.retryPreparedCleanup(self)
+			}
 			return nil, err
 		}
 		route, ok := value.(moleRoute)
@@ -124,4 +143,39 @@ func (service *moleEntryService) entryBalance(self gsr.ServiceContext, userID ui
 	ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
 	defer cancel()
 	return self.CallName(ctx, moleAccountingName, accountingSetBalanceCommand, userID, membership, confirmed.snapshot())
+}
+
+// reserveNotAccepted 只识别明确未接纳的失败；超时、panic 或未知 Handler 错误不撤销预留。
+func reserveNotAccepted(err error) bool {
+	return errors.Is(err, runtime.ErrMailboxFull) || errors.Is(err, runtime.ErrServiceNotFound) ||
+		errors.Is(err, runtime.ErrServiceClosed) || errors.Is(err, runtime.ErrServiceStarting) || errors.Is(err, runtime.ErrServiceStopping)
+}
+
+func (service *moleEntryService) handleCleanupTick(self gsr.CommandContext) error {
+	if self.Source() == 0 {
+		return errInvalidMoleInput
+	}
+	service.retryPreparedCleanup(self)
+	return nil
+}
+
+// retryPreparedCleanup 的数量及整轮等待都有上限；目录只需确认 Accounting 已接纳修正。
+func (service *moleEntryService) retryPreparedCleanup(self gsr.ServiceContext) {
+	if len(service.pendingCleanup) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
+	defer cancel()
+	attempted := 0
+	for userID, membership := range service.pendingCleanup {
+		if attempted >= maxForgetPerFlush {
+			break
+		}
+		attempted++
+		if _, err := self.CallName(ctx, moleServiceName, moleReconcilePreparationCommand, userID, membership); err != nil {
+			logMoleError(self, "进入准备补偿未接纳，保留重试", err)
+			return
+		}
+		delete(service.pendingCleanup, userID)
+	}
 }

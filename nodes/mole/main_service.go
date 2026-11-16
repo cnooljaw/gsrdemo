@@ -24,15 +24,15 @@ func NewMain(node, settlementNode cluster.NodeID, checkpoint moleCheckpoint, onS
 }
 
 func (service *mainService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	accounting, directory := newMoleAccountingService(), newMoleService()
-	accounting.onStopped, directory.onStopped = service.onStopped, service.onStopped
+	accounting, directory, entry := newMoleAccountingService(), newMoleService(), newMoleEntryService(service.settlementNode)
+	accounting.onStopped, directory.onStopped, entry.onStopped = service.onStopped, service.onStopped, service.onStopped
 	for _, child := range []struct {
 		name    cluster.ServiceName
 		service gsr.Service
 	}{
 		{moleAccountingName, accounting},
 		{moleServiceName, directory},
-		{moleEntryName, newMoleEntryService(service.settlementNode)},
+		{moleEntryName, entry},
 		{moleSubmissionName, newMoleSubmissionService(service.checkpoint, service.settlementNode)},
 	} {
 		id, err := self.CreateService(ctx, child.service)

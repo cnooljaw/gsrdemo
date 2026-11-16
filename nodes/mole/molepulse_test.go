@@ -80,13 +80,15 @@ func (service *saturatedMoleMain) Handle(gsr.CommandContext, runtime.CommandID, 
 }
 func (service *saturatedMoleMain) OnStop(context.Context) error { return nil }
 
-// TestMoleTicksSurviveFullMailbox 保护刷批、提交重试和刷地鼠在满队列拒绝唤醒后均能继续，不需要新请求唤醒。
+// TestMoleTicksSurviveFullMailbox 保护进入补偿、刷批、提交重试和刷地鼠在满队列拒绝唤醒后均能继续，不需要新请求唤醒。
 func TestMoleTicksSurviveFullMailbox(t *testing.T) {
-	for _, name := range []string{"accounting", "submission", "attack"} {
+	for _, name := range []string{"entry", "accounting", "submission", "attack"} {
 		t.Run(name, func(t *testing.T) {
 			var inner gsr.Service
 			var command runtime.CommandID
 			switch name {
+			case "entry":
+				inner, command = newMoleEntryService("settlement"), entryCleanupTickCommand
 			case "accounting":
 				inner, command = newMoleAccountingService(), accountingTickCommand
 			case "submission":
@@ -172,18 +174,23 @@ func (service *panicMoleMain) Handle(gsr.CommandContext, runtime.CommandID, ...a
 }
 func (service *panicMoleMain) OnStop(context.Context) error { return nil }
 
-// TestMoleEssentialOwnerPanicStopsHost 保护全局目录或内存账退出后宿主明确失败，不维持只有端口可用的假健康进程。
+// TestMoleEssentialOwnerPanicStopsHost 保护进入补偿、全局目录或内存账 owner 退出后宿主明确失败，不维持只有端口可用的假健康进程。
 func TestMoleEssentialOwnerPanicStopsHost(t *testing.T) {
-	for _, name := range []string{"accounting", "directory"} {
+	for _, name := range []string{"entry", "accounting", "directory"} {
 		t.Run(name, func(t *testing.T) {
 			ctx, fail := context.WithCancelCause(context.Background())
 			defer fail(nil)
 			var owner gsr.Service
-			if name == "accounting" {
+			switch name {
+			case "entry":
+				service := newMoleEntryService("settlement")
+				service.onStopped = fail
+				owner = service
+			case "accounting":
 				service := newMoleAccountingService()
 				service.onStopped = fail
 				owner = service
-			} else {
+			case "directory":
 				service := newMoleService()
 				service.onStopped = fail
 				owner = service

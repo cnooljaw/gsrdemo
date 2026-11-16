@@ -122,7 +122,7 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 | Service | 独占状态与职责 |
 | --- | --- |
 | MoleService（`mole`） | 用户到组的路由、成员实例及组人数；预留分组、条件清理、未接纳的缓存回收通知和余额校正转发 |
-| MoleEntryService（`mole-entry`） | 协调 Online 检查、余额初始化及 Join；无权威房间或钱包状态 |
+| MoleEntryService（`mole-entry`） | 协调 Online 检查、余额初始化及 Join；保存 Reserve 明确未接纳后的准备补偿任务，无权威房间或钱包状态 |
 | AttackService（每组一个） | 成员、座位、连接路由、目标时间线和有限请求记录；调用私有 attackGame 处理规则 |
 | MoleAccountingService（`mole-accounting`） | 确认余额/版本、待确认扣返、显示修订号、归批缓冲及一个在途批次；只做内存记账 |
 | MoleSubmissionService（`mole-submission`） | Redis 检查点、原批次及回执；持久化、提交、恢复与重试，不访问 SQL |
@@ -136,6 +136,8 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 进入走低频协调：Agent 直接 Call 固定名称 `mole-entry`，名称和命令引用生成的 `moleentry` 契约。Entry 核对 Online 当前绑定，优先复用 Accounting 的余额缓存；仅缓存缺失才查询 `settlement-read` 初始化。错误不视为缓存缺失，有待确认操作时普通余额查询不能改写确认基线。
 
 目录优先补足未满组，Join 前保留路由；Join 超时可能已经成功，保留原路由，不能另开组。确认原组已停止后才清理重选。相同用户重进保留组/座位、更新连接。Entry 每次分组选入尝试都生成独立 Membership 并恢复余额视图，同次尝试的身份贯穿 Accounting 缓存与组目录；确认原组停止后重选时，不复用原尝试的 Membership 或余额快照。离开清理同时检查 LoginID 和 Membership，Accounting 也只接受当前 Membership 的回收通知。
+
+余额准备成功后，Reserve 若明确未被接纳，Entry 返回原错误并保留本次准备的补偿任务。目录在同一回调内读取当前路由、立即 Send 给 Accounting：只对仍属于失败 Membership 的缓存生效；无路由则标记离开，闲置时回收，有待结算操作时保留；已有路由则恢复该路由的 Membership。目录不等待 Accounting，后续 Leave 的回收消息保持同一发送方的接纳顺序。新准备已成功时，旧补偿不能覆盖它。Reserve 超时、panic 或未知 Handler 失败不证明未执行，不能据此撤销。
 
 即时命中只经过三个参与者，不等待 Redis 或 MySQL：
 
@@ -191,7 +193,8 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 - Redis 等待最多 500ms；结算 Call 的总等待范围见[调用与超时](#72-调用与超时)。超时、满邮箱、临时错误或非法回执保留原请求，按 100ms～2s 退避重试，不逐笔查账。业务确定性错误，以及 GSR 的 `runtime.unknown_command`、`runtime.invalid_command_arguments` 接线错误，保留原批次并暂停新记账；修复后重启，按原请求恢复。
 - Leave 不取消已接纳账务；有待扣时保留账户缓存，结清且已离开后才回收。目录/账户上限为 100,000，每组请求记录上限 1,024，已完成记账记录上限 4,096。
 - 正常离开、确认停止后的整组清理，以及目录明确拒绝且未建立用户路由的预留尝试，均由目录按 `UserID → Membership` 保存尚未被 Accounting 接纳的回收通知；同一用户只保留最新一条。产生通知后立即尝试 Send，每次回调最多 64 条；未接纳时停止本轮并保留待投记录，由现有 100ms 目录 Pulse 再次唤醒补投。Send 接纳后移除待投记录，不等同缓存已回收；Accounting 核对 Membership，并按有无待结算操作决定立即或延后回收。预留拒绝的回收决定由目录在处理请求时作出，调用方的 Call 超时不能证明预留未执行。补投表仅在本节点内存中，节点退出后不单独恢复。
-- 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 唤醒 owner，目标邮箱满只跳过本次，不切断后续周期。Submission 退出暂停新记账；Accounting 或目录退出使宿主返回失败；单个组退出不停止其他组。
+- Reserve 未入队时目录没有机会产生上述通知，改由 Entry 保存 `UserID → 失败 Membership`，同一用户最多一条、总计最多 100,000 条；达到上限时不再为新用户准备余额。产生任务后立即尝试，再由 100ms Entry Pulse 重试；每轮最多 64 条，共享 500ms 等待预算。目录确认 Accounting 已接纳修正后移除任务，失败或结果未知则保留。新的余额准备成功后删除该用户旧任务；迟到修正仍受 Membership 校验保护。该表同样只在内存中，节点退出后不单独恢复。
+- 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 唤醒 owner，目标邮箱满只跳过本次，不切断后续周期。Submission 退出暂停新记账；Entry、Accounting 或目录退出使宿主返回失败；单个组退出不停止其他组。
 
 ## 6. 斗地主：牌桌与局末结算
 

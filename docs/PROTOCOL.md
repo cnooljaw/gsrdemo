@@ -292,6 +292,14 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等约定为同节点协作，按实际 Handler 使用 owner 私有类型及本地消息，不向客户端开放。公开 Service 的命令编号整体生成，不代表私有类型可远程编解码或取消来源限制；私有 Service 不生成共享契约。地鼠缓存 Resume/SetBalance/Forget 均携带当前选入尝试的 Membership，旧成员的回收不作用于当前缓存；换组时的身份和余额恢复见[进入协调](DESIGN.md#52-进入与即时命中)，目录回收通知的补投与限量边界见[地鼠故障边界](DESIGN.md#54-检查点与故障边界)。
 
+地鼠余额准备成功、Reserve 明确未接纳时，使用以下补偿链；三个 Handler 均要求非零本地来源。重试和归属判断见上述设计章节。
+
+| 调用方 → Service / Command | 方式 | 顺序参数 | 结果 |
+| --- | --- | --- | --- |
+| Entry Pulse → `mole-entry / 10` CleanupTick | Send | 无 | 唤醒待补偿任务重试，无业务回执 |
+| Entry → `mole / 15` ReconcilePreparation | Call | `U, failedMembership string` | error；nil 只表示 Accounting 已接纳修正，不代表已执行 |
+| 目录 → `mole-accounting / 15` ReconcilePreparation | Send | `U, failedMembership string, currentMembership string` | 无业务回执；当前归属为空表示无路由，只修改仍属于失败尝试的缓存 |
+
 以下斗地主调用从 AttackService 发往本节点目录；牌桌 Tick 由本地 Pulse Send，继续拒绝远程来源。
 
 | Service / Command | 方式 | 顺序参数 | 结果 |
