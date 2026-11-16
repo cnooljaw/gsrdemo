@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 用途：构建、检查项目、生成协议/契约、前台启动节点或执行结算 Call 池及读写混合压测。
-# 用法：dev.sh build|check [access|login|online|mole|settlement|landlord]；dev.sh run <节点>；dev.sh load settlement；dev.sh generate access|rpc。
+# 用途：构建、检查项目、生成协议/契约、前台启动节点或执行地鼠 owner、结算 Call 池及读写混合压测。
+# 用法：dev.sh build|check [access|login|online|mole|settlement|landlord]；dev.sh run <节点>；dev.sh load mole|settlement；dev.sh generate access|rpc。
 # run 优先读取 configs/<节点>-01.local.yaml，未配置时读取公开模板。
 # 不指定节点时，build/check 包含所有 Go module 和 TypeScript；指定时只处理 common 和该节点。
 # 执行范围：仅 gsrdemo；GOWORK=off，复用 .cache/go-build，构建输出到 bin/ 和 typeclient/dist/。
@@ -11,7 +11,7 @@ export GOCACHE="${GOCACHE:-$project_root/.cache/go-build}"
 export GOWORK=off
 
 usage() {
-    echo "用法：$0 build|check [access|login|online|mole|settlement|landlord] | run <节点> | load settlement | generate access|rpc"
+    echo "用法：$0 build|check [access|login|online|mole|settlement|landlord] | run <节点> | load mole|settlement | generate access|rpc"
 }
 
 action="${1:-}"
@@ -67,6 +67,10 @@ JS
     exit 0
 fi
 if [[ "$action" == "load" ]]; then
+    if [[ "$node" == "mole" ]]; then
+        export GSRDEMO_MOLE_LOAD=1
+        exec go -C "$project_root/nodes/mole" test -count=1 -run '^TestMoleOwnerLoad$' -v -timeout=3m .
+    fi
     [[ "$node" == "settlement" ]] || { usage >&2; exit 2; }
     export GSRDEMO_SETTLEMENT_POOL_LOAD=1
     export GSRDEMO_SETTLEMENT_MYSQL=1

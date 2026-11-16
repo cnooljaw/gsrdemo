@@ -17,4 +17,5 @@ const (
 	MoleBalanceCommand           = 9
 	MolePoolCommand              = 10
 	MoleOperationStatusCommand   = 11
+	MoleRefreshCommand           = 12
 )

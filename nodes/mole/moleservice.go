@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"context"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 	moleBalanceCommand           runtime.CommandID = 9
 	molePoolCommand              runtime.CommandID = 10
 	moleOperationStatusCommand   runtime.CommandID = 11
+	moleRefreshCommand           runtime.CommandID = 12
 )
 const (
 	maxMoleUsers    = 100000
@@ -50,6 +52,8 @@ type moleService struct {
 	availableGroups [attackSeats]map[string]*moleGroup // 按实际人数索引可补位组，0 人和满组不入索引。
 	users           map[uint64]string                  // 用户到实际组的索引；与组内成员在同一回调更新。
 	accounting      moleAccounting
+	spawnOrder      list.List // 固定周期下按下次刷新时间排列，入组和刷新均追加到尾部。
+	refreshQueued   bool      // 同一时刻最多一条自身续批消息。
 	dispatcher      *gsr.Dispatcher
 	onStopped       func(error)
 }
@@ -73,6 +77,7 @@ func newMoleService() *moleService {
 		moleBalanceCommand:           service.handleBalance,
 		molePoolCommand:              service.handlePool,
 		moleOperationStatusCommand:   service.handleOperationStatus,
+		moleRefreshCommand:           service.handleRefresh,
 	})
 	return service
 }
@@ -164,7 +169,9 @@ func (service *moleService) enter(userID uint64, loginID, accessNode, agentName 
 	}
 	group.members[userID] = member
 	service.updateAvailableGroup(group, previousSize)
-	service.groups[group.game.name] = group
+	if group.spawnElement == nil {
+		service.addGroup(group)
+	}
 	service.users[userID] = group.game.name
 	view := group.view(userID)
 	view["silver"] = balance
@@ -252,7 +259,7 @@ func (service *moleService) leave(userID uint64, loginID string) (*moleGroup, er
 	service.updateAvailableGroup(group, previousSize)
 	delete(service.users, userID)
 	if len(group.members) == 0 {
-		delete(service.groups, group.game.name)
+		service.removeGroup(group)
 	}
 	service.releaseAccount(userID)
 	return group, nil
@@ -266,17 +273,12 @@ func (service *moleService) handleTick(self gsr.CommandContext) error {
 	if self.Source() == 0 {
 		return errInvalidMoleInput
 	}
-	now := time.Now()
-	for _, group := range service.groups {
-		if !now.Before(group.nextSpawnAt) {
-			group.game.spawn(now)
-			group.nextSpawnAt = now.Add(spawnPeriod)
-			service.broadcast(self, group)
-		}
-	}
 	err := service.accounting.flush(self)
 	if err != nil {
 		logMoleError(self, "地鼠归批未完成，保留内存操作", err)
+	}
+	if !service.refreshQueued {
+		service.refreshGroups(self)
 	}
 	return err
 }

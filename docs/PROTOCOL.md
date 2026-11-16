@@ -287,7 +287,8 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | 调用方 → Service / Command | 方式 | 顺序参数 | 结果与来源限制 |
 | --- | --- | --- | --- |
 | Entry → `mole / 1` Enter | Call | `U, L, N, A, seed map`；seed 可为 nil，否则为 `amount int64, version uint64` | 完整快照及 silver；缺账户且无 seed 返回 balance_required，不改状态；仅非零本地来源 |
-| Pulse → `mole / 5` Tick | Send | 无 | 刷目标及归批；仅非零本地来源 |
+| Pulse → `mole / 5` Tick | Send | 无 | 先归批，再推进一批到期刷新；仅非零本地来源 |
+| MoleService → `自身 ServiceID / 12` Refresh | Send | 无 | 分批刷新剩余到期组；仅接受自身来源，最多一条续批在途；预算与失败边界见[刷新调度](DESIGN.md#54-检查点与故障边界) |
 | Submission → `mole / 6` InitAccounting | Send | `pool molePool, sequence uint64` | 初始化恢复统计；仅非零本地来源 |
 | Submission → `mole / 7` SettlementReceipt | Send | `receipt batchReceipt` 独立快照 | 应用回执与余额校正；仅非零本地来源 |
 | Submission / Pulse → `mole / 8` Pause | Send | 无 | 暂停新记账；仅非零本地来源 |
@@ -355,14 +356,13 @@ MoleService 本地 Send 原批次给 Submission
 ### 3.3 地鼠后台入账与差异校正
 
 ```text
-Accounting 本地 Send 原批次给 Submission
+MoleService/accounting.flush 本地 Send 原批次给 Submission
   → Submission 保存 Redis 原批次
   → Call settlement-write/1（原 BatchID 和内容）
   → 池成员提交 MySQL，直接返回完整回执或错误
   → Submission 校验回执，完成 Redis 统计和检查点；失败保留原请求/已收到的回执
-  → 本地 Send 回执给 Accounting，应用确认余额并释放待扣
-  → 仅显示有差异：MoleService → AttackService
-  → Send 当前 Agent/102 → C/S 1062
+  → 本地 Send 完整回执给 MoleService/accounting.applyReceipt，应用确认余额并释放待扣
+  → 仅显示余额有差异时：Send 当前 Agent/102 → C/S 1062
 ```
 
 ### 3.4 斗地主一局与三人结算

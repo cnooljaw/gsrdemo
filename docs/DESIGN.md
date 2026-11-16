@@ -122,7 +122,7 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 | Service / 私有组件 | 独占状态与职责 |
 | --- | --- |
 | MoleEntryService（`mole-entry`） | 核对 Online 身份，协调完整 Enter；仅在缺余额时查询结算读池，不持有成员或补偿状态 |
-| MoleService（`mole`） | 唯一内存状态 owner：组、成员、用户到组的索引、内存余额与待扣、归批缓冲、在途批次及确认统计 |
+| MoleService（`mole`） | 唯一内存状态 owner：组、成员、用户到组的索引、刷新顺序、内存余额与待扣、归批缓冲、在途批次及确认统计 |
 | moleGroup / attackGame | MoleService 私有对象：每组三人座位、当前连接、目标与有限请求记录；无独立邮箱或生命周期 |
 | moleAccounting | MoleService 私有组件：确认余额/版本、待确认扣返、显示修订号、幂等记录和归批规则；不拥有成员归属 |
 | MoleSubmissionService（`mole-submission`） | 独占 Redis 检查点、原批次及回执，负责持久化、结算 Call、恢复和重试 |
@@ -188,7 +188,8 @@ MoleService 的 `handleSettlementReceipt → accounting.applyReceipt` 更新较�
 - 未保存 Redis 的内存命中可能在崩溃时丢失；已保存批次按原 ID、顺序和金额恢复，不查询后再抽奖或重新生成请求。
 - Redis 等待最多 500ms；结算 Call 的总等待范围见[调用与超时](#72-调用与超时)。超时、满邮箱、临时错误或非法回执保留原请求，按 100ms～2s 退避重试，不逐笔查账。业务确定性错误，以及 GSR 的 `runtime.unknown_command`、`runtime.invalid_command_arguments` 接线错误，保留原批次并暂停新记账；修复后重启，按原请求恢复。
 - Leave 不取消已接纳账务；用户已离开且没有待结算操作时直接删除账户，否则等回执完成再释放。实际成员和缓存账户各有 100,000 上限，每组请求记录上限 1,024，已完成记账记录上限 4,096。
-- 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 每 100ms 唤醒 MoleService 归批并检查各组下一次刷目标时间，目标邮箱满只跳过本次，不切断后续周期。Submission 等待、超时和重试不占用内存玩法 owner。
+- 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 每 100ms 唤醒 MoleService，Tick 先归批账务，再推进到期刷新，目标邮箱满只跳过本次，不切断后续周期。Submission 等待、超时和重试不占用内存玩法 owner。
+- [刷新调度](../nodes/mole/molespawn.go) 使用 owner 私有 FIFO 队列：所有组周期固定为 1 秒，建组追加到尾部，刷新后按当前时间安排下一秒并移到尾部，因此只检查队首就能找到最早到期组；空组回收时一起移除。每批最多刷新 128 组，并在完成单组后检查 2ms 软预算；超过预算不抢占当前组。剩余到期工作由 GSR Send 给自身的 `Refresh / 12` 续批，最多一条在途；续批仅接受自身来源，消息排在已有请求之后。未接纳时不保留在途标记，由下次 Pulse 补做。刷新不追补错过的秒数，旧目标仍按原截止时间失效。
 - Submission 退出暂停新记账；MoleService 退出使宿主返回失败。组是普通对象，不再有组间独立邮箱或 panic 隔离；MoleService 回调只做有界内存工作和非阻塞发送，不直接调用外部存储。当前单 owner 吞吐需要实测，不能直接用共享同一状态的 Service 池增加并行。
 
 ## 6. 斗地主：牌桌与局末结算
@@ -331,6 +332,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
 | 地鼠原子入场、登录隔离与未知结果重试 | [进入协作用例](../nodes/mole/moleentryservice_cluster_test.go)、[失败与超时用例](../nodes/mole/moleentryservice_atomic_test.go) |
 | 地鼠原子入场、内存余额、回执、重试与检查点恢复 | [入场与离开用例](../nodes/mole/moleservice_test.go)、[Accounting 用例](../nodes/mole/moleaccounting_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccounting_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
+| 地鼠单 owner 的周期刷新与业务请求混合容量样本 | [显式启用的负载测试](../nodes/mole/moleservice_load_test.go) |
 | 斗地主成员回收、重登隔离、Join 核对与慢目录退避 | [成员回收用例](../nodes/landlord/attackservice_test.go)、[牌桌通信及 Pulse 用例](../nodes/landlord/attackservice_cluster_test.go) |
 | 斗地主未入座预留到期、空桌退出及超时已入座保护 | [期限规则用例](../nodes/landlord/landlordreservation_test.go)、[真实 TCP 与 Pulse 用例](../nodes/landlord/landlordreservation_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试、暂停与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Journal 故障用例](../nodes/landlord/landlordjournal_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
@@ -340,6 +342,10 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 ### 9.2 并行与容量取舍
 
 地鼠采用一个在途批次，减少提交顺序和检查点协调；单个 mole 来源不会同时占满所有结算执行者。结算并行用于不同来源和牌局，执行者与数据库连接数需要配套；单批越大，吞吐和等待延迟的取舍也越明显，因此地鼠按周期/阈值提交，不为凑满 500 项额外等待。
+
+[地鼠单 owner 样本](../nodes/mole/moleservice_load_test.go) 预装 1,200、12,000、100,000 名成员，每三人一组；分别模拟每 100ms 约十分之一组到期的错峰刷新，以及所有组同时到期的集中刷新，每档持续 5 秒。4 个独立调用来源每 20ms 先查询快照，有可用目标再提交一锤，总输入上限约 400 RPC/s。全部使用真实 GSR 邮箱、发布版 ValueCodec 和本机 TCP，推送由两个接入替身各自的单个接收 Service 计数，不模拟独立 Agent、Gate 或慢客户端。固定账务在途标记，仅保留本档最多 1,000 锤的内存账务，隔离 Submission、Redis 和 SQL；结束时核对成员索引及已接纳账务数量。
+
+报告记录 Tick 与自身续批执行耗时、Hit/Snapshot Call 的 P95/P99 与最大值、从计划发起到完成的 P95/P99、实际完成率、发生器最大迟到、推送尝试/本地接纳/接收数量、进程堆占用、分配量和 GC 次数。另记录目标刷新总数、每组刷新次数的最小/最大值，以及结束时最久的到期延迟，避免通过少刷新得到看似更好的请求成绩。刷新工作耗时包含快照构造、编码和发送接纳，不包含邮箱排队；Call 延迟包含请求排队和返回，计划时间延迟另含发生器积压，以及 Hit 前的 Snapshot。窗口内迟到的请求会补发，窗口结束后不再补发，过载可能降低实际完成率；不能只看补发时的快速 Call 而忽略用户已经等待的时间。本地接纳也不保证远端接收。堆与分配量包含本进程内发生器及接收替身，短程样本不设生产 SLA，不代表完整游戏链路或真实在线容量验收；执行入口与结果位置见 README。
 
 现有 [Online 混合调用测试](../nodes/online/onlineservice_load_test.go) 和[结算 Call 池/批次测试](../nodes/settlement/settlement_load_test.go) 提供可复现的短程样本。结算测试使用真实 Cluster Call、独立调用方 Service，每个来源只保留一个在途批次，按原 ID 重试，并逐档核对余额、版本、批次和操作数量；计时排除节点启动，延迟包含重试。参数分阶段比较并行数、连接数、邮箱和批次大小；确认模式对并行数各跑三轮，按吞吐中位数选择后续对比基线，不自动修改业务配置。
 

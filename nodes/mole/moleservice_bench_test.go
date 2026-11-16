@@ -23,7 +23,7 @@ func BenchmarkMoleEnterFullGroups(b *testing.B) {
 					service.users[uid] = name
 					service.accounting.updateBalance(uid, silverBalance{Amount: 10000, Version: 1})
 				}
-				service.groups[name] = group
+				service.addGroup(group)
 			}
 			uid := uint64(count*attackSeats + 1)
 			seed := silverBalance{Amount: 10000, Version: 1}.snapshot()

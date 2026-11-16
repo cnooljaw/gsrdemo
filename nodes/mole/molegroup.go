@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"errors"
 	"time"
 )
@@ -15,9 +16,10 @@ type moleMember struct {
 
 // moleGroup 是 MoleService 私有组对象，没有独立邮箱或生命周期。
 type moleGroup struct {
-	game        attackGame
-	members     map[uint64]moleMember
-	nextSpawnAt time.Time
+	game         attackGame
+	members      map[uint64]moleMember
+	nextSpawnAt  time.Time
+	spawnElement *list.Element
 }
 
 func newMoleGroup(name string, now time.Time) *moleGroup {
