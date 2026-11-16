@@ -4,18 +4,17 @@ import (
 	"errors"
 
 	"github.com/cnooljaw/gsr"
-	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/protocol"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 )
 
-// comMole 处理本游戏接入协议，只持有路由，由所属 Agent 串行调用。
+// comMole 保存逻辑组标识，所有游戏 RPC 均调用固定 MoleService，由所属 Agent 串行调用。
 type comMole struct {
-	deps       componentDependencies
-	attackName cluster.ServiceName
+	deps    componentDependencies
+	groupID string
 }
 
 var _ gameComponent = (*comMole)(nil)
@@ -50,8 +49,8 @@ func (mole *comMole) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	if !ok || attackName == "" {
 		return errInvalidBackendReply
 	}
-	// Join 已返回，先保留可用清理目标；其余字段非法时仍能按原身份 Leave。
-	mole.attackName = cluster.ServiceName(attackName)
+	// 记录逻辑组标识用于请求与推送校验；断线 Leave 不依赖已经收到组名。
+	mole.groupID = attackName
 	snapshot, err := clientSnapshot(value)
 	if err != nil {
 		return err
@@ -68,7 +67,7 @@ func (mole *comMole) requireGame() error {
 	if err := identity.RequireLogin(); err != nil {
 		return err
 	}
-	if mole.attackName == "" {
+	if mole.groupID == "" {
 		return errEnterRequired
 	}
 	return nil
@@ -76,7 +75,7 @@ func (mole *comMole) requireGame() error {
 
 // Entered 从本游戏路由判断是否已进入，不另存状态。
 func (mole *comMole) Entered() bool {
-	return mole.attackName != ""
+	return mole.groupID != ""
 }
 
 func (mole *comMole) onHit(self gsr.CommandContext, reply protocol.Context, request *demopb.HitRequest) error {
@@ -85,7 +84,7 @@ func (mole *comMole) onHit(self gsr.CommandContext, reply protocol.Context, requ
 		return err
 	}
 	// 不换 ActionID、不自动重试；未知结果停止操作，重入刷新余额，原操作留给受控工具核查。
-	value, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackHitCommand, identity.UserID, identity.LoginID,
+	value, err := mole.deps.Call(self, "mole", molerpc.ServiceName, molerpc.MoleHitCommand, identity.UserID, identity.LoginID, mole.groupID,
 		request.GetActionId(), request.GetSpawnSeq(), request.GetHole())
 	if errors.Is(err, errMoleTargetUnavailable) {
 		// 该拒绝发生在 comMole 接纳记账之前；不伪造 HitID、奖励或余额。
@@ -113,7 +112,7 @@ func (mole *comMole) onSnapshot(self gsr.CommandContext, reply protocol.Context,
 	if err := mole.requireGame(); err != nil {
 		return err
 	}
-	value, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackSnapshotCommand, identity.UserID, identity.LoginID)
+	value, err := mole.deps.Call(self, "mole", molerpc.ServiceName, molerpc.MoleSnapshotCommand, identity.UserID, identity.LoginID, mole.groupID)
 	if err != nil {
 		return err
 	}
@@ -121,7 +120,7 @@ func (mole *comMole) onSnapshot(self gsr.CommandContext, reply protocol.Context,
 	if err != nil {
 		return err
 	}
-	if cluster.ServiceName(snapshot.AttackName) != mole.attackName {
+	if snapshot.AttackName != mole.groupID {
 		return errInvalidBackendReply
 	}
 	return reply.Response(uint32(demopb.MsgId_S2C_SNAPSHOT), &demopb.SnapshotResponse{Snapshot: snapshot})
@@ -132,7 +131,7 @@ func (mole *comMole) onLeave(self gsr.CommandContext, reply protocol.Context, _ 
 	if err := mole.requireGame(); err != nil {
 		return err
 	}
-	value, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackLeaveCommand, identity.UserID, identity.LoginID)
+	value, err := mole.deps.Call(self, "mole", molerpc.ServiceName, molerpc.MoleLeaveCommand, identity.UserID, identity.LoginID)
 	if err != nil {
 		return err
 	}
@@ -140,13 +139,13 @@ func (mole *comMole) onLeave(self gsr.CommandContext, reply protocol.Context, _ 
 	if !ok || !left {
 		return errInvalidBackendReply
 	}
-	mole.attackName = ""
+	mole.groupID = ""
 	return reply.Response(uint32(demopb.MsgId_S2C_LEAVE), &demopb.LeaveResponse{Left: left})
 }
 
 func (mole *comMole) handleSnapshotPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
 	identity := mole.deps.Identity()
-	if identity.UserID == 0 || loginID != identity.LoginID || mole.attackName == "" {
+	if identity.UserID == 0 || loginID != identity.LoginID || mole.groupID == "" {
 		return nil
 	}
 	snapshot, err := clientSnapshot(payload)
@@ -154,7 +153,7 @@ func (mole *comMole) handleSnapshotPush(_ gsr.CommandContext, loginID string, pa
 		return err
 	}
 	// 离开/重新进入后的旧组快照不能替换当前组。
-	if cluster.ServiceName(snapshot.AttackName) != mole.attackName {
+	if snapshot.AttackName != mole.groupID {
 		return nil
 	}
 	return mole.deps.Push(uint32(demopb.MsgId_S2C_SNAPSHOT_PUSH), &demopb.SnapshotPush{Snapshot: snapshot})
@@ -162,7 +161,7 @@ func (mole *comMole) handleSnapshotPush(_ gsr.CommandContext, loginID string, pa
 
 func (mole *comMole) handleBalanceCorrectionPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {
 	identity := mole.deps.Identity()
-	if identity.UserID == 0 || loginID != identity.LoginID || mole.attackName == "" {
+	if identity.UserID == 0 || loginID != identity.LoginID || mole.groupID == "" {
 		return nil
 	}
 	silver, err := clientBalance(payload)
@@ -192,11 +191,11 @@ func (mole *comMole) CommandHandlers() map[runtime.CommandID]any {
 
 // Disconnect 尽力离开并清空路由；失败由所属 Agent 记录，组件不关闭连接。
 func (mole *comMole) Disconnect(self gsr.ServiceContext) error {
-	defer func() { mole.attackName = "" }()
-	if mole.attackName == "" {
+	defer func() { mole.groupID = "" }()
+	identity := mole.deps.Identity()
+	if identity.UserID == 0 || identity.LoginID == "" {
 		return nil
 	}
-	identity := mole.deps.Identity()
-	_, err := mole.deps.Call(self, "mole", mole.attackName, moleattack.AttackLeaveCommand, identity.UserID, identity.LoginID)
+	_, err := mole.deps.Call(self, "mole", molerpc.ServiceName, molerpc.MoleLeaveCommand, identity.UserID, identity.LoginID)
 	return err
 }

@@ -6,6 +6,5 @@ package moleentry
 const ServiceName = "mole-entry"
 
 const (
-	MoleEnterCommand        = 1
-	EntryCleanupTickCommand = 10
+	MoleEnterCommand = 1
 )

@@ -66,7 +66,7 @@ if player.Disabled {
 
 ### 3.2 状态、并发与生命周期
 
-- 每份可变状态只有一个 Service owner。其私有组件由该 Service 串行调用，不因此获得独立 Mailbox、生命周期或并行能力；跨 Service 通过消息访问，引用参数和结果传独立快照。
+- 每份可变状态只有一个 Service owner。其私有组件由该 Service 串行调用，不因此获得独立 Mailbox、生命周期或并行能力；跨 Service 通过消息访问，引用参数和结果传独立快照。同一次业务动作需要一起提交的内存状态优先放在同一 owner，避免仅为拆分 Service 引入预留、补偿和归属恢复。
 - 只保存必要状态，行为相同的状态优先合并；不为 RPC、重试、存储的每个技术步骤增加状态，也不用重复布尔值重建复杂状态机。拆分组件依据实际职责，增加 Service 依据独立等待需求，不为形式对称增加层次。
 - `self`、Node 和 Handler 上下文仅在当前回调内使用，不保存到对象，也不借给异步任务。`context.Context` 用于取消、截止时间和请求信息，不充当依赖容器；只有明确的生命周期 owner 才持有用于关闭的根 context/cancel。
 - 业务层不启动 goroutine，异步流程使用消息、GSR Timer 或独立 Service。不要用锁或 channel 绕过 Service 的状态所有权。
@@ -104,7 +104,7 @@ func (mole *comMole) ProtocolHandlers() map[uint32]any {
 - 以 Service 为公开/私有边界，命令不再逐条区分公私。公开 Service 的命令块整体生成共享契约；私有 Service 的命令留在节点内部。未标记的命令块不参与生成；无业务命令的 MainService 无须定义命令块。
 - 每个 Service 使用独立命令块，和 Dispatcher 就近维护；块内所有命令都显式赋值。同一 Service 编号唯一，不同 Service 可以复用编号；停用编号按协议约定保留，不通过重排或 `iota` 改变既有编号。
 - 标记格式为 `//rpc:service <契约包名> public|private [name=<本地名称常量>]`。包名使用小写字母，公开契约包名在仓库中唯一。`name=` 引用同一块内显式定义的非空字符串，生成固定 `ServiceName`；其他项为 uint32 范围的显式整数，首字母大写后导出。生成器只提取常量，不生成 Handler、参数编解码、调用包装或重试策略。
-- 契约包名应与现有 Service 名称对应；不同节点有同名 Service 时加节点前缀，例如 `moleattack`、`landlordattack` 对应各自的 AttackService，避免再引入一套角色名称。
+- 契约包名应与现有 Service 名称对应；不同节点有同名 Service 时加节点前缀，例如 `mole` 对应 MoleService，`landlordattack` 对应斗地主 AttackService，避免再引入一套角色名称。
 - 固定单实例和服务池生成固定逻辑名称；池成员共享一份契约，数量和成员 ID 不进入生成文件。动态房间省略 `name=`，只生成命令，调用使用业务返回的实例名称。节点地址从配置取得。
 - 源定义由对应节点维护，`common/rpc/<service>/commands.gen.go` 由工具生成并纳入 Git。所属节点内部优先引用源定义，跨节点调用方引用生成常量；禁止手改生成文件或另抄一份编号。Agent 与游戏接入组件在同包内通过文件和类型组织，直接共享 Agent 命令，不为共享常量增加独立包。工程生成与同步检查命令见 [README](../README.md#开发与验证)。
 - 公开/私有标记控制契约生成，不是 GSR 的访问控制。节点组装决定是否对外发布名称；需要限制本地来源的 Handler 继续执行来源检查，不能依赖常量是否导出。

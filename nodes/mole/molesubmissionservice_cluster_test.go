@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
@@ -46,19 +45,18 @@ func TestMolePoisonBatchPausesSubmission(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
+			if _, err := moleRPC(t, routes, "mole", moleServiceName, moleBalanceCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
 				t.Fatalf("提交暂停仍接纳新记账: %v", err)
 			}
-			current, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(4), "login-4")
+			current, err := moleRPC(t, routes, "mole", moleServiceName, moleSnapshotCommand, uint64(4), "login-4", other["attack_name"].(string))
 			if err != nil {
 				t.Fatal("提交暂停阻塞了房间快照", err)
 			}
 			target := current.(map[string]any)["targets"].([]any)[0].(map[string]any)
-			if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackHitCommand,
-				uint64(4), "login-4", "must-not-run", target["spawn_seq"], target["hole"]); !errors.Is(err, errAccountingUnavailable) {
+			if _, err := moleRPC(t, routes, "mole", moleServiceName, moleHitCommand, uint64(4), "login-4", other["attack_name"].(string), "must-not-run", target["spawn_seq"], target["hole"]); !errors.Is(err, errAccountingUnavailable) {
 				t.Fatalf("提交暂停后仍接纳新命中: %v", err)
 			}
-			value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, uint64(1), bad["hit_id"])
+			value, err := moleRPC(t, routes, "mole", moleServiceName, moleOperationStatusCommand, uint64(1), bad["hit_id"])
 			if err != nil || value.(map[string]any)["status"] != "accepted" {
 				t.Fatalf("unknown result was discarded: %v %v", value, err)
 			}
@@ -115,7 +113,7 @@ func TestMoleSubmissionPanicPausesAccounting(t *testing.T) {
 	_ = testHitTarget(t, routes, first, 1, "login-1", "panic")
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		_, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(1))
+		_, err := moleRPC(t, routes, "mole", moleServiceName, moleBalanceCommand, uint64(1))
 		if errors.Is(err, errAccountingUnavailable) {
 			break
 		}
@@ -124,10 +122,10 @@ func TestMoleSubmissionPanicPausesAccounting(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleBalanceCommand, uint64(4)); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("提交退出后仍显示账务可用: %v", err)
 	}
-	if _, err := moleRPC(t, routes, "mole", other["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(4), "login-4"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleSnapshotCommand, uint64(4), "login-4", other["attack_name"].(string)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -152,7 +150,7 @@ func TestMoleDamagedCheckpointBlocksAccounting(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand); !errors.Is(err, errAccountingUnavailable) {
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, molePoolCommand); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("损坏检查点被当作可用统计: %v", err)
 	}
 	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(4), "login-4", "access-02", "agent"); err != nil {
@@ -182,7 +180,7 @@ func TestMoleSettlementCallTimeoutAllowsHitsAndRetriesOriginalBatch(t *testing.T
 		t.Fatal("first batch did not reach settlement")
 	}
 	secondHit := testHitTarget(t, routes, other, 4, "login-4", "second")
-	status, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, uint64(1), firstHit["hit_id"])
+	status, err := moleRPC(t, routes, "mole", moleServiceName, moleOperationStatusCommand, uint64(1), firstHit["hit_id"])
 	if err != nil || status.(map[string]any)["status"] != "accepted" {
 		t.Fatalf("第二组命中未在首批回执缺失期间完成: %v %v", status, err)
 	}
@@ -194,7 +192,7 @@ func TestMoleSettlementCallTimeoutAllowsHitsAndRetriesOriginalBatch(t *testing.T
 	}
 	waitMoleOperation(t, routes, 1, firstHit["hit_id"].(string), "committed")
 	waitMoleOperation(t, routes, 4, secondHit["hit_id"].(string), "committed")
-	value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand)
+	value, err := moleRPC(t, routes, "mole", moleServiceName, molePoolCommand)
 	if err != nil || value.(map[string]any)["hits"] != int64(2) {
 		t.Fatalf("duplicate or missing statistics: %v %v", value, err)
 	}
@@ -307,7 +305,7 @@ func TestMoleRestartReloadsSettlementState(t *testing.T) {
 	if err != nil || value == nil || value.(map[string]any)["status"] != "committed" {
 		t.Fatalf("durable operation was not queryable: %v %v", value, err)
 	}
-	value, err = moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand)
+	value, err = moleRPC(t, routes, "mole", moleServiceName, molePoolCommand)
 	if err != nil || value.(map[string]any)["hits"] != int64(1) {
 		t.Fatalf("statistics were not rebuilt: %v %v", value, err)
 	}
@@ -319,7 +317,7 @@ func TestMoleExitDoesNotCancelHandedOffHit(t *testing.T) {
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
 	hit := testHitTarget(t, routes, snapshot, 1, "login", "action")
 	name := snapshot["attack_name"].(string)
-	if _, err := moleRPC(t, routes, "mole", name, moleattack.AttackLeaveCommand, uint64(1), "login"); err != nil {
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleLeaveCommand, uint64(1), "login"); err != nil {
 		t.Fatal(err)
 	}
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
@@ -362,10 +360,10 @@ func TestMoleMissingCheckpointNeedsExplicitInitialization(t *testing.T) {
 	fixture := newSettlementFixture()
 	fixture.checkpoint = moleCheckpoint{client: startMoleRedis(t), key: "test:missing"}
 	routes, _ := prepareMoleCluster(t, fixture)
-	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingResumeCommand, uint64(1), "member-test"); !errors.Is(err, errAccountingUnavailable) {
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, moleBalanceCommand, uint64(1)); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("missing checkpoint allowed balance access: %v", err)
 	}
-	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingPoolCommand); !errors.Is(err, errAccountingUnavailable) {
+	if _, err := moleRPC(t, routes, "mole", moleServiceName, molePoolCommand); !errors.Is(err, errAccountingUnavailable) {
 		t.Fatalf("missing checkpoint initialized zero pool: %v", err)
 	}
 	if err := fixture.checkpoint.initialize(context.Background(), molePool{}); err != nil {

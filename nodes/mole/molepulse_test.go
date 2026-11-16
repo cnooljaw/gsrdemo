@@ -9,7 +9,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 )
 
 type busyMoleFixture struct {
@@ -80,21 +79,18 @@ func (service *saturatedMoleMain) Handle(gsr.CommandContext, runtime.CommandID, 
 }
 func (service *saturatedMoleMain) OnStop(context.Context) error { return nil }
 
-// TestMoleTicksSurviveFullMailbox 保护进入补偿、刷批、提交重试和刷地鼠在满队列拒绝唤醒后均能继续，不需要新请求唤醒。
+// TestMoleTicksSurviveFullMailbox 保护内存玩法推进、刷批和提交重试在满队列拒绝唤醒后均能继续，不需要新请求唤醒。
 func TestMoleTicksSurviveFullMailbox(t *testing.T) {
-	for _, name := range []string{"entry", "accounting", "submission", "attack"} {
+	for _, name := range []string{"mole", "submission"} {
 		t.Run(name, func(t *testing.T) {
 			var inner gsr.Service
 			var command runtime.CommandID
 			switch name {
-			case "entry":
-				inner, command = newMoleEntryService("settlement"), entryCleanupTickCommand
-			case "accounting":
-				inner, command = newMoleAccountingService(), accountingTickCommand
+			case "mole":
+				inner, command = newMoleService(), moleTickCommand
 			case "submission":
 				inner, command = newMoleSubmissionService(testMoleCheckpoint(t), "settlement"), submissionTickCommand
-			case "attack":
-				inner, command = newAttackService("attack-timer"), moleattack.AttackTickCommand
+
 			}
 			owner := &busyMoleFixture{owner: inner, command: command, blocked: make(chan struct{}), release: make(chan struct{}), ticks: make(chan struct{}, 8)}
 			main := &saturatedMoleMain{owner: owner, ready: make(chan struct{})}
@@ -124,9 +120,6 @@ func TestMoleTicksSurviveFullMailbox(t *testing.T) {
 				t.Fatal("not ready")
 			}
 			period := accountingPeriod
-			if name == "attack" {
-				period = spawnPeriod
-			}
 			time.Sleep(2*period + 50*time.Millisecond)
 			unblock()
 			select {
@@ -174,27 +167,17 @@ func (service *panicMoleMain) Handle(gsr.CommandContext, runtime.CommandID, ...a
 }
 func (service *panicMoleMain) OnStop(context.Context) error { return nil }
 
-// TestMoleEssentialOwnerPanicStopsHost 保护进入补偿、全局目录或内存账 owner 退出后宿主明确失败，不维持只有端口可用的假健康进程。
+// TestMoleEssentialOwnerPanicStopsHost 保护内存状态 owner 退出后宿主明确失败，不维持只有端口可用的假健康进程。
 func TestMoleEssentialOwnerPanicStopsHost(t *testing.T) {
-	for _, name := range []string{"entry", "accounting", "directory"} {
+	for _, name := range []string{"mole"} {
 		t.Run(name, func(t *testing.T) {
 			ctx, fail := context.WithCancelCause(context.Background())
 			defer fail(nil)
 			var owner gsr.Service
-			switch name {
-			case "entry":
-				service := newMoleEntryService("settlement")
-				service.onStopped = fail
-				owner = service
-			case "accounting":
-				service := newMoleAccountingService()
-				service.onStopped = fail
-				owner = service
-			case "directory":
-				service := newMoleService()
-				service.onStopped = fail
-				owner = service
-			}
+			service := newMoleService()
+			service.onStopped = fail
+			owner = service
+
 			done := make(chan error, 1)
 			directory := t.TempDir()
 			go func() {

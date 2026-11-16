@@ -48,7 +48,7 @@ func (service *molePulse) Handle(self gsr.CommandContext, command runtime.Comman
 	err := self.Send(service.target, service.command)
 	if errors.Is(err, runtime.ErrServiceNotFound) || errors.Is(err, runtime.ErrServiceClosed) || errors.Is(err, runtime.ErrServiceStopping) {
 		if service.pauseAccounting {
-			if notifyErr := self.SendName(moleAccountingName, accountingPauseCommand); notifyErr != nil {
+			if notifyErr := self.SendName(moleServiceName, molePauseCommand); notifyErr != nil {
 				return nil, notifyErr
 			}
 		}

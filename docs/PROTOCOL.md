@@ -145,22 +145,20 @@ Bind 超时可能已经生效，access 不自动重发，只尝试清理候选 L
 
 ### 2.4 mole：进入与组内操作
 
-Node 为 `mole`，access Agent 直接调用 [Entry](../nodes/mole/moleentryservice.go) 或 [AttackService](../nodes/mole/attackservice.go)；[MoleService](../nodes/mole/moleservice.go) 负责节点内的分组目录协作。
-
-共享命令分别见 [目录契约](../common/rpc/mole/commands.gen.go)、[Entry 契约](../common/rpc/moleentry/commands.gen.go)、[Attack 契约](../common/rpc/moleattack/commands.gen.go)。契约包含各公开 Service 的全部命令编号，下表列普通跨节点业务调用；Handler 的来源和参数类型限制仍按实际入口执行。
+Node 为 `mole`。access Call 固定 [Entry](../nodes/mole/moleentryservice.go) 和 [MoleService](../nodes/mole/moleservice.go)，共享常量见 [Entry 契约](../common/rpc/moleentry/commands.gen.go)与 [Mole 契约](../common/rpc/mole/commands.gen.go)。`G=逻辑组标识 string`，沿用快照字段 `attack_name`，不是动态 ServiceName。
 
 | Service / Command | 方式 | 顺序参数 | 成功结果 |
 | --- | --- | --- | --- |
-| `mole-entry / 1` Enter | Call | `U, L, N, A` | 地鼠快照 map，附 `silver` 内部余额视图；Entry 完成 Online、余额和 Join 协调 |
-| `AttackName / 2` Hit | Call | `U, L, actionID string, spawnSeq uint64, hole int64` | Hit 字段 map；accepted 附 `balance/available int64, revision uint64`；已拒绝原记录可无余额 |
-| `AttackName / 3` Snapshot | Call | `U, L` | 与 C/S Snapshot 对应的快照 map |
-| `AttackName / 4` Leave | Call | `U, L` | bool，固定 true；access 仅确认 true 后清路由，不取消已接纳账务 |
+| `mole-entry / 1` Enter | Call | `U, L, N, A` | 地鼠快照 map，附 `silver`；Entry 协调身份核对、缺失余额查询与完整入座 |
+| `mole / 2` Hit | Call | `U, L, G, actionID string, spawnSeq uint64, hole int64` | Hit 字段 map；accepted 附 `balance/available int64, revision uint64`；已拒绝原记录可无余额 |
+| `mole / 3` Snapshot | Call | `U, L, G` | 与 C/S Snapshot 对应的快照 map |
+| `mole / 4` Leave | Call | `U, L` | true；成员不存在也幂等成功，旧登录返回 stale_login；不取消已接纳账务 |
 
-access 核对 Snapshot 回包的 `attack_name` 与请求的 AttackName 一致；Leave 返回 false 或非 bool 属于非法回包，保留原路由用于断线清理，按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。
+access 核对 Snapshot 回包的 `attack_name` 与当前逻辑组一致；成功 Leave 后清理组标识。断线即使未收到组名，也按当前 UserID、LoginID 向固定 `mole / 4` 尽力 Leave。非法回包处理见[失败与断线](DESIGN.md#33-失败替换与断线)。
 
-内部余额视图字段为 `balance/confirmed_balance/available int64`、`version/revision uint64`；access 在 C/S 边界把 confirmed_balance/version 转成 ConfirmedSilver。Entry 只在缓存明确缺失时查询 `settlement-read / 4`，有 pending 时普通余额查询不重置确认基线。
+内部余额视图字段为 `balance/confirmed_balance/available int64`、`version/revision uint64`；access 在 C/S 边界把 confirmed_balance/version 转成 ConfirmedSilver。只有 MoleService 明确返回 `mole.balance_required` 才查询 `settlement-read / 4`，已有内存账不接受查询结果覆盖。
 
-同 LoginID/ActionID 的相同目标请求在记录保留期间返回原结果，冲突拒绝；服务端生成 HitID 并固定抽样，OperationID 沿用 HitID。本地记账超时不撤销原记录；重试缓存缺失返回 operation_unknown，停止重发并由受控工具核查。客户端不经 Entry 查询原 HitID。
+同 LoginID/ActionID 的相同目标请求在记录保留期间返回原结果，冲突拒绝；服务端生成 HitID 并固定抽样，OperationID 沿用 HitID。客户端结果未知不换 ID 重抽，不经 Entry 查询原 HitID。组、成员和内存账的同步规则及恢复边界见[地鼠设计](DESIGN.md#5-地鼠即时玩法与后台入账)。
 
 ### 2.5 landlord：凑桌与牌桌操作
 
@@ -243,7 +241,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 斗地主由本桌直接 Call 写池，校验原 OperationID、终态和三名参与者余额后立即返回/推送最终快照，再清理待记录。结果未知保留原请求，确认后不再调用结算；等待预算、重试及恢复边界见[斗地主恢复设计](DESIGN.md#63-重试清理与恢复)。
 
-地鼠由 Submission 直接 Call 写池并校验 BatchID、逐项结果和全部参与者余额；结果未知按原批次退避重试。有效回执先完成 Redis 检查点，再通过节点内消息交付 Accounting。等待与失败边界见[地鼠检查点设计](DESIGN.md#54-检查点与故障边界)。
+地鼠由 Submission 直接 Call 写池并校验 BatchID、逐项结果和全部参与者余额；结果未知按原批次退避重试。有效回执先完成 Redis 检查点，再通过节点内消息交付 MoleService。等待与失败边界见[地鼠检查点设计](DESIGN.md#54-检查点与故障边界)。
 
 写、读分别共用一个池名，由 GSR 在对应池内选择成员并返回结果，不传回执地址。Call 超时后必须按原 ID 和内容重试；池化作用见[入口与执行边界](DESIGN.md#71-入口与执行边界)，Call 与 SQL 的计时关系见[调用与超时](DESIGN.md#72-调用与超时)。钱包只能由独立管理入口初始化，普通 RPC 不创建钱包或提交 wallet_init。
 
@@ -284,21 +282,26 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 | 停用入口 | 当前行为 |
 | --- | --- |
-| mole Entry / 3 | 不再转发原 HitID 查询，编号不复用 |
+| mole Entry / 3、10 | 原 HitID 查询及准备补偿 Tick 已移除，编号不复用 |
+| mole / 10～15 | 原目录、Reserve 与准备补偿命令已移除，编号不复用 |
 | mole-submission / 2、3 | 旧查询入口已移除，编号不复用 |
 | settlement / 5 Summary | 已移除，无汇总查询接口，编号不复用 |
 
 ### 2.9 节点内协作
 
-Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission 批次交接等约定为同节点协作，按实际 Handler 使用 owner 私有类型及本地消息，不向客户端开放。公开 Service 的命令编号整体生成，不代表私有类型可远程编解码或取消来源限制；私有 Service 不生成共享契约。地鼠缓存 Resume/SetBalance/Forget 均携带当前选入尝试的 Membership，旧成员的回收不作用于当前缓存；换组时的身份和余额恢复见[进入协调](DESIGN.md#52-进入与即时命中)，目录回收通知的补投与限量边界见[地鼠故障边界](DESIGN.md#54-检查点与故障边界)。
+公开 Service 的命令编号整体生成，不代表私有类型可以远程编解码或取消来源限制。地鼠内部消息均发往固定 MoleService，组与内存账之间使用普通函数；没有 Reserve、Resume、Forget 或准备补偿命令。
 
-地鼠余额准备失败（包括本地 Call 超时），或准备成功后 Reserve 明确未接纳时，使用以下补偿链；同一用户新准备前也先交付旧任务。三个 Handler 均要求非零本地来源。重试和归属判断见上述设计章节。
-
-| 调用方 → Service / Command | 方式 | 顺序参数 | 结果 |
+| 调用方 → Service / Command | 方式 | 顺序参数 | 结果与来源限制 |
 | --- | --- | --- | --- |
-| Entry Pulse → `mole-entry / 10` CleanupTick | Send | 无 | 唤醒待补偿任务重试，无业务回执 |
-| Entry → `mole / 15` ReconcilePreparation | Call | `U, failedMembership string` | error；nil 只表示 Accounting 已接纳修正，不代表已执行 |
-| 目录 → `mole-accounting / 15` ReconcilePreparation | Send | `U, failedMembership string, currentMembership string` | 无业务回执；当前归属为空表示无路由，只修改仍属于失败尝试的缓存 |
+| Entry → `mole / 1` Enter | Call | `U, L, N, A, seed map`；seed 可为 nil，否则为 `amount int64, version uint64` | 完整快照及 silver；缺账户且无 seed 返回 balance_required，不改状态；仅非零本地来源 |
+| Pulse → `mole / 16` Tick | Send | 无 | 刷目标及归批；仅非零本地来源 |
+| Submission → `mole / 17` InitAccounting | Send | `pool molePool, sequence uint64` | 初始化恢复统计；仅非零本地来源 |
+| Submission → `mole / 18` SettlementReceipt | Send | `receipt batchReceipt` 独立快照 | 应用回执与余额校正；仅非零本地来源 |
+| Submission / Pulse → `mole / 19` Pause | Send | 无 | 暂停新记账；仅非零本地来源 |
+| MoleService → `mole-submission / 1` Submit | Send | `batch moleBatch` 独立快照 | 接纳原批次，不代表完成结算 |
+| Pulse → `mole-submission / 10` Tick | Send | 无 | 恢复、结算重试及回执交付 |
+
+内部验收入口为 `mole / 20` Balance（`U` → 余额视图）、`mole / 21` Pool（无参数 → 确认统计）、`mole / 22` OperationStatus（`U, hitID string` → 状态 map 或 nil）及 `mole-submission / 11` State。它们未接入客户端 MsgID，也不形成网络访问隔离。
 
 以下斗地主调用从 AttackService 发往本节点目录；牌桌 Tick 由本地 Pulse Send，继续拒绝远程来源。
 
@@ -338,14 +341,21 @@ Pulse Tick、分组预留/成员清理、Accounting 内存记账、Submission �
 1011 Enter
   → Agent Call mole/mole-entry/1
   → Entry Call online/online/2
-  → 本地复用余额；仅缺失时 Call settlement-read/4
-  → 本地目录预留与 AttackService Join
-  ← 1012：组快照和余额基线
+  → 本地 Call mole/1 Enter
+  → 仅缺余额：Call settlement-read/4，再本地 Call mole/1
+  ← 一次内存回调完成选组、入座、账户初始化并返回快照和 silver
 
 1021 Hit
-  → Agent Call mole/AttackName/2
-  → Attack 固定 HitID、成本和奖励，本地 Call Accounting
-  ← 1022：accepted 与内存余额；客户端继续玩法
+  → Agent Call mole/mole/2，携逻辑组标识
+  → 私有组校验目标、固定 HitID 与扣返，普通函数调用内存账
+  ← accepted + HitID + 内存余额，客户端可继续
+
+MoleService 本地 Send 原批次给 Submission
+  → 保存 Redis pending，Call settlement-write/1
+  ← 返回完整回执或错误；结果未知按原批次重试
+  → 更新 Redis 确认统计、清除待批次
+  → 本地 Send 回执给 MoleService，应用确认余额并释放待扣
+  → 仅显示有差异：Send 当前 Agent / 102 → 客户端 1062
 ```
 
 ### 3.3 地鼠后台入账与差异校正

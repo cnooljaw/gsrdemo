@@ -6,10 +6,15 @@ package mole
 const ServiceName = "mole"
 
 const (
-	MoleDepartedCommand             = 10
-	MoleBalanceCommand              = 11
-	MoleReserveCommand              = 12
-	MoleDiscardGroupCommand         = 13
-	MoleHealthCommand               = 14
-	MoleReconcilePreparationCommand = 15
+	MoleJoinCommand              = 1
+	MoleHitCommand               = 2
+	MoleSnapshotCommand          = 3
+	MoleLeaveCommand             = 4
+	MoleTickCommand              = 16
+	MoleInitAccountingCommand    = 17
+	MoleSettlementReceiptCommand = 18
+	MolePauseCommand             = 19
+	MoleBalanceCommand           = 20
+	MolePoolCommand              = 21
+	MoleOperationStatusCommand   = 22
 )

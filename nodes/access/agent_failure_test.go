@@ -15,7 +15,7 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
 	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"github.com/gorilla/websocket"
@@ -154,7 +154,7 @@ func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
 							return map[string]any{"room_name": "other-room"}, nil
 						}
 						return map[string]any{}, nil
-					case node == "mole" && service == "attack" && command == moleattack.AttackLeaveCommand,
+					case node == "mole" && service == molerpc.ServiceName && command == molerpc.MoleLeaveCommand,
 						node == "landlord" && service == "original-room" && command == landlordattack.RoomLeaveCommand:
 						leaves++
 						if len(args) != 2 || args[0] != uint64(7) || args[1] != "current" {
@@ -175,7 +175,7 @@ func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
 				mole := newComMole(deps)
 				if name != "mole balance" && name != "mole snapshot" {
 					// 无可用新路由时，非法回包不得抹掉原有清理目标。
-					mole.attackName = "attack"
+					mole.groupID = "attack"
 				}
 				game = mole
 			}

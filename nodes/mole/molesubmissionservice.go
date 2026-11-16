@@ -77,7 +77,7 @@ func (service *moleSubmissionService) handleSubmit(self gsr.CommandContext, batc
 	}
 	copied := batch.clone()
 	service.batch = &copied
-	// 保存原批次后 Call 结算；等待仅占用 Submission，Accounting 继续处理命中。
+	// 保存原批次后 Call 结算；等待仅占用 Submission，MoleService 继续处理命中。
 	if err := service.submitBatch(self); err != nil {
 		service.retryOrPause(self, err)
 		return err
@@ -88,7 +88,7 @@ func (service *moleSubmissionService) handleSubmit(self gsr.CommandContext, batc
 func (service *moleSubmissionService) handleTick(self gsr.CommandContext) error {
 	if service.fault != nil {
 		// 通知满队列时下次继续，原始批次和 Redis 记录始终保留。
-		return self.SendName(moleAccountingName, accountingPauseCommand)
+		return self.SendName(moleServiceName, molePauseCommand)
 	}
 	if time.Now().Before(service.retryAt) {
 		return nil
@@ -115,7 +115,7 @@ func (service *moleSubmissionService) retryOrPause(self gsr.ServiceContext, err 
 	// 未知命令与外层参数不匹配需要修复接线，不能作为临时故障反复投递。
 	if permanentDomain || errors.Is(err, runtime.ErrUnknownCommand) || errors.Is(err, runtime.ErrInvalidCommandArguments) {
 		service.fault = err
-		_ = self.SendName(moleAccountingName, accountingPauseCommand)
+		_ = self.SendName(moleServiceName, molePauseCommand)
 		logMoleError(self, "结算提交暂停，保留原批次，修复后重启恢复", err)
 		return
 	}
@@ -145,7 +145,7 @@ func (service *moleSubmissionService) restoreCheckpoint(self gsr.ServiceContext)
 		service.batch = &copied
 		return service.submitBatch(self)
 	}
-	if err := self.SendName(moleAccountingName, accountingInitPoolCommand, state.Pool, state.Sequence); err != nil {
+	if err := self.SendName(moleServiceName, moleInitAccountingCommand, state.Pool, state.Sequence); err != nil {
 		return err
 	}
 	service.ready = true
@@ -175,7 +175,7 @@ func (service *moleSubmissionService) submitBatch(self gsr.ServiceContext) error
 	return service.completeBatch(self)
 }
 
-// completeBatch 先持久化确认统计并清除待批次，再通知 Accounting；通知未接纳时保留回执重试。
+// completeBatch 先持久化确认统计并清除待批次，再通知 MoleService；通知未接纳时保留回执重试。
 func (service *moleSubmissionService) completeBatch(self gsr.ServiceContext) error {
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
 	state, err := service.store.completeBatch(ctx, *service.batch, *service.receipt)
@@ -184,12 +184,12 @@ func (service *moleSubmissionService) completeBatch(self gsr.ServiceContext) err
 		return err
 	}
 	if !service.ready {
-		// 恢复批次只交付已确认统计，尚未初始化的 Accounting 不接收旧回执。
-		if err := self.SendName(moleAccountingName, accountingInitPoolCommand, state.Pool, state.Sequence); err != nil {
+		// 恢复批次只交付已确认统计，尚未初始化的 MoleService 不接收旧回执。
+		if err := self.SendName(moleServiceName, moleInitAccountingCommand, state.Pool, state.Sequence); err != nil {
 			return err
 		}
 		service.ready = true
-	} else if err := self.SendName(moleAccountingName, accountingSettlementReceiptCommand, service.receipt.clone()); err != nil {
+	} else if err := self.SendName(moleServiceName, moleSettlementReceiptCommand, service.receipt.clone()); err != nil {
 		return err
 	}
 	service.batch, service.receipt = nil, nil

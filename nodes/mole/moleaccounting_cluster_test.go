@@ -6,7 +6,6 @@ import (
 
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
@@ -29,7 +28,7 @@ func TestMoleMatchingSettlementDoesNotRepeatReward(t *testing.T) {
 			t.Fatalf("matching settlement emitted another result: %+v", message)
 		}
 	}
-	current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(1), "login")
+	current, err := moleRPC(t, routes, "mole", moleServiceName, moleSnapshotCommand, uint64(1), "login", snapshot["attack_name"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +82,7 @@ func TestMoleCorrectionUsesCurrentLogin(t *testing.T) {
 			if message.Command != accessagent.MoleBalanceCorrectionPushCommand || message.LoginID != "new-login" || message.Payload["balance"] != int64(0) {
 				t.Fatalf("invalid account correction: %+v", message)
 			}
-			current, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), moleattack.AttackSnapshotCommand, uint64(1), "new-login")
+			current, err := moleRPC(t, routes, "mole", moleServiceName, moleSnapshotCommand, uint64(1), "new-login", snapshot["attack_name"].(string))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -109,7 +108,7 @@ func TestMoleSettlementMayRejectCachedBalance(t *testing.T) {
 	}
 	hit := testHitTarget(t, routes, snapshot, 1, "login", "action")
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "rejected")
-	value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(1))
+	value, err := moleRPC(t, routes, "mole", moleServiceName, moleBalanceCommand, uint64(1))
 	if err != nil || value.(map[string]any)["confirmed_balance"] != int64(0) || value.(map[string]any)["available"] != int64(0) {
 		t.Fatalf("cache not reconciled: %v %v", value, err)
 	}
@@ -137,7 +136,7 @@ func TestMoleReconnectKeepsProjectionWhileReceiptMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
-	value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(1))
+	value, err := moleRPC(t, routes, "mole", moleServiceName, moleBalanceCommand, uint64(1))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,30 +2,34 @@ package main
 
 import (
 	"context"
-	"time"
-
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
+	"time"
 )
 
-// 地鼠目录以固定名称对外发布，命令编号均从属于此 Service。
+// MoleService 是本节点组、成员和内存账务的唯一 owner。
 //
 //rpc:service mole public name=moleServiceName
 const (
-	moleServiceName                                   = "mole"
-	moleDepartedCommand             runtime.CommandID = 10
-	moleBalanceCommand              runtime.CommandID = 11
-	moleReserveCommand              runtime.CommandID = 12
-	moleDiscardGroupCommand         runtime.CommandID = 13
-	moleHealthCommand               runtime.CommandID = 14
-	moleReconcilePreparationCommand runtime.CommandID = 15
+	moleServiceName                       = "mole"
+	moleJoinCommand     runtime.CommandID = 1
+	moleHitCommand      runtime.CommandID = 2
+	moleSnapshotCommand runtime.CommandID = 3
+	moleLeaveCommand    runtime.CommandID = 4
+	// 原 10～15 号目录、预留和补偿命令已停用，不复用。
+	moleTickCommand              runtime.CommandID = 16
+	moleInitAccountingCommand    runtime.CommandID = 17
+	moleSettlementReceiptCommand runtime.CommandID = 18
+	molePauseCommand             runtime.CommandID = 19
+	moleBalanceCommand           runtime.CommandID = 20
+	molePoolCommand              runtime.CommandID = 21
+	moleOperationStatusCommand   runtime.CommandID = 22
 )
-
 const (
-	maxMoleUsers      = 100000
-	moleCallTimeout   = 500 * time.Millisecond
-	maxForgetPerFlush = 64
+	maxMoleUsers    = 100000
+	moleCallTimeout = 500 * time.Millisecond
 )
 
 var (
@@ -38,189 +42,277 @@ var (
 	errAccountingUnavailable = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.accounting_unavailable", "accounting is unavailable")
 	errInsufficientSilver    = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.insufficient_silver", "insufficient silver")
 	errMoleOperationUnknown  = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.operation_unknown", "operation outcome unknown; do not resubmit as new")
+	errMoleBalanceRequired   = runtime.NewStatusError(runtime.ErrorClassDomain, "mole.balance_required", "balance is required")
 )
 
-type moleRoute struct {
-	Attack     string
-	LoginID    string
-	Membership string
-}
-
-// moleService 持有分组目录与尚未接纳的缓存回收通知，地鼠和记账分别属于自己的 Service。
 type moleService struct {
-	routes        map[uint64]moleRoute
-	groups        map[string]int
-	pendingForget map[uint64]string // UserID → Membership；同用户只保留最新一条回收通知。
-	dispatcher    *gsr.Dispatcher
-	onStopped     func(error)
+	groups     map[string]*moleGroup
+	users      map[uint64]string // 用户到实际组的索引；与组内成员在同一回调更新。
+	accounting moleAccounting
+	dispatcher *gsr.Dispatcher
+	onStopped  func(error)
 }
 
 var _ gsr.Service = (*moleService)(nil)
 
 func newMoleService() *moleService {
-	service := &moleService{
-		routes: make(map[uint64]moleRoute), groups: make(map[string]int), pendingForget: make(map[uint64]string),
-	}
+	service := &moleService{groups: make(map[string]*moleGroup), users: make(map[uint64]string), accounting: newMoleAccounting()}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		moleHealthCommand:               service.handleHealth,
-		moleReconcilePreparationCommand: service.handleReconcilePreparation,
-		moleReserveCommand:              service.handleReserve,
-		moleDiscardGroupCommand:         service.handleDiscardGroup,
-		moleDepartedCommand:             service.handleDeparted,
-		moleBalanceCommand:              service.handleBalanceCorrection,
+		moleJoinCommand:              service.handleEnter,
+		moleHitCommand:               service.handleHit,
+		moleSnapshotCommand:          service.handleSnapshot,
+		moleLeaveCommand:             service.handleLeave,
+		moleTickCommand:              service.handleTick,
+		moleInitAccountingCommand:    service.handleInitAccounting,
+		moleSettlementReceiptCommand: service.handleSettlementReceipt,
+		molePauseCommand:             service.handlePause,
+		moleBalanceCommand:           service.handleBalance,
+		molePoolCommand:              service.handlePool,
+		moleOperationStatusCommand:   service.handleOperationStatus,
 	})
 	return service
 }
-
 func (service *moleService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	return startMolePulse(ctx, self, accountingPeriod, moleHealthCommand, service.onStopped)
+	return startMolePulse(ctx, self, accountingPeriod, moleTickCommand, service.onStopped)
 }
-
-// handleHealth 复用目录的周期存活探测，补投缓存回收，不等待 Accounting 执行。
-func (service *moleService) handleHealth(self gsr.CommandContext) error {
-	service.flushForgets(self)
-	return nil
-}
-
+func (*moleService) OnStop(context.Context) error { return nil }
 func (service *moleService) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
 	return service.dispatcher.Handle(self, command, args...)
 }
 
-func (service *moleService) OnStop(_ context.Context) error {
-	return nil
+func (service *moleService) handleEnter(self gsr.CommandContext, userID uint64, loginID, accessNode, agentName string, seed map[string]any) (map[string]any, error) {
+	if self.Source() == 0 {
+		return nil, errInvalidMoleInput
+	}
+	view, err := service.enter(userID, loginID, accessNode, agentName, seed)
+	if err == nil {
+		service.broadcast(self, service.groups[service.users[userID]])
+	}
+	return view, err
 }
 
-// reserve 在 Join 前保留座位；未知结果的重试始终回到原组。
-func (service *moleService) handleReserve(self gsr.CommandContext, userID uint64, loginID, membership string) (moleRoute, error) {
-	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(loginID) || !validMoleIdentifier(membership) {
-		return moleRoute{}, errInvalidMoleInput
+// enter 先检查所有可拒绝条件，再一次更新组、成员和账户；整个过程没有消息等待或外部 I/O。
+func (service *moleService) enter(userID uint64, loginID, accessNode, agentName string, seed map[string]any) (map[string]any, error) {
+	if !validMember(userID, loginID, accessNode, agentName) {
+		return nil, errInvalidMoleInput
 	}
-	existingRoute, exists := service.routes[userID]
-	if !exists && len(service.routes) >= maxMoleUsers {
-		service.pendingForget[userID] = membership
-		service.flushForgets(self)
-		return moleRoute{}, errMoleBusy
+	if !service.accounting.ready {
+		return nil, errAccountingUnavailable
 	}
-	name := existingRoute.Attack
-	if name == "" {
+	group := service.groups[service.users[userID]]
+	if group == nil && len(service.users) >= maxMoleUsers {
+		return nil, errMoleBusy
+	}
+	account := service.accounting.accounts[userID]
+	var confirmed silverBalance
+	var balance map[string]any
+	if account == nil {
+		if len(service.accounting.accounts) >= maxMoleUsers {
+			return nil, errMoleBusy
+		}
+		if seed == nil {
+			return nil, errMoleBalanceRequired
+		}
 		var err error
-		name, err = service.chooseGroup(self)
+		confirmed, err = decodeBalance(seed)
 		if err != nil {
-			if !exists {
-				// 预留未建立，也没有发起 Join；回收 Entry 已准备的本次余额缓存。
-				service.pendingForget[userID] = membership
-				service.flushForgets(self)
+			return nil, err
+		}
+		balance = map[string]any{"balance": confirmed.Amount, "confirmed_balance": confirmed.Amount, "available": confirmed.Amount, "version": confirmed.Version, "revision": uint64(1)}
+	} else {
+		var err error
+		balance, err = service.accounting.balanceSnapshot(userID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	member := moleMember{UserID: userID, LoginID: loginID, AccessNode: accessNode, AgentName: agentName}
+	if group != nil {
+		old := group.members[userID]
+		if old.LoginID == loginID && (old.AccessNode != accessNode || old.AgentName != agentName) {
+			return nil, errMoleConflict
+		}
+		member.Seat = old.Seat
+	} else {
+		// 组内人数就是实际成员数，不再存在已占位但尚未 Join 的座位。
+		for name, candidate := range service.groups {
+			if len(candidate.members) < attackSeats && (group == nil || len(candidate.members) > len(group.members) || len(candidate.members) == len(group.members) && name < group.game.name) {
+				group = candidate
 			}
-			return moleRoute{}, err
+		}
+		if group == nil {
+			name, err := randomInstance("attack-")
+			if err != nil {
+				return nil, err
+			}
+			group = newMoleGroup(name, time.Now())
+		}
+		used := [attackSeats]bool{}
+		for _, current := range group.members {
+			used[current.Seat] = true
+		}
+		for seat, occupied := range used {
+			if !occupied {
+				member.Seat = int64(seat)
+				break
+			}
 		}
 	}
-	if !exists {
-		service.groups[name]++
+	// 此后只提交已验证的内存状态；快照和余额来自同一次回调。
+	if account == nil {
+		service.accounting.updateBalance(userID, confirmed)
 	}
-	route := moleRoute{Attack: name, LoginID: loginID, Membership: membership}
-	service.routes[userID] = route
-	return route, nil
+	group.members[userID] = member
+	service.groups[group.game.name] = group
+	service.users[userID] = group.game.name
+	view := group.view(userID)
+	view["silver"] = balance
+	return view, nil
 }
 
-// handleReconcilePreparation 在目录 owner 内取当前归属并立即 Send，避免快照在转发期间过时。
-// 同一目录后续发送的 Leave/Forget 会排在本次修正之后，不等待 Accounting 执行。
-func (service *moleService) handleReconcilePreparation(self gsr.CommandContext, userID uint64, membership string) error {
-	if self.Source() == 0 || userID == 0 || !validMoleIdentifier(membership) {
+func (service *moleService) memberGroup(userID uint64, loginID, groupName string) (*moleGroup, error) {
+	group := service.groups[service.users[userID]]
+	if group == nil || group.game.name != groupName || group.members[userID].LoginID != loginID {
+		return nil, errMoleStaleLogin
+	}
+	return group, nil
+}
+func (service *moleService) handleHit(self gsr.CommandContext, userID uint64, loginID, groupName, actionID string, sequence uint64, hole int64) (map[string]any, error) {
+	group, err := service.memberGroup(userID, loginID, groupName)
+	if err != nil {
+		return nil, err
+	}
+	result, err := group.hit(&service.accounting, userID, loginID, actionID, sequence, hole)
+	if err != nil {
+		return nil, err
+	}
+	if len(service.accounting.buffer) >= maxBatchOperations || service.accounting.bufferBytes >= maxBatchBytes-128 {
+		if err := service.accounting.flush(self); err != nil {
+			logMoleError(self, "提交队列未接纳，保留内存操作", err)
+		}
+	}
+	service.broadcast(self, group)
+	return result, nil
+}
+func (service *moleService) handleSnapshot(_ gsr.CommandContext, userID uint64, loginID, groupName string) (map[string]any, error) {
+	group, err := service.memberGroup(userID, loginID, groupName)
+	if err != nil {
+		return nil, err
+	}
+	return group.view(userID), nil
+}
+func (service *moleService) handleLeave(self gsr.CommandContext, userID uint64, loginID string) (bool, error) {
+	group, err := service.leave(userID, loginID)
+	if err != nil {
+		return false, err
+	}
+	if group != nil && len(group.members) > 0 {
+		service.broadcast(self, group)
+	}
+	return true, nil
+}
+func (service *moleService) leave(userID uint64, loginID string) (*moleGroup, error) {
+	if userID == 0 || !validMoleIdentifier(loginID) {
+		return nil, errInvalidMoleInput
+	}
+	group := service.groups[service.users[userID]]
+	if group == nil {
+		return nil, nil
+	}
+	if group.members[userID].LoginID != loginID {
+		return nil, errMoleStaleLogin
+	}
+	delete(group.members, userID)
+	delete(service.users, userID)
+	if len(group.members) == 0 {
+		delete(service.groups, group.game.name)
+	}
+	service.releaseAccount(userID)
+	return group, nil
+}
+func (service *moleService) releaseAccount(userID uint64) {
+	if service.users[userID] == "" && !service.accounting.hasPending(userID) {
+		delete(service.accounting.accounts, userID)
+	}
+}
+func (service *moleService) handleTick(self gsr.CommandContext) error {
+	if self.Source() == 0 {
 		return errInvalidMoleInput
 	}
-	current := service.routes[userID].Membership
-	return self.SendName(moleAccountingName, accountingReconcilePreparationCommand, userID, membership, current)
+	now := time.Now()
+	for _, group := range service.groups {
+		if !now.Before(group.nextSpawnAt) {
+			group.game.spawn(now)
+			group.nextSpawnAt = now.Add(spawnPeriod)
+			service.broadcast(self, group)
+		}
+	}
+	err := service.accounting.flush(self)
+	if err != nil {
+		logMoleError(self, "地鼠归批未完成，保留内存操作", err)
+	}
+	return err
 }
-
-func (service *moleService) handleDiscardGroup(self gsr.CommandContext, name string) error {
-	if self.Source() == 0 || !validMoleIdentifier(name) {
+func (service *moleService) handleInitAccounting(self gsr.CommandContext, pool molePool, sequence uint64) error {
+	if self.Source() == 0 {
 		return errInvalidMoleInput
 	}
-	service.removeGroup(name)
-	service.flushForgets(self)
+	service.accounting.initPool(pool, sequence)
 	return nil
 }
-
-func (service *moleService) handleBalanceCorrection(self gsr.CommandContext, userID uint64, view map[string]any) error {
-	route, exists := service.routes[userID]
-	if !exists {
-		return nil
+func (service *moleService) handlePause(self gsr.CommandContext) error {
+	if self.Source() == 0 {
+		return errInvalidMoleInput
 	}
-	return self.SendName(cluster.ServiceName(route.Attack), attackBalanceCommand, userID, route.LoginID, view)
-}
-
-func (service *moleService) chooseGroup(self gsr.ServiceContext) (string, error) {
-	available, largest := "", -1
-	for name, count := range service.groups {
-		if count < attackSeats && (count > largest || count == largest && name < available) {
-			available, largest = name, count
-		}
-	}
-	if available != "" {
-		return available, nil
-	}
-	name, err := randomInstance("attack-")
-	if err != nil {
-		return "", err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
-	defer cancel()
-	_, err = self.CreateService(ctx, newAttackService(name))
-	if err != nil {
-		return "", err
-	}
-	service.groups[name] = 0
-	return name, nil
-}
-
-func (service *moleService) handleDeparted(self gsr.CommandContext, userID uint64, loginID, attack, membership string) error {
-	if !service.removeMember(userID, loginID, attack, membership) {
-		return nil
-	}
-	service.flushForgets(self)
+	service.accounting.ready = false
 	return nil
 }
-
-// flushForgets 只移除已被接纳的通知；背压时停下，交给下一次目录 Pulse 补投。
-func (service *moleService) flushForgets(self gsr.ServiceContext) {
-	attempts := 0
-	for userID, membership := range service.pendingForget {
-		if attempts >= maxForgetPerFlush {
-			return
+func (service *moleService) handleSettlementReceipt(self gsr.CommandContext, receipt batchReceipt) error {
+	if self.Source() == 0 {
+		return errInvalidMoleInput
+	}
+	accounting := &service.accounting
+	if accounting.inFlightID == "" || accounting.inFlightID != receipt.BatchID {
+		return nil
+	}
+	before := make(map[uint64]int64, len(receipt.Balances))
+	for userID := range receipt.Balances {
+		before[userID], _, _ = accounting.balanceAmounts(userID)
+	}
+	accounting.applyReceipt(receipt)
+	accounting.inFlightID = ""
+	for userID := range receipt.Balances {
+		group := service.groups[service.users[userID]]
+		view, err := accounting.balanceSnapshot(userID)
+		if group != nil && err == nil && view["balance"] != before[userID] {
+			service.push(self, group.members[userID], accessagent.MoleBalanceCorrectionPushCommand, view)
 		}
-		attempts++
-		if err := self.SendName(moleAccountingName, accountingForgetCommand, userID, membership); err != nil {
-			logMoleError(self, "余额缓存回收通知未接纳，保留待补投", err)
-			return
-		}
-		delete(service.pendingForget, userID)
+		service.releaseAccount(userID)
+	}
+	return accounting.flush(self)
+}
+func (service *moleService) handleBalance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
+	return service.accounting.balanceSnapshot(userID)
+}
+func (service *moleService) handlePool(gsr.CommandContext) (map[string]any, error) {
+	if !service.accounting.ready {
+		return nil, errAccountingUnavailable
+	}
+	return service.accounting.pool.snapshot(), nil
+}
+func (service *moleService) handleOperationStatus(_ gsr.CommandContext, userID uint64, hitID string) (any, error) {
+	return service.accounting.operationStatus(userID, hitID)
+}
+func (service *moleService) broadcast(self gsr.ServiceContext, group *moleGroup) {
+	for userID, member := range group.members {
+		service.push(self, member, accessagent.MoleSnapshotPushCommand, group.view(userID))
 	}
 }
-
-func (service *moleService) removeMember(userID uint64, loginID, attack, membership string) bool {
-	route, exists := service.routes[userID]
-	if !exists || route.LoginID != loginID || route.Attack != attack || route.Membership != membership {
-		return false
-	}
-	delete(service.routes, userID)
-	service.pendingForget[userID] = membership
-	service.groups[attack]--
-	if service.groups[attack] == 0 {
-		delete(service.groups, attack)
-	}
-	return true
-}
-
-func (service *moleService) removeGroup(name string) {
-	delete(service.groups, name)
-	for userID, route := range service.routes {
-		if route.Attack == name {
-			delete(service.routes, userID)
-			service.pendingForget[userID] = route.Membership
-		}
+func (*moleService) push(self gsr.ServiceContext, member moleMember, command runtime.CommandID, payload map[string]any) {
+	if err := self.Cluster().Send(cluster.NodeID(member.AccessNode), cluster.ServiceName(member.AgentName), command, member.LoginID, payload); err != nil {
+		logMoleError(self, "地鼠推送未接纳，客户端需取快照", err)
 	}
 }
-
 func validMoleIdentifier(value string) bool {
 	if len(value) == 0 || len(value) > 128 {
 		return false
@@ -232,12 +324,9 @@ func validMoleIdentifier(value string) bool {
 	}
 	return true
 }
-
 func validMember(userID uint64, loginID, accessNode, agentName string) bool {
 	return userID != 0 && validMoleIdentifier(loginID) && validMoleIdentifier(accessNode) && validMoleIdentifier(agentName)
 }
-
 func logMoleError(self gsr.ServiceContext, message string, cause error) {
-	// 日志队列满时保持业务有界，不在 Service 回调中退回同步 stderr I/O。
 	_ = self.Logger().Error(message, "error", cause.Error())
 }

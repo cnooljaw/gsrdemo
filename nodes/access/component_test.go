@@ -10,7 +10,7 @@ import (
 	"github.com/cnooljaw/gsr/protocol"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -58,14 +58,14 @@ func TestMoleLeaveRequiresConfirmation(t *testing.T) {
 			mole := newComMole(componentDependencies{
 				Identity: func() agentIdentity { return agentIdentity{UserID: 7, LoginID: "current"} },
 				Call: func(_ gsr.ServiceContext, node cluster.NodeID, service cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
-					if node != "mole" || service != "attack" || command != moleattack.AttackLeaveCommand ||
+					if node != "mole" || service != molerpc.ServiceName || command != molerpc.MoleLeaveCommand ||
 						len(args) != 2 || args[0] != uint64(7) || args[1] != "current" {
 						t.Fatalf("离开请求未使用当前路由和身份: %s/%s/%d %v", node, service, command, args)
 					}
 					return test.value, test.err
 				},
 			})
-			mole.attackName = "attack"
+			mole.groupID = "attack"
 			response, err := componentRequest(t, mole, demopb.MsgId_C2S_LEAVE)
 			if !errors.Is(err, test.want) || mole.Entered() != (test.want != nil) {
 				t.Fatalf("离开确认错误: entered=%v err=%v want=%v", mole.Entered(), err, test.want)
@@ -105,14 +105,21 @@ func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 					deps := componentDependencies{
 						Identity: func() agentIdentity { return agentIdentity{UserID: 7, LoginID: "current"} },
 						Call: func(_ gsr.ServiceContext, _ cluster.NodeID, service cluster.ServiceName, _ runtime.CommandID, args ...any) (any, error) {
-							if service != "current-room" || len(args) < 2 || args[0] != uint64(7) || args[1] != "current" {
+							expectedService := cluster.ServiceName("current-room")
+							if request.id == demopb.MsgId_C2S_SNAPSHOT {
+								expectedService = molerpc.ServiceName
+								if len(args) != 3 || args[2] != "current-room" {
+									t.Fatalf("逻辑组参数错误: %v", args)
+								}
+							}
+							if service != expectedService || len(args) < 2 || args[0] != uint64(7) || args[1] != "current" {
 								t.Fatalf("请求未使用当前路由和身份: %s %v", service, args)
 							}
 							return map[string]any{field: route}, nil
 						},
 					}
 					mole, landlord := newComMole(deps), newComLandlord(deps)
-					mole.attackName, landlord.room = "current-room", "current-room"
+					mole.groupID, landlord.room = "current-room", "current-room"
 					var game gameComponent = landlord
 					if request.id == demopb.MsgId_C2S_SNAPSHOT {
 						game = mole
@@ -125,7 +132,7 @@ func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 					} else if err != nil || response.MsgId == uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 						t.Fatalf("当前房间快照未正常返回: %v %v", response, err)
 					}
-					if mole.attackName != "current-room" || landlord.room != "current-room" {
+					if mole.groupID != "current-room" || landlord.room != "current-room" {
 						t.Fatal("回包替换了当前路由")
 					}
 				})
@@ -189,7 +196,7 @@ func TestGameReadsCurrentIdentity(t *testing.T) {
 				return nil, runtime.ErrCallTimeout
 			}}
 			mole, landlord := newComMole(deps), newComLandlord(deps)
-			mole.attackName, landlord.room = "mole-room", "landlord-room"
+			mole.groupID, landlord.room = "mole-room", "landlord-room"
 			snapshot := func() error { return mole.onSnapshot(nil, protocol.Context{}, &demopb.SnapshotRequest{}) }
 			if name == "landlord" {
 				snapshot = func() error { return landlord.onSnapshot(nil, protocol.Context{}, &demopb.LandlordSnapshotRequest{}) }
@@ -214,7 +221,7 @@ func TestGameReadsCurrentIdentity(t *testing.T) {
 	}
 }
 
-// TestGameDisconnectClearsRouteOnFailure 保护离开下游失败后仍清空本连接路由，重复清理不再发起 RPC。
+// TestGameDisconnectClearsRouteOnFailure 保护离开失败仍清空组标识；地鼠固定入口可重复清理，牌桌无路由时不再调用。
 func TestGameDisconnectClearsRouteOnFailure(t *testing.T) {
 	calls := 0
 	deps := componentDependencies{Identity: func() agentIdentity { return agentIdentity{UserID: 7, LoginID: "current"} }, Call: func(_ gsr.ServiceContext, _ cluster.NodeID, _ cluster.ServiceName, _ runtime.CommandID, _ ...any) (any, error) {
@@ -222,7 +229,7 @@ func TestGameDisconnectClearsRouteOnFailure(t *testing.T) {
 		return nil, runtime.ErrCallTimeout
 	}}
 	mole, landlord := newComMole(deps), newComLandlord(deps)
-	mole.attackName, landlord.room = "attack", "room"
+	mole.groupID, landlord.room = "attack", "room"
 	for _, game := range []gameComponent{mole, landlord} {
 		if !game.Entered() {
 			t.Fatal("缺少测试路由")
@@ -233,11 +240,37 @@ func TestGameDisconnectClearsRouteOnFailure(t *testing.T) {
 		if game.Entered() {
 			t.Fatalf("%s 失败后仍持有路由", game.Name())
 		}
-		if err := game.Disconnect(nil); err != nil {
+		err := game.Disconnect(nil)
+		if game.Name() == "mole" {
+			if !errors.Is(err, runtime.ErrCallTimeout) {
+				t.Fatal(err)
+			}
+		} else if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if calls != 2 {
+	if calls != 3 {
 		t.Fatalf("清理失败后再次调用了下游: calls=%d", calls)
+	}
+}
+
+// TestMoleDisconnectWithoutGroup 保护入场回包未知、未取得组标识时仍按当前身份调用固定入口清理。
+func TestMoleDisconnectWithoutGroup(t *testing.T) {
+	calls := 0
+	mole := newComMole(componentDependencies{
+		Identity: func() agentIdentity { return agentIdentity{UserID: 7, LoginID: "current"} },
+		Call: func(_ gsr.ServiceContext, node cluster.NodeID, service cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
+			calls++
+			if node != "mole" || service != molerpc.ServiceName || command != molerpc.MoleLeaveCommand || len(args) != 2 || args[0] != uint64(7) || args[1] != "current" {
+				t.Fatalf("无组标识清理错误: %s/%s/%d %v", node, service, command, args)
+			}
+			return true, nil
+		},
+	})
+	if mole.Entered() {
+		t.Fatal("不应伪造已进入状态")
+	}
+	if err := mole.Disconnect(nil); err != nil || calls != 1 {
+		t.Fatal("未按身份清理", calls, err)
 	}
 }

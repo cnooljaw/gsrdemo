@@ -35,7 +35,7 @@ func TestGamePushCommands(t *testing.T) {
 				return nil
 			}}
 			mole, landlord := newComMole(deps), newComLandlord(deps)
-			mole.attackName, landlord.room = "mole-room", "landlord-room"
+			mole.groupID, landlord.room = "mole-room", "landlord-room"
 			var component gameComponent = mole
 			if test.command == accessagent.LandlordSnapshotPushCommand {
 				component = landlord
@@ -52,11 +52,11 @@ func TestGamePushCommands(t *testing.T) {
 				t.Fatal(err)
 			}
 			identity.UserID = 7
-			mole.attackName, landlord.room = "", ""
+			mole.groupID, landlord.room = "", ""
 			if err := handler(nil, identity.LoginID, nil); err != nil {
 				t.Fatal(err)
 			}
-			mole.attackName, landlord.room = "mole-room", "landlord-room"
+			mole.groupID, landlord.room = "mole-room", "landlord-room"
 			if test.routeKey != "" {
 				if err := handler(nil, identity.LoginID, map[string]any{test.routeKey: "previous-room"}); err != nil {
 					t.Fatal(err)

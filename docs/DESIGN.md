@@ -37,7 +37,7 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 | AccessToken | 认证后签发的平台凭据，用于建立登录，不代表某条在线连接 |
 | LoginID | 每次成功登录生成的随机身份，用于隔离旧连接、旧操作和迟到解绑 |
 | AccessNode + AgentName | 跨节点推送地址；不使用临时 ServiceID 作为远程业务地址 |
-| Membership | 游戏成员实例，隔离离开后重进的迟到清理 |
+| Membership | 斗地主成员实例，隔离离开后重进的迟到清理；地鼠成员与账务由同一 owner 修改，不使用此字段 |
 | ActionID / Turn | 地鼠客户端请求身份 / 斗地主轮次，用于检查重复或迟到操作 |
 | OperationID / BatchID | 财务原子操作身份 / 结算请求批次身份，重试不得改 ID 或内容 |
 
@@ -51,7 +51,7 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 | online | `online` | 固定名称 `online` |
 | settlement | `settlementwrite`、`settlementread` | 固定池名 `settlement-write`、`settlement-read`，成员由 GSR 选择 |
 | access | `accessagent` | 登录位置中的动态 AgentName |
-| mole | `mole`、`moleentry`、`moleattack` | 目录和 Entry 使用固定名称，动态组使用进入结果中的 AttackName |
+| mole | `mole`、`moleentry` | 均为固定入口；AttackName 是逻辑组标识，不是 ServiceName |
 | landlord | `landlord`、`landlordattack` | 固定目录名称 `landlord`，动态牌桌使用目录返回的 RoomName |
 
 固定入口生成 `ServiceName`，动态实例只生成命令，不生成实例名或 ServiceID。业务节点地址从配置或已验证的位置记录取得，池成员数只影响节点组装。公开标记不代替 Handler 的来源、身份和参数校验。
@@ -85,7 +85,7 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 
 - 一条连接只允许成功登录一次。客户端的 UserID、LoginID 和后端路由由服务端决定，游戏入口要求已经登录。
 - [clientErrorPolicy](../nodes/access/agent_failure.go) 通过 `protocol.WithErrorPolicy` 在 Agent 组装时注册。未响应的认证/登录失败、未知进入和非法后端回包先设置 `closing`，选择 `ReplyErrorAndClose`；Dispatcher 只编码一次安全 ErrorResponse，保留原 RequestID，交给 Gate `SendAndClose`。普通业务拒绝仍选择 `ReplyError`，业务 Handler 继续返回原错误。
-- 进入流程通过保留原错误的私有标记交给错误策略，不在 Agent 中硬编码各游戏的进入 MsgID。超时、取消、链路故障及未分类 Handler 失败不能证明未加入；业务明确拒绝、邮箱满和明确未接纳/目标消失仍返回原错误，不触发此关闭规则。斗地主 Join 结果未知时保留已知房间，断线按当前 UserID、LoginID 尽力 Leave；地鼠 Entry 未返回组路由时不能定向 Leave，只能条件 Unbind，残留沿用后续显式登录/进入覆盖。两者都不自动重试或宣称已回滚。
+- 进入流程通过保留原错误的私有标记交给错误策略，不在 Agent 中硬编码各游戏的进入 MsgID。超时、取消、链路故障及未分类 Handler 失败不能证明未加入；业务明确拒绝、邮箱满和明确未接纳/目标消失仍返回原错误，不触发此关闭规则。斗地主 Join 结果未知时保留已知房间，断线按当前 UserID、LoginID 尽力 Leave；地鼠无论是否收到逻辑组名，都按 UserID、LoginID 向固定 MoleService 尽力 Leave，再条件 Unbind；仍不承诺撤销尚在途的入场，残留由后续显式登录/进入覆盖。两者都不自动重试或宣称已回滚。
 - `HandleClientMessage` 在 closing 时丢弃已入邮箱的后续客户端请求，必要清理 Command 仍正常处理。选择关闭后不立即 Exit/Close，等待原 `ClientDisconnectedCommand`，尽力 Leave、条件 Unbind 后退出；OnStop 幂等 Close。清理失败不代表后端未加入。
 - Gate 沿用默认一秒总预算，覆盖当前写入、旧队列、末帧和关闭；写完立即关闭，接纳失败/写失败/超时仍有界关闭。SendAndClose 的 nil 只表示接纳，不保证客户端送达；无可靠 RequestID、已知 Notify 或错误编码失败只关闭，不伪造响应。请求已成功响应后的错误、Handler panic 不保证经过错误策略。正式边界见 GSR [发送后关闭指南](https://github.com/cnooljaw/gsr/blob/v1.0.4/docs/guides/SEND-AND-CLOSE.md)。
 - Bind 失败或超时不开放游戏，不自动重发 Bind；按候选 LoginID 尽力清理。Bind 可能已替换旧位置，清理不会恢复旧绑定，旧连接也可能尚未收到替换通知；需要后续显式登录重建位置，不能重放旧 Bind 覆盖较新登录。普通断线依次调用游戏组件 Disconnect，再条件 Unbind，清空身份；OnStop 关闭连接。
@@ -119,59 +119,53 @@ Online 不保存额外在线布尔值、房间状态、历史或墓碑。重启�
 
 一个组最多 3 人、9 个洞，有人即可玩、空位可补、随时退出，没有固定局长。每秒生成一个目标，有效 2 秒；每锤扣 100，返 0 或 198 的概率各为 50%，规则版本 `demo-99-v1`，期望返还为 99%。目标是否可命中以服务端截止时间为准，Timer 迟到不延长有效期。
 
-| Service | 独占状态与职责 |
+| Service / 私有组件 | 独占状态与职责 |
 | --- | --- |
-| MoleService（`mole`） | 用户到组的路由、成员实例及组人数；预留分组、条件清理、未接纳的缓存回收通知和余额校正转发 |
-| MoleEntryService（`mole-entry`） | 协调 Online 检查、余额初始化及 Join；保存余额准备失败或 Reserve 明确未接纳后的补偿任务，无权威房间或钱包状态 |
-| AttackService（每组一个） | 成员、座位、连接路由、目标时间线和有限请求记录；调用私有 attackGame 处理规则 |
-| MoleAccountingService（`mole-accounting`） | 确认余额/版本、待确认扣返、显示修订号、归批缓冲及一个在途批次；只做内存记账 |
-| MoleSubmissionService（`mole-submission`） | Redis 检查点、原批次及回执；持久化、提交、恢复与重试，不访问 SQL |
+| MoleEntryService（`mole-entry`） | 核对 Online 身份，协调完整 Enter；仅在缺余额时查询结算读池，不持有成员或补偿状态 |
+| MoleService（`mole`） | 唯一内存状态 owner：组、成员、用户到组的索引、内存余额与待扣、归批缓冲、在途批次及确认统计 |
+| moleGroup / attackGame | MoleService 私有对象：每组三人座位、当前连接、目标与有限请求记录；无独立邮箱或生命周期 |
+| moleAccounting | MoleService 私有组件：确认余额/版本、待确认扣返、显示修订号、幂等记录和归批规则；不拥有成员归属 |
+| MoleSubmissionService（`mole-submission`） | 独占 Redis 检查点、原批次及回执，负责持久化、结算 Call、恢复和重试 |
 
-目录、Entry、Attack 是公开 Service，全部命令分别生成到 `mole`、`moleentry`、`moleattack` 契约包；目录和 Entry 有固定名称，Attack 只生成命令，实例名称由进入结果返回。Accounting、Submission、Pulse 标为私有，不生成共享契约；Accounting 和 Submission 保留节点内具名协作，标记不改变 GSR 的名称解析或现有来源校验。
+Entry 和 MoleService 为公开固定入口，契约分别生成到 `moleentry`、`mole`；Submission、Pulse 为私有 Service。组名沿用协议字段 `attack_name`，只作为逻辑组标识随 Hit/Snapshot 参数传入，不注册动态 ServiceName。组、成员和账户都在同一 owner 内修改，不存在预留座位、缓存归属 Membership 或入场补偿队列。
 
-组装见 [MainService](../nodes/mole/main_service.go)，规则见 [attackGame](../nodes/mole/attackgame.go) 和 [molePool](../nodes/mole/molepool.go)。统计池累计唯一已入账的锤数、扣除、返还与净留存，不计等待或拒绝操作，不影响概率，也不是可支出钱包。
+组装见 [MainService](../nodes/mole/main_service.go)，组对象见 [moleGroup](../nodes/mole/molegroup.go)，规则见 [attackGame](../nodes/mole/attackgame.go)，内存账见 [moleAccounting](../nodes/mole/moleaccounting.go)。统计池累计唯一已入账的锤数、扣除、返还与净留存，不计等待或拒绝操作，不影响概率，也不是可支出钱包。
 
 ### 5.2 进入与即时命中
 
-进入走低频协调：Agent 直接 Call 固定名称 `mole-entry`，名称和命令引用生成的 `moleentry` 契约。Entry 核对 Online 当前绑定，优先复用 Accounting 的余额缓存；仅缓存缺失才查询 `settlement-read` 初始化。错误不视为缓存缺失，有待确认操作时普通余额查询不能改写确认基线。
+Agent Call 固定 `mole-entry`；Entry 核对 Online 当前绑定，再本地 Call `mole / 1` Enter。MoleService 先检查所有可拒绝条件，已有账户直接使用当前内存账；缺账户且无余额种子时返回 `mole.balance_required`，不建立组、成员或账户。Entry 仅对此错误查询 `settlement-read / 4`，再携确认余额重试一次 Enter；查询失败无需清理中间状态。
 
-目录优先补足未满组，Join 前保留路由；Join 超时可能已经成功，保留原路由，不能另开组。确认原组已停止后才清理重选。相同用户重进保留组/座位、更新连接。Entry 每次分组选入尝试都生成独立 Membership 并恢复余额视图，同次尝试的身份贯穿 Accounting 缓存与组目录；确认原组停止后重选时，不复用原尝试的 Membership 或余额快照。离开清理同时检查 LoginID 和 Membership，Accounting 也只接受当前 Membership 的回收通知。
+Enter 在同一回调内完成选组、入座、缺失账户初始化和快照生成，中途不等待消息、Redis 或 SQL。已有账户始终忽略外部余额种子，不能覆盖待确认扣返。优先补满未满组，最多三人；相同用户重进保留原组和座位，更新登录与接入位置。用户到组的索引与组内成员一起更新，只有实际成员占座。
 
-余额准备返回错误（包括 Resume/SetBalance 的本地 Call 超时），或准备成功后 Reserve 明确未被接纳，Entry 返回原错误并保留本次 Membership 的补偿任务。目录在同一回调内读取当前路由、立即 Send 给 Accounting：只对仍属于失败 Membership 的缓存生效；无路由则标记离开，闲置时回收，有待结算操作时保留；已有路由则恢复该路由的 Membership。目录不等待 Accounting，后续 Leave 的回收消息保持同一发送方的接纳顺序。本地准备若已接纳，会在后投递的修正前执行；超时不等于取消准备。
+Call 超时仍可能已经完整入座，不能宣称回滚；后续显式重进按用户索引回到原组。access 命中与快照均 Call 固定 `mole`，携带逻辑组标识并核对登录身份。Leave 只需 UserID、LoginID：旧登录不能移除新成员，不存在的成员幂等返回成功；移除成员、回收空组与判断账户释放在同一回调完成。断线清理不依赖已经收到组名，但仍是尽力操作，不保证撤销尚在途的 Enter。
 
-同一用户再次进入时，Entry 先交付旧补偿，确认 Accounting 已接纳修正后才开启新的余额准备；交付失败返回忙并保留旧任务，不能用新 Membership 覆盖它。迟到修正不能覆盖新的 Membership。Reserve 超时、panic 或未知 Handler 失败不证明未执行，仍保留路由，不据此撤销。
-
-即时命中只经过三个参与者，不等待 Redis 或 MySQL：
+即时命中不等待 Redis、MySQL 或其他 Service：
 
 ```mermaid
-%%{init: {"theme":"neutral","sequence":{"mirrorActors":false}}}%%
 sequenceDiagram
     participant A as access Agent
-    participant G as AttackService
-    participant B as Accounting
-    A->>G: Cluster Call：命中目标
-    G->>B: 本地 Call：固定 HitID 与扣返
-    B-->>G: 内存结果、余额、修订号
-    G-->>A: accepted，继续玩法
+    participant M as MoleService
+    participant G as 私有组与内存账
+    A->>M: Call：UserID、LoginID、逻辑组、命中目标
+    M->>G: 普通函数：校验目标、固定 HitID、内存扣返
+    G-->>M: 完整内存结果与余额修订
+    M-->>A: accepted，继续玩法
 ```
 
-AttackService 检查 LoginID、ActionID、SpawnSeq、洞位、有效期及占用，生成 HitID 并固定抽奖一次；同目标只接纳一锤。相同身份和内容返回原记录，改目标或洞位报冲突。明确的内存拒绝可释放仍有效的目标；本地 Call 超时按未知处理，保留原 HitID 和占用，不能换 ID 或重抽。重试缓存缺失返回 `operation_unknown`。
+组规则检查 ActionID、SpawnSeq、洞位、有效期及占用，生成 HitID 并固定抽奖一次；同目标只接纳一锤。相同身份和内容返回原记录，改目标或洞位报冲突。明确的内存拒绝释放仍有效的目标；跨节点 Call 结果未知不能换 ID 或重抽。规则记录与内存幂等记录均有上限，不承诺保存永久逐锤历史。
 
-[Accounting](../nodes/mole/moleaccountingservice.go) 按完整 Debit 检查可用额，接纳后立即返回结果：
-
-- 显示余额 = 确认余额 + 所有待确认操作的净变化。
-- 可用额 = max（确认余额 − 所有待确认 Debit，0）；未确认奖励可显示，但不能支付下一锤。
+内存账按完整 Debit 检查可用额：显示余额 = 确认余额 + 所有待确认操作的净变化；可用额 = max（确认余额 − 所有待确认 Debit，0）。未确认奖励可显示，但不能支付下一锤。
 
 ### 5.3 批次提交与余额校正
 
-Accounting 每 100ms 归批，达到数量或字节阈值时提前提交；每批最多 500 项、256KiB，全局最多 4,096 项待确认操作。只有一个在途批次，缓冲发送未接纳时保留操作，不撤销已经返回的内存奖励。
+MoleService 每 100ms 归批，达到数量或字节阈值时提前提交；每批最多 500 项、256KiB，全局最多 4,096 项待确认操作。只有一个在途批次，缓冲发送未接纳时保留操作，不撤销已经返回的内存奖励。
 
 后台链路按原批次完成持久化、入账和交付：
 
 ```mermaid
 %%{init: {"theme":"neutral","sequence":{"mirrorActors":false}}}%%
 sequenceDiagram
-    participant A as Accounting
+    participant A as MoleService
     participant S as Submission
     participant R as Redis
     participant C as 结算节点
@@ -183,9 +177,9 @@ sequenceDiagram
     S-->>A: Send：完整回执
 ```
 
-[Submission](../nodes/mole/molesubmissionservice.go) 的三个动作是 `restoreCheckpoint`、`submitBatch`、`completeBatch`。保存原批次成功后，Call 结算写池并直接校验返回的完整回执。等待仅占用 Submission，Accounting 和各组继续处理命中。收到有效回执后，先更新 Redis 确认统计、序号并清除待批次，再通知 Accounting；Redis 确认或本地通知失败时保留内存回执，只重试完成与交付，不重复调用结算。恢复批次只交付已确认统计，完成初始化后才开放新记账。
+[Submission](../nodes/mole/molesubmissionservice.go) 的三个动作是 `restoreCheckpoint`、`submitBatch`、`completeBatch`。保存原批次成功后，Call 结算写池并直接校验返回的完整回执。等待仅占用 Submission，MoleService 继续处理各组命中。收到有效回执后，先更新 Redis 确认统计、序号并清除待批次，再通知 MoleService；Redis 确认或本地通知失败时保留内存回执，只重试完成与交付，不重复调用结算。恢复批次只交付已确认统计，完成初始化后才开放新记账。
 
-Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余额、释放本批待扣并保留后续操作，重算显示余额；不能把已入账扣款再减一次。确认基线降低而后续批次仍待确认时，显示余额最低为 0，后续待操作继续按原 ID 等待回执，不因显示封底而取消。显示有差异时经 `MoleService → AttackService → 当前 Agent` 推送绝对余额校正，一致时不重复奖励。校正不复活目标、不修改已完成命中、不反向冲账。
+MoleService 的 `handleSettlementReceipt → accounting.applyReceipt` 更新较新确认余额、释放本批待扣并保留后续操作，重算显示余额；不能把已入账扣款再减一次。确认基线降低而后续批次仍待确认时，显示余额最低为 0，后续待操作继续按原 ID 等待回执，不因显示封底而取消。显示有差异时经 `MoleService → 当前 Agent` 推送绝对余额校正，一致时不重复奖励。校正不复活目标、不修改已完成命中、不反向冲账。
 
 ### 5.4 检查点与故障边界
 
@@ -193,10 +187,9 @@ Accounting 的 `handleSettlementReceipt → applyReceipt` 更新较新确认余�
 
 - 未保存 Redis 的内存命中可能在崩溃时丢失；已保存批次按原 ID、顺序和金额恢复，不查询后再抽奖或重新生成请求。
 - Redis 等待最多 500ms；结算 Call 的总等待范围见[调用与超时](#72-调用与超时)。超时、满邮箱、临时错误或非法回执保留原请求，按 100ms～2s 退避重试，不逐笔查账。业务确定性错误，以及 GSR 的 `runtime.unknown_command`、`runtime.invalid_command_arguments` 接线错误，保留原批次并暂停新记账；修复后重启，按原请求恢复。
-- Leave 不取消已接纳账务；有待扣时保留账户缓存，结清且已离开后才回收。目录/账户上限为 100,000，每组请求记录上限 1,024，已完成记账记录上限 4,096。
-- 正常离开、确认停止后的整组清理，以及目录明确拒绝且未建立用户路由的预留尝试，均由目录按 `UserID → Membership` 保存尚未被 Accounting 接纳的回收通知；同一用户只保留最新一条。产生通知后立即尝试 Send，每次回调最多 64 条；未接纳时停止本轮并保留待投记录，由现有 100ms 目录 Pulse 再次唤醒补投。Send 接纳后移除待投记录，不等同缓存已回收；Accounting 核对 Membership，并按有无待结算操作决定立即或延后回收。预留拒绝的回收决定由目录在处理请求时作出，调用方的 Call 超时不能证明预留未执行。补投表仅在本节点内存中，节点退出后不单独恢复。
-- 余额准备失败或 Reserve 未入队时目录没有机会产生上述通知，改由 Entry 保存 `UserID → 失败 Membership`，同一用户最多一条、总计最多 100,000 条；达到上限时不再为新用户准备余额。产生任务后立即尝试，再由 100ms Entry Pulse 重试；每轮最多 64 条，共享 500ms 等待预算。目录确认 Accounting 已接纳修正后移除任务，失败或结果未知则保留；同一用户新准备前的定向交付也最多等待 500ms。该表同样只在内存中，节点退出后不单独恢复。
-- 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 唤醒 owner，目标邮箱满只跳过本次，不切断后续周期。Submission 退出暂停新记账；Entry、Accounting 或目录退出使宿主返回失败；单个组退出不停止其他组。
+- Leave 不取消已接纳账务；用户已离开且没有待结算操作时直接删除账户，否则等回执完成再释放。实际成员和缓存账户各有 100,000 上限，每组请求记录上限 1,024，已完成记账记录上限 4,096。
+- 私有 [molePulse](../nodes/mole/molepulse.go) 用 GSR After 每 100ms 唤醒 MoleService 归批并检查各组下一次刷目标时间，目标邮箱满只跳过本次，不切断后续周期。Submission 等待、超时和重试不占用内存玩法 owner。
+- Submission 退出暂停新记账；MoleService 退出使宿主返回失败。组是普通对象，不再有组间独立邮箱或 panic 隔离；MoleService 回调只做有界内存工作和非阻塞发送，不直接调用外部存储。当前单 owner 吞吐需要实测，不能直接用共享同一状态的 Service 池增加并行。
 
 ## 6. 斗地主：牌桌与局末结算
 
@@ -286,7 +279,7 @@ Cluster.Call → GSR 选择池成员 → 邮箱排队
 
 **SQL 耗时包含在 Call 总等待时间里，两个超时不相加。** 但 SQL 使用独立的 `context.Background()` 创建超时，不继承调用方剩余时间。例如先排队 1.5 秒、再执行 SQL 2 秒，地鼠调用方在第 3 秒超时，结算服仍可能继续并提交成功。斗地主 Call 与 SQL 都为 2 秒，也可能因排队、网络和回传耗时而先超时。
 
-Call 等待会占用当前调用方 Service：地鼠由独立 Submission 等待，Accounting 继续处理命中；斗地主由本桌等待，其他桌继续运行。结果未知时，游戏保留 Redis 待请求，按原 ID 和内容退避重试；拿到有效回执后完成交付与清理，不再调用结算。各游戏的具体处理见第 5、6 节。
+Call 等待会占用当前调用方 Service：地鼠由独立 Submission 等待，MoleService 继续处理命中；斗地主由本桌等待，其他桌继续运行。结果未知时，游戏保留 Redis 待请求，按原 ID 和内容退避重试；拿到有效回执后完成交付与清理，不再调用结算。各游戏的具体处理见第 5、6 节。
 
 ### 7.3 事务与幂等
 
@@ -336,8 +329,8 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 认证不等于登录、失败回包后关闭 | [agent_auth_test.go](../nodes/access/agent_auth_test.go)、[tokenservice_test.go](../nodes/login/tokenservice_test.go)、[token_redis_test.go](../nodes/login/token_redis_test.go) |
 | 游戏回包校验、离开确认、失败后的请求封闭与路由清理 | [component_test.go](../nodes/access/component_test.go)、[agent_failure_test.go](../nodes/access/agent_failure_test.go) |
 | Online 条件替换/解绑、TCP 与重启空目录 | [onlineservice_test.go](../nodes/online/onlineservice_test.go)、[Cluster 用例](../nodes/online/onlineservice_cluster_test.go) |
-| 地鼠进入、换组与成员实例隔离 | [进入协作用例](../nodes/mole/moleentryservice_cluster_test.go)、[换组回收时序用例](../nodes/mole/moleentryservice_retry_test.go) |
-| 地鼠目录回收、内存余额、回执、重试与检查点恢复 | [目录回收用例](../nodes/mole/moleservice_test.go)、[Accounting 用例](../nodes/mole/moleaccountingservice_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccountingservice_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
+| 地鼠原子入场、登录隔离与未知结果重试 | [进入协作用例](../nodes/mole/moleentryservice_cluster_test.go)、[失败与超时用例](../nodes/mole/moleentryservice_atomic_test.go) |
+| 地鼠原子入场、内存余额、回执、重试与检查点恢复 | [入场与离开用例](../nodes/mole/moleservice_test.go)、[Accounting 用例](../nodes/mole/moleaccounting_test.go)、[检查点用例](../nodes/mole/molesubmissionservice_redis_test.go)、[余额协作用例](../nodes/mole/moleaccounting_cluster_test.go)、[提交恢复用例](../nodes/mole/molesubmissionservice_cluster_test.go) |
 | 斗地主成员回收、重登隔离、Join 核对与慢目录退避 | [成员回收用例](../nodes/landlord/attackservice_test.go)、[牌桌通信及 Pulse 用例](../nodes/landlord/attackservice_cluster_test.go) |
 | 斗地主未入座预留到期、空桌退出及超时已入座保护 | [期限规则用例](../nodes/landlord/landlordreservation_test.go)、[真实 TCP 与 Pulse 用例](../nodes/landlord/landlordreservation_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试、暂停与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Journal 故障用例](../nodes/landlord/landlordjournal_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |

@@ -46,7 +46,7 @@ type hitRecord struct {
 	Deadline time.Time
 }
 
-// attackGame 是 AttackService 私有的规则状态；不访问数据库、网络或钱包。
+// attackGame 是 MoleService 组对象私有的规则状态；不访问数据库、网络或钱包。
 type attackGame struct {
 	name       string
 	sequence   uint64

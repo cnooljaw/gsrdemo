@@ -15,7 +15,6 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
@@ -39,6 +38,7 @@ type settlementFixture struct {
 	submitCount     atomic.Uint64
 	batchQueries    chan struct{}
 	balanceRequests chan uint64
+	failBalance     atomic.Bool
 	rejectUser      uint64
 	dispatcher      *gsr.Dispatcher
 }
@@ -175,6 +175,9 @@ func (service *settlementFixture) handleHide(_ gsr.CommandContext, hidden bool) 
 }
 
 func (service *settlementFixture) handleBalance(_ gsr.CommandContext, userID uint64) (map[string]any, error) {
+	if service.failBalance.Load() {
+		return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "settlement.store_unavailable", "injected balance error")
+	}
 	select {
 	case service.balanceRequests <- userID:
 	default:
@@ -435,8 +438,7 @@ func enterMoleTestUser(t *testing.T, routes map[cluster.NodeID]string, userID ui
 func testHitTarget(t *testing.T, routes map[cluster.NodeID]string, snapshot map[string]any, userID uint64, login, action string) map[string]any {
 	t.Helper()
 	target := snapshot["targets"].([]any)[0].(map[string]any)
-	value, err := moleRPC(t, routes, "mole", snapshot["attack_name"].(string), moleattack.AttackHitCommand,
-		userID, login, action, target["spawn_seq"], target["hole"])
+	value, err := moleRPC(t, routes, "mole", moleServiceName, moleHitCommand, userID, login, snapshot["attack_name"].(string), action, target["spawn_seq"], target["hole"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +449,7 @@ func waitMoleOperation(t *testing.T, routes map[cluster.NodeID]string, userID ui
 	t.Helper()
 	deadline := time.Now().Add(moleTestWait)
 	for time.Now().Before(deadline) {
-		value, err := moleRPC(t, routes, "mole", moleAccountingName, accountingStatusCommand, userID, hitID)
+		value, err := moleRPC(t, routes, "mole", moleServiceName, moleOperationStatusCommand, userID, hitID)
 		if err == nil && value != nil && value.(map[string]any)["status"] == want {
 			return
 		}

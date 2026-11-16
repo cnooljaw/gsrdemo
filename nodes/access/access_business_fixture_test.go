@@ -18,7 +18,7 @@ import (
 	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
 	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
 	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
-	"github.com/cnooljaw/gsrdemo/common/rpc/moleattack"
+	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	"github.com/cnooljaw/gsrdemo/common/rpc/moleentry"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	tokenrpc "github.com/cnooljaw/gsrdemo/common/rpc/token"
@@ -160,10 +160,13 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			service.hits <- []any{"leave-landlord", args[0], args[1]}
 			return true, nil
 		}
-	case "attack":
+	case molerpc.ServiceName:
 		switch command {
-		case moleattack.AttackHitCommand:
-			service.hits <- append([]any(nil), args...)
+		case molerpc.MoleHitCommand:
+			if len(args) != 6 || args[2] != "attack" {
+				return nil, runtime.ErrInvalidCommandArguments
+			}
+			service.hits <- append(append([]any(nil), args[:2]...), args[3:]...)
 			service.attempts++
 			if service.attempts == 1 {
 				switch service.scenario {
@@ -175,7 +178,7 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 					return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "mole.busy", "busy")
 				}
 			}
-			switch args[2] {
+			switch args[3] {
 			case "target-gone":
 				return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "mole.target_unavailable", "target gone")
 			case "timeout":
@@ -185,15 +188,15 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			case "wrong-class":
 				return nil, runtime.NewStatusError(runtime.ErrorClassRuntime, "mole.target_unavailable", "wrong class")
 			}
-			if args[2] == "rejected-action" {
-				return map[string]any{"hit_id": "hit-rejected", "action_id": args[2], "status": "rejected"}, nil
+			if args[3] == "rejected-action" {
+				return map[string]any{"hit_id": "hit-rejected", "action_id": args[3], "status": "rejected"}, nil
 			}
-			return map[string]any{"hit_id": "hit-1", "action_id": args[2], "spawn_seq": args[3], "hole": args[4], "status": "accepted", "debit": int64(100), "credit": int64(0), "balance": int64(900), "available": int64(900), "revision": uint64(2)}, nil
-		case moleattack.AttackSnapshotCommand:
+			return map[string]any{"hit_id": "hit-1", "action_id": args[3], "spawn_seq": args[4], "hole": args[5], "status": "accepted", "debit": int64(100), "credit": int64(0), "balance": int64(900), "available": int64(900), "revision": uint64(2)}, nil
+		case molerpc.MoleSnapshotCommand:
 			snapshot := fixtureSnapshot()
 			snapshot["targets"].([]any)[0].(map[string]any)["spawn_seq"] = uint64(10)
 			return snapshot, nil
-		case moleattack.AttackLeaveCommand:
+		case molerpc.MoleLeaveCommand:
 			return true, nil
 		}
 	}
@@ -214,7 +217,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, "attack", landlordrpc.ServiceName, "room"} {
+	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, molerpc.ServiceName, landlordrpc.ServiceName, "room"} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario, barrier: service.barrier})
 		if err != nil {
 			return err
