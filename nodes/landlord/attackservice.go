@@ -24,7 +24,7 @@ const (
 	roomLeaveCommand    runtime.CommandID = 5
 	roomBidCommand      runtime.CommandID = 6
 	roomRobCommand      runtime.CommandID = 7
-	roomTickCommand     runtime.CommandID = 10
+	roomTickCommand     runtime.CommandID = 8
 )
 
 const releaseRetryDelay = time.Second

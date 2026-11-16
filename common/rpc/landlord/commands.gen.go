@@ -7,9 +7,9 @@ const ServiceName = "landlord"
 
 const (
 	ResolveCommand               = 1
-	ReleaseCommand               = 10
-	CheckRouteCommand            = 11
-	SealCommand                  = 12
-	DiscardCommand               = 13
-	ReconcileReservationsCommand = 14
+	ReleaseCommand               = 2
+	CheckRouteCommand            = 3
+	SealCommand                  = 4
+	DiscardCommand               = 5
+	ReconcileReservationsCommand = 6
 )

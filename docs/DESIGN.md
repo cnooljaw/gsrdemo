@@ -201,7 +201,7 @@ MoleService 的 `handleSettlementReceipt → accounting.applyReceipt` 更新较�
 
 Resolve 为本次进入生成 Membership，预留固定有效 30 秒；再次 Resolve 更新当前预留和期限，不重复增加人数。目录在每桌 `Pending` 中只存最多三份期限，真实成员仍由牌桌拥有。Join 核对 Online、当前 Membership 及期限，过期预留不能用于迟到 Join。
 
-牌桌通过现有 Pulse 上报不含手牌的三人身份值快照，由目录执行 `ReconcileReservations / 14`：实际成员与当前预留一致时解除期限，Call 回执丢失不影响确认；到期且未入座时条件释放；新登录未完成且到期时恢复实际成员的原路由，保留原手牌和待结算身份。目录只检查该桌待预留，不扫描其他桌，不反向 Call 牌桌。恢复服务不参与进入预留核对。
+牌桌通过现有 Pulse 上报不含手牌的三人身份值快照，由目录执行 `ReconcileReservations / 6`：实际成员与当前预留一致时解除期限，Call 回执丢失不影响确认；到期且未入座时条件释放；新登录未完成且到期时恢复实际成员的原路由，保留原手牌和待结算身份。目录只检查该桌待预留，不扫描其他桌，不反向 Call 牌桌。恢复服务不参与进入预留核对。
 
 [attackGame](../nodes/landlord/attackgame.go) 用一个 phase 表示 `waiting → calling → robbing → playing → finished`，规则如下：
 

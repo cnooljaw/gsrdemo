@@ -11,5 +11,5 @@ const (
 	RoomLeaveCommand    = 5
 	RoomBidCommand      = 6
 	RoomRobCommand      = 7
-	RoomTickCommand     = 10
+	RoomTickCommand     = 8
 )

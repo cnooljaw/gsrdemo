@@ -17,11 +17,11 @@ import (
 const (
 	landlordName                                   = "landlord"
 	resolveCommand               runtime.CommandID = 1
-	releaseCommand               runtime.CommandID = 10
-	checkRouteCommand            runtime.CommandID = 11
-	sealCommand                  runtime.CommandID = 12
-	discardCommand               runtime.CommandID = 13
-	reconcileReservationsCommand runtime.CommandID = 14
+	releaseCommand               runtime.CommandID = 2
+	checkRouteCommand            runtime.CommandID = 3
+	sealCommand                  runtime.CommandID = 4
+	discardCommand               runtime.CommandID = 5
+	reconcileReservationsCommand runtime.CommandID = 6
 )
 
 const callTimeout = time.Second

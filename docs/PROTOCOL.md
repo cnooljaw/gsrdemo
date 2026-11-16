@@ -176,7 +176,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | 本人桌快照；空列表表示不出 |
 | `RoomName / 4` Snapshot | Call | `U, L` | 本人桌快照 |
 | `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回空 C/S LeaveResponse；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
-| `landlord / 13` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
+| `landlord / 5` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
 快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Ready、Call、Rob、Play、Snapshot 回包的 `room_name` 与本次请求目标一致，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
 
@@ -300,12 +300,13 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 | Service / Command | 方式 | 顺序参数 | 结果 |
 | --- | --- | --- | --- |
-| `landlord / 11` CheckRoute | Call | `U, L, roomName string, M` | bool；当前预留身份匹配且尚未过期，或已解除期限 |
-| `landlord / 12` Seal | Send | `roomName string, sealed bool` | 封桌接纳，无业务回执 |
-| `landlord / 10` Release | Call | `U, L, roomName string, M, waiting bool` | false：同桌有新预留，保留原座位；true：旧成员可移除 |
-| `landlord / 14` ReconcileReservations | Call | `roomName string, members [3]landlordMember`；元素只含 UserID/LoginID/Membership，空位 UserID=0 | bool；true：目录仍占位，false：没有成员或有效预留；仅接收非零本地来源 |
+| `landlord / 3` CheckRoute | Call | `U, L, roomName string, M` | bool；当前预留身份匹配且尚未过期，或已解除期限 |
+| `landlord / 4` Seal | Send | `roomName string, sealed bool` | 封桌接纳，无业务回执 |
+| `landlord / 2` Release | Call | `U, L, roomName string, M, waiting bool` | false：同桌有新预留，保留原座位；true：旧成员可移除 |
+| `landlord / 6` ReconcileReservations | Call | `roomName string, members [3]landlordMember`；元素只含 UserID/LoginID/Membership，空位 UserID=0 | bool；true：目录仍占位，false：没有成员或有效预留；仅接收非零本地来源 |
+| Pulse → `RoomName / 8` Tick | Send | 无 | 推进超时、结算重试及清理；仅非零本地来源 |
 
-14 号使用 Go 值类型身份快照，不传手牌、不做内部 Protobuf 编解码。入座确认、到期回收、重登保护和空桌退出见[斗地主设计](DESIGN.md#61-凑桌规则与可见性)及[恢复边界](DESIGN.md#63-重试清理与恢复)。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
+6 号使用 Go 值类型身份快照，不传手牌、不做内部 Protobuf 编解码。入座确认、到期回收、重登保护和空桌退出见[斗地主设计](DESIGN.md#61-凑桌规则与可见性)及[恢复边界](DESIGN.md#63-重试清理与恢复)。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
 
 ## 3. 主要调用链
 
