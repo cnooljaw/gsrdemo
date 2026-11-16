@@ -14,14 +14,21 @@ import (
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
-// preparationProbe 只控制 Entry 的本地接纳故障，不替代目录或 Accounting。
-type preparationProbe struct{ rejectReserve, rejectCleanup atomic.Bool }
+// preparationProbe 只注入本地接纳故障或延迟准备回包，不替代目录或 Accounting 的状态变化。
+type preparationProbe struct {
+	rejectReserve, rejectCleanup atomic.Bool
+	delayPreparation             atomic.Uint32
+	preparations                 atomic.Uint64
+}
 type preparationContext struct {
 	gsr.CommandContext
 	probe *preparationProbe
 }
 
 func (self *preparationContext) CallName(ctx context.Context, name cluster.ServiceName, command runtime.CommandID, args ...any) (any, error) {
+	if name == moleAccountingName && (command == accountingResumeCommand || command == accountingSetBalanceCommand) {
+		self.probe.preparations.Add(1)
+	}
 	if name == moleServiceName && command == moleReserveCommand && self.probe.rejectReserve.Swap(false) {
 		return nil, runtime.ErrMailboxFull
 	}
@@ -29,6 +36,20 @@ func (self *preparationContext) CallName(ctx context.Context, name cluster.Servi
 		return nil, runtime.ErrMailboxFull
 	}
 	return self.CommandContext.CallName(ctx, name, command, args...)
+}
+
+type preparationAccounting struct {
+	gsr.Service
+	probe *preparationProbe
+}
+
+func (accounting *preparationAccounting) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
+	value, err := accounting.Service.Handle(self, command, args...)
+	if err == nil && uint32(command) != 0 && accounting.probe.delayPreparation.CompareAndSwap(uint32(command), 0) {
+		// 状态已由真实 Handler 修改，只延迟回包，让 Entry 的真实本地 Call 超时。
+		time.Sleep(moleCallTimeout + 100*time.Millisecond)
+	}
+	return value, err
 }
 
 type preparationEntry struct {
@@ -46,8 +67,11 @@ type preparationMainContext struct {
 }
 
 func (self *preparationMainContext) CreateService(ctx context.Context, child gsr.Service) (runtime.ServiceID, error) {
-	if _, ok := child.(*moleEntryService); ok {
+	switch child.(type) {
+	case *moleEntryService:
 		child = &preparationEntry{child, self.probe}
+	case *moleAccountingService:
+		child = &preparationAccounting{child, self.probe}
 	}
 	return self.ServiceContext.CreateService(ctx, child)
 }
@@ -61,15 +85,12 @@ func (main *preparationMain) OnStart(ctx context.Context, self gsr.ServiceContex
 	return main.Service.OnStart(ctx, &preparationMainContext{self, main.probe})
 }
 
-// TestMoleReserveAdmissionCleanupRetries 保护预留未入队时保留补偿，目录背压恢复后自动回收无路由闲置缓存。
-func TestMoleReserveAdmissionCleanupRetries(t *testing.T) {
+func startPreparationMole(t *testing.T, probe *preparationProbe) map[cluster.NodeID]string {
+	t.Helper()
 	fixture := newSettlementFixture()
 	settlement, _ := startMoleTestNode(t, "settlement", nil, &moleTestPeer{node: "settlement", name: "settlement", service: fixture})
 	online, _ := startMoleTestNode(t, "online", nil, &moleTestPeer{node: "online", name: onlinerpc.ServiceName, service: newOnlineFixture()})
 	routes := map[cluster.NodeID]string{"online": online, "settlement": settlement}
-	probe := &preparationProbe{}
-	probe.rejectReserve.Store(true)
-	probe.rejectCleanup.Store(true)
 	address, _ := startMoleTestNode(t, "mole", routes, &preparationMain{newMoleTestMain(t, fixture), probe})
 	routes["mole"] = address
 	deadline := time.Now().Add(2 * time.Second)
@@ -85,14 +106,30 @@ func TestMoleReserveAdmissionCleanupRetries(t *testing.T) {
 	if _, err := moleRPC(t, routes, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uint64(1), "login", "access-01", "agent"); err != nil {
 		t.Fatal(err)
 	}
+	return routes
+}
+
+// TestMoleReserveAdmissionCleanupRetries 保护背压时旧补偿不被新准备覆盖，背压恢复后自动回收无路由闲置缓存。
+func TestMoleReserveAdmissionCleanupRetries(t *testing.T) {
+	probe := &preparationProbe{}
+	probe.rejectReserve.Store(true)
+	probe.rejectCleanup.Store(true)
+	routes := startPreparationMole(t, probe)
 	if _, err := callMoleEnter(t, routes, uint64(1), "login", "access-01", "agent"); !errors.Is(err, runtime.ErrMailboxFull) {
 		t.Fatalf("预留未返回原错误: %v", err)
 	}
 	if _, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(1)); err != nil {
 		t.Fatal("背压前准备缓存丢失", err)
 	}
+	prepared := probe.preparations.Load()
+	if _, err := callMoleEnter(t, routes, uint64(1), "login", "access-01", "agent"); !errors.Is(err, errMoleBusy) {
+		t.Fatalf("旧补偿未交付仍开始新进入: %v", err)
+	}
+	if probe.preparations.Load() != prepared {
+		t.Fatal("旧补偿未交付仍改变了余额准备身份")
+	}
 	probe.rejectCleanup.Store(false)
-	deadline = time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for {
 		_, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(1))
 		if errors.Is(err, errAccountingUnavailable) {
@@ -107,6 +144,52 @@ func TestMoleReserveAdmissionCleanupRetries(t *testing.T) {
 	snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
 	hit := testHitTarget(t, routes, snapshot, 1, "login", "after-cleanup")
 	waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
+}
+
+// TestMolePreparationTimeoutCleanup 保护余额准备已执行但回包超时后，首次缓存和旧成员离开后的缓存都能回收。
+func TestMolePreparationTimeoutCleanup(t *testing.T) {
+	for _, command := range []runtime.CommandID{accountingSetBalanceCommand, accountingResumeCommand} {
+		name := "SetBalance"
+		if command == accountingResumeCommand {
+			name = "ResumeThenLeave"
+		}
+		t.Run(name, func(t *testing.T) {
+			probe := &preparationProbe{}
+			routes := startPreparationMole(t, probe)
+			var attack string
+			if command == accountingResumeCommand {
+				attack = enterMoleTestUser(t, routes, 1, "login", "access-01")["attack_name"].(string)
+			}
+			probe.delayPreparation.Store(uint32(command))
+			// Entry 原样返回本地 context 超时，跨节点边界当前将其封装为 HandlerFailed。
+			if _, err := callMoleEnter(t, routes, uint64(1), "login", "access-01", "agent"); !errors.Is(err, runtime.ErrHandlerFailed) {
+				t.Fatalf("准备未按预期超时: %v", err)
+			}
+			if probe.delayPreparation.Load() != 0 {
+				t.Fatal("未经过真实余额准备 Handler")
+			}
+			if attack != "" {
+				if value, err := moleRPC(t, routes, "mole", attack, attackLeaveCommand, uint64(1), "login"); err != nil || value != true {
+					t.Fatalf("旧成员离开失败: %v %v", value, err)
+				}
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				_, err := moleRPC(t, routes, "mole", moleAccountingName, accountingLoadCommand, uint64(1))
+				if errors.Is(err, errAccountingUnavailable) {
+					break
+				}
+				if err != nil || time.Now().After(deadline) {
+					t.Fatalf("准备超时留下无路由闲置缓存: %v", err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			// 清理后显式重进仍能命中并按原链路结算。
+			snapshot := enterMoleTestUser(t, routes, 1, "login", "access-01")
+			hit := testHitTarget(t, routes, snapshot, 1, "login", "after-preparation-timeout")
+			waitMoleOperation(t, routes, 1, hit["hit_id"].(string), "committed")
+		})
+	}
 }
 
 type preparationNotice struct {

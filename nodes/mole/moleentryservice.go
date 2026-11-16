@@ -20,10 +20,10 @@ const (
 	entryCleanupTickCommand runtime.CommandID = 10
 )
 
-// moleEntryService 协调低频进入及未入队准备的补偿，不拥有目录、余额或房间状态。
+// moleEntryService 协调低频进入及失败准备的补偿，不拥有目录、余额或房间状态。
 type moleEntryService struct {
 	settlementNode cluster.NodeID
-	pendingCleanup map[uint64]string // 仅保留每个用户最新失败尝试的 Membership。
+	pendingCleanup map[uint64]string // 每个用户至多一条，先交付旧补偿再开启新准备。
 	onStopped      func(error)
 	dispatcher     *gsr.Dispatcher
 }
@@ -68,6 +68,15 @@ func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uin
 	if !ok || current["login_id"] != loginID || current["access_node"] != accessNode || current["agent_name"] != agentName {
 		return nil, errMoleStaleLogin
 	}
+	if _, pending := service.pendingCleanup[userID]; pending {
+		// 新准备的结果也可能未知，不能先覆盖仍需清理的旧 Membership。
+		ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
+		err = service.deliverPreparedCleanup(ctx, self, userID)
+		cancel()
+		if err != nil {
+			return nil, errMoleBusy
+		}
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		// 每次换组重新建立成员身份和余额视图，原组的迟到回收不能作用于新组。
 		membership, err := randomInstance("member-")
@@ -76,10 +85,11 @@ func (service *moleEntryService) handleEnter(self gsr.CommandContext, userID uin
 		}
 		balance, err := service.entryBalance(self, userID, membership)
 		if err != nil {
+			// 本地准备可能已执行；此时尚未发起 Reserve，按当前目录修正缓存归属。
+			service.pendingCleanup[userID] = membership
+			service.retryPreparedCleanup(self)
 			return nil, err
 		}
-		// 新准备已得到确认，旧补偿再到达也只能按旧 Membership 空操作。
-		delete(service.pendingCleanup, userID)
 		ctx, cancel = context.WithTimeout(context.Background(), moleCallTimeout)
 		value, err := self.CallName(ctx, moleServiceName, moleReserveCommand, userID, loginID, membership)
 		cancel()
@@ -167,15 +177,23 @@ func (service *moleEntryService) retryPreparedCleanup(self gsr.ServiceContext) {
 	ctx, cancel := context.WithTimeout(context.Background(), moleCallTimeout)
 	defer cancel()
 	attempted := 0
-	for userID, membership := range service.pendingCleanup {
+	for userID := range service.pendingCleanup {
 		if attempted >= maxForgetPerFlush {
 			break
 		}
 		attempted++
-		if _, err := self.CallName(ctx, moleServiceName, moleReconcilePreparationCommand, userID, membership); err != nil {
+		if err := service.deliverPreparedCleanup(ctx, self, userID); err != nil {
 			logMoleError(self, "进入准备补偿未接纳，保留重试", err)
 			return
 		}
-		delete(service.pendingCleanup, userID)
 	}
+}
+
+func (service *moleEntryService) deliverPreparedCleanup(ctx context.Context, self gsr.ServiceContext, userID uint64) error {
+	membership := service.pendingCleanup[userID]
+	if _, err := self.CallName(ctx, moleServiceName, moleReconcilePreparationCommand, userID, membership); err != nil {
+		return err
+	}
+	delete(service.pendingCleanup, userID)
+	return nil
 }
