@@ -176,9 +176,34 @@ func TestAgentBalanceConversionKeepsInt64(t *testing.T) {
 	if _, err := clientBalance(map[string]any{"balance": float64(10)}); !errors.Is(err, errInvalidBackendReply) {
 		t.Fatalf("不允许浮点金额: %v", err)
 	}
-	confirmed, err := clientBalance(map[string]any{"balance": int64(10), "confirmed_balance": int64(20), "version": uint64(math.MaxUint64)})
+	confirmed, err := clientBalance(map[string]any{"balance": int64(10), "available": int64(10), "revision": uint64(1), "confirmed_balance": int64(20), "version": uint64(math.MaxUint64)})
 	if err != nil || confirmed.GetConfirmed().GetAmount() != 20 || confirmed.GetConfirmed().GetVersion() != math.MaxUint64 {
 		t.Fatalf("确认金额与版本必须成对保留: %v %v", confirmed, err)
+	}
+}
+
+// TestAgentBalanceRejectsIncompleteReplies 保护缺少可用余额、修订号或确认字段不成对时不向客户端伪造默认值。
+func TestAgentBalanceRejectsIncompleteReplies(t *testing.T) {
+	for name, value := range map[string]map[string]any{
+		"missing_available":         {"balance": int64(10), "revision": uint64(1)},
+		"missing_revision":          {"balance": int64(10), "available": int64(10)},
+		"wrong_available_type":      {"balance": int64(10), "available": uint64(10), "revision": uint64(1)},
+		"wrong_revision_type":       {"balance": int64(10), "available": int64(10), "revision": int64(1)},
+		"zero_revision":             {"balance": int64(10), "available": int64(10), "revision": uint64(0)},
+		"negative_balance":          {"balance": int64(-1), "available": int64(0), "revision": uint64(1)},
+		"negative_available":        {"balance": int64(10), "available": int64(-1), "revision": uint64(1)},
+		"missing_confirmed_version": {"balance": int64(10), "available": int64(10), "revision": uint64(1), "confirmed_balance": int64(10)},
+		"missing_confirmed_amount":  {"balance": int64(10), "available": int64(10), "revision": uint64(1), "version": uint64(1)},
+		"negative_confirmed_amount": {"balance": int64(10), "available": int64(10), "revision": uint64(1), "confirmed_balance": int64(-1), "version": uint64(1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := clientBalance(value); !errors.Is(err, errInvalidBackendReply) {
+				t.Fatalf("不完整余额未被拒绝: %v", err)
+			}
+		})
+	}
+	if _, err := clientBalance(map[string]any{"balance": int64(0), "available": int64(0), "revision": uint64(1)}); err != nil {
+		t.Fatalf("零余额应当有效: %v", err)
 	}
 }
 

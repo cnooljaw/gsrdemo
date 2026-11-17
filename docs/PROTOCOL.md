@@ -10,7 +10,7 @@
 
 | 项目 | 当前约定 |
 | --- | --- |
-| 传输 | GSR v1.0.3 MAC WebSocket；握手、序号和 MAC 由 Gate 处理，业务使用 Protobuf Envelope；MAC 不加密载荷 |
+| 传输 | GSR v1.0.4 MAC WebSocket；握手、序号和 MAC 由 Gate 处理，业务使用 Protobuf Envelope；MAC 不加密载荷 |
 | Envelope | `msg_id uint32`、`request_id uint32`、`payload bytes` |
 | 请求与响应 | 请求使用非零 request_id，响应回同一 ID；服务端推送 request_id=0 |
 | 身份与路由 | 客户端不填写 UserID、LoginID、节点或 Service 地址，由 Agent 根据当前连接补齐 |
@@ -53,10 +53,10 @@
 | Member | `user_id uint64`、`seat int64` | 座位从 0 开始 |
 | Target | `spawn_seq uint64`、`hole int64`、`deadline_ms int64`、`claimed bool` | 操作当前目标实例，不能只按洞位命中 |
 | Hit | `hit_id/action_id/status string`、`debit/credit int64`、`spawn_seq uint64`、`hole int64` | 同一已接纳操作不重复加减；ActionID 在当前登录内不复用 |
-| Balance | `balance int64`、`available int64`、`revision uint64`；可选 `confirmed ConfirmedSilver` | balance 是显示余额，available 不含待确认奖励；按新 revision 采纳绝对值 |
+| Balance | `balance int64`、`available int64`、`revision uint64`；可选 `confirmed ConfirmedSilver` | balance 和 available 非负，revision 从 1 开始；balance 是显示余额，available 不含待确认奖励，按新 revision 采纳绝对值 |
 | ConfirmedSilver | `amount int64`、`version uint64` | 确认金额和数据库版本一起出现；省略不等于零，不能覆盖已知确认值 |
 
-Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回执改变显示余额时才推送校正，不重复奖励、不复活目标。revision 仅在当前节点缓存生命周期内有效，重进用新基线重建；算法与恢复边界见[地鼠设计](DESIGN.md#5-地鼠即时玩法与后台入账)。
+Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。access 校验内部回包的 balance、available、revision 及成对的确认余额/版本，缺失或类型错误不会作为默认零值下发。回执改变显示余额时才推送校正，不重复奖励、不复活目标。revision 仅在当前节点缓存生命周期内有效，重进用新基线重建；算法与恢复边界见[地鼠设计](DESIGN.md#5-地鼠即时玩法与后台入账)。
 
 ### 1.4 斗地主协议
 
@@ -87,6 +87,8 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。回
 牌编码为四种花色的 `0x01..0x0d`、`0x11..0x1d`、`0x21..0x2d`、`0x31..0x3d`，加小王 `0x4e`、大王 `0x4f`；比较顺序为 3..K、A、2、小王、大王。每张牌使用实际不重复编码。具体牌型、叫抢和超时规则见[斗地主设计](DESIGN.md#6-斗地主牌桌与局末结算)与 [cards.go](../nodes/landlord/cards.go)。
 
 进行中 Leave 只断开推送并保留牌位，超时动作继续。正常局末不先推送 finished + pending，取得有效结算回执后才推送终态；主动 Snapshot 仍可能读到 pending，其默认零余额不代表已确认余额。客户端使用终态快照，不再追加逐局查账。
+
+同一 Agent 串行处理请求和推送；请求等待牌桌时到达的推送，排在本次响应之后写入 Gate。但推送也可能先于尚未处理的请求响应，客户端仍需处理交错。`turn` 是操作轮次，不是所有快照变化的版本：准备、成员变化和结算状态可能保持相同 turn，不能仅凭 turn 严格排序同轮快照。示例客户端只在同房间过滤较小 turn 的推送，尚不提供完整快照版本；其他客户端若异步处理消息，须自行避免旧处理结果覆盖新状态。
 
 ### 1.5 错误与保留编号
 

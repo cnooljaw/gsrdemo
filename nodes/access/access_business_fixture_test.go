@@ -69,7 +69,9 @@ func (service *accessBackendFixture) OnStart(context.Context, gsr.ServiceContext
 func (service *accessBackendFixture) OnStop(context.Context) error { return nil }
 
 func (service *accessBackendFixture) Handle(self gsr.CommandContext, command runtime.CommandID, args ...any) (any, error) {
-	if service.barrier != nil && (service.role == moleentry.ServiceName || service.role == "room" && command == landlordattack.RoomJoinCommand) {
+	entry := service.role == moleentry.ServiceName || service.role == "room" && command == landlordattack.RoomJoinCommand
+	snapshot := service.scenario == "landlord-snapshot-order" && service.role == "room" && command == landlordattack.RoomSnapshotCommand
+	if service.barrier != nil && (service.scenario != "landlord-snapshot-order" && entry || snapshot) {
 		select {
 		case service.barrier.started <- struct{}{}:
 		default:
@@ -159,6 +161,9 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 		if command == landlordattack.RoomLeaveCommand {
 			service.hits <- []any{"leave-landlord", args[0], args[1]}
 			return true, nil
+		}
+		if command == landlordattack.RoomSnapshotCommand && service.scenario == "landlord-snapshot-order" {
+			return map[string]any{"room_name": "room", "turn": uint64(1)}, nil
 		}
 	case molerpc.ServiceName:
 		switch command {

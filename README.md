@@ -4,6 +4,8 @@
 
 调用链：客户端 → access → login / online / mole 或 landlord → settlement → MySQL。Redis 保存临时认证 Token、地鼠批次/统计检查点及斗地主待结算局末结果。
 
+了解节点设计和调用契约见 [DESIGN](docs/DESIGN.md) 与 [PROTOCOL](docs/PROTOCOL.md)；接入新游戏从 [接入顺序](docs/GO-CODE-STYLE.md#332-新增游戏的接入顺序) 开始，配合 [HTML 教程](docs/gsr-game-business.html) 第 12、16、20 页查看命令、组件组装和工作清单。
+
 ## 运行 Demo
 
 打开系统终端（macOS Terminal、iTerm 或编辑器集成终端均可），使用 **zsh**，先用 `cd` 进入 **gsrdemo 根目录**。下面标为 **Shell** 的命令都在该终端执行，包括 `go`、`node`、`npm` 命令；标为 **SQL** 的语句在登录 MySQL 后的 `mysql>` 控制台执行。
@@ -85,7 +87,7 @@ unset demo_password
 
 ### 4. 初始化地鼠检查点（仅地鼠需要）
 
-MySQL、Redis 可用后，在 mole 尚未启动时执行。已有本地配置请将 `redis_key` 更新为 `gsrdemo:mole:accounting:v2`；本版使用单提交链路，不迁移旧多通道 Redis 演示数据。
+MySQL、Redis 可用后，在 mole 尚未启动时执行检查点初始化。
 
 ```shell
 ./bin/mole -config configs/mole-01.local.yaml -init-accounting
@@ -113,9 +115,7 @@ settlement 提供 `settlement-write` 与 `settlement-read` 两个 Call 服务池
 
 需要比较本机 Call 池的并行度、连接数、邮箱和批次时运行 `./scripts/dev.sh load settlement`；64 来源、并行数各三轮确认运行 `GSRDEMO_SETTLEMENT_POOL_CONFIRM=1 ./scripts/dev.sh load settlement`。测试使用真实本机专用 MySQL 与 Cluster Call，只清理自建样本，逐档核对余额、版本和唯一账务；延迟包含重试，计时排除节点启动。结果分别保存在 `.cache/settlement-pool-load.json` 与 `.cache/settlement-pool-confirm.json`，保留原始样本，参数选择还应比较尾延迟、重试和 MySQL 等待；测试不会改 YAML。样本适用边界见[并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)。
 
-混合压测运行 `GSRDEMO_SETTLEMENT_MIXED_LOAD=1 ./scripts/dev.sh load settlement`，结果在 `.cache/settlement-mixed-load.json`。三个场景分别模拟常态、入场高峰和受控核查高峰，比例是可复现的演示假设。固定同一批工作量比较读写成员配比，分别记录写操作数/秒、查询数/秒、读写 P99、重试和数据库连接等待；读快照按余额/版本配对校验，结束后逐个钱包和唯一账务对账。该测试不会修改配置。旧本机配置的 `worker_count` 需改为 `write_workers`，并添加 `read_workers`，具体默认值见设计文档。
-
-结算写入口 `/7` 现为封顶均分、`/8` 为付款明细。升级前须确认没有旧 Group 待请求，停止旧版调用方并同步升级 settlement 与 landlord；旧版与新版的相同编号含义不同，不能混用。历史账务可查询，但不能按新规则重提旧请求。
+混合压测运行 `GSRDEMO_SETTLEMENT_MIXED_LOAD=1 ./scripts/dev.sh load settlement`，结果在 `.cache/settlement-mixed-load.json`。三个场景分别模拟常态、入场高峰和受控核查高峰，比例是可复现的演示假设。固定同一批工作量比较读写成员配比，分别记录写操作数/秒、查询数/秒、读写 P99、重试和数据库连接等待；读快照按余额/版本配对校验，结束后逐个钱包和唯一账务对账。该测试不会修改配置。
 
 `run` 前台运行节点，优先读取 `configs/<节点>-01.local.yaml`，没有时读取对应 `.yaml`。mole 监听启动后会恢复 Redis 检查点，恢复成功才接纳玩家；全部服务正常运行后再启动客户端。日志在 `logs/<实例名>/`。
 
@@ -172,7 +172,7 @@ unset demo_password
 node typeclient/dist/index.js --token-file .cache/demo1-token.json --hits 3
 ```
 
-Token 过期或 Redis 记录丢失后重新密码认证；不要提交凭据文件。认证/Token 变化需要重建并重启 login、access 和 TS 客户端，旧版密码 Login 协议已停用。普通客户端仍只连 access；生产接入使用 WSS，MAC 本身不加密 Token。
+Token 过期或 Redis 记录丢失后重新密码认证；不要提交凭据文件。普通客户端只连 access；生产接入使用 WSS，MAC 本身不加密 Token。
 
 同组玩家共享目标，同一目标只有一个玩家能命中。目标被抢走或过期时，CLI 输出 `miss`，刷新快照后继续寻找目标；`--hits` 只统计成功命中。每次等待/争抢预算默认 15 秒（`--timeout-ms` 更大时按该值，各次 RPC 另有超时）。超时、断线或其他错误仍停止，不自动重发结果未知的命中；保留输出中的 ActionID / HitID 供受控验收或管理核查；客户端不提供逐锤账务查询。
 
@@ -214,7 +214,7 @@ unset demo_password
 
 公开 Service 的 RPC 名称与命令在对应 Service 文件中维护，生成到 `common/rpc/<service>/commands.gen.go` 并入库；修改源定义后执行 `generate rpc`。`check` 会只读核对生成结果，缺失、过期或多余的生成文件都会报错。定义方式见 [Service 命令与共享契约](docs/GO-CODE-STYLE.md#331-service-命令与共享契约)，当前入口见 [Service 契约与寻址](docs/DESIGN.md#23-service-契约与寻址)。
 
-新增游戏按 [接入顺序](docs/GO-CODE-STYLE.md#332-新增游戏的接入顺序) 推进；教程第 12、16、20 页分别讲命令契约、同包组件组装和工作清单。RPC 契约生成与客户端协议生成是两个入口，生成后仍需验证实际 Handler 与业务调用链。
+RPC 契约生成与客户端协议生成是两个入口，生成后仍需验证实际 Handler 与业务调用链。
 
 单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）。此验收执行外部节点二进制，使用 `-count=1` 确保本次实际启动进程：
 

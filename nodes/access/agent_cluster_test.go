@@ -38,8 +38,8 @@ func TestAccessMoleRequestsUseCurrentIdentityAndPush(t *testing.T) {
 	if err := proto.Unmarshal(rejected.Payload, &rejectedHit); err != nil || rejected.MsgId != uint32(demopb.MsgId_S2C_HIT) || rejectedHit.GetHit().GetStatus() != "rejected" || rejectedHit.Silver != nil {
 		t.Fatalf("拒绝重试不能伪造余额: %v %v", &rejectedHit, err)
 	}
-	accessFixtureRPC(t, backend, 98, uint64(accessagent.MoleBalanceCorrectionPushCommand), "old-login", map[string]any{"balance": int64(1), "revision": uint64(99)})
-	accessFixtureRPC(t, backend, 98, uint64(accessagent.MoleBalanceCorrectionPushCommand), location["login_id"], map[string]any{"balance": int64(900), "revision": uint64(3)})
+	accessFixtureRPC(t, backend, 98, uint64(accessagent.MoleBalanceCorrectionPushCommand), "old-login", map[string]any{"balance": int64(1), "available": int64(1), "revision": uint64(99)})
+	accessFixtureRPC(t, backend, 98, uint64(accessagent.MoleBalanceCorrectionPushCommand), location["login_id"], map[string]any{"balance": int64(900), "available": int64(900), "revision": uint64(3)})
 	response := readAccessEnvelope(t, client)
 	var push demopb.BalancePush
 	if response.RequestId != 0 || response.MsgId != uint32(demopb.MsgId_S2C_BALANCE_PUSH) {
@@ -47,6 +47,46 @@ func TestAccessMoleRequestsUseCurrentIdentityAndPush(t *testing.T) {
 	}
 	if err := proto.Unmarshal(response.Payload, &push); err != nil || push.GetSilver().GetBalance() != 900 {
 		t.Fatalf("push=%v err=%v", &push, err)
+	}
+}
+
+// TestAccessLandlordSnapshotResponseBeforePush 保护等待牌桌查询时发出的推送不会先于该次响应。
+func TestAccessLandlordSnapshotResponseBeforePush(t *testing.T) {
+	barrier := newAccessEntryBarrier()
+	gateAddress, backend, _ := startAccessBusinessFixture(t, "landlord-snapshot-order", barrier)
+	t.Cleanup(barrier.release)
+	client := dialAccess(t, gateAddress)
+	if response := accessLogin(t, client, "alice", "password"); response.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(response)
+	}
+	location := accessFixtureRPC(t, backend, 99).(map[string]any)
+	if response := accessRequest(t, client, demopb.MsgId_C2S_LANDLORD_ENTER, &demopb.LandlordEnterRequest{}); response.MsgId != uint32(demopb.MsgId_S2C_LANDLORD_ENTER) {
+		t.Fatal(response)
+	}
+	payload, err := proto.Marshal(&commonv1.Envelope{MsgId: uint32(demopb.MsgId_C2S_LANDLORD_SNAPSHOT), RequestId: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WriteMessage(websocket.BinaryMessage, client.authenticatedFrame(payload)); err != nil {
+		t.Fatal(err)
+	}
+	barrier.wait(t)
+	accessFixtureRPC(t, backend, 98, uint64(accessagent.LandlordSnapshotPushCommand), location["login_id"], map[string]any{"room_name": "room", "turn": uint64(2)})
+	barrier.release()
+	response, push := readAccessEnvelope(t, client), readAccessEnvelope(t, client)
+	if response.RequestId != 2 || response.MsgId != uint32(demopb.MsgId_S2C_LANDLORD_SNAPSHOT) || push.RequestId != 0 || push.MsgId != uint32(demopb.MsgId_S2C_LANDLORD_PUSH) {
+		t.Fatalf("消息顺序错误: response=%v push=%v", response, push)
+	}
+	var old demopb.LandlordSnapshotResponse
+	var newer demopb.LandlordPush
+	if err := proto.Unmarshal(response.Payload, &old); err != nil {
+		t.Fatal(err)
+	}
+	if err := proto.Unmarshal(push.Payload, &newer); err != nil {
+		t.Fatal(err)
+	}
+	if old.GetSnapshot().GetTurn() != 1 || newer.GetSnapshot().GetTurn() != 2 {
+		t.Fatalf("快照轮次错误: response=%v push=%v", &old, &newer)
 	}
 }
 

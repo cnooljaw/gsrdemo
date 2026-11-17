@@ -141,6 +141,14 @@ const (
 | 7. 补齐运行入口 | 新增节点时补 YAML、节点地址及现有工程脚本支持；按业务需要接入结算和已保存请求恢复 | 池化只影响组装，调用仍用逻辑名称；动态游戏实例使用业务返回的名称，禁止猜测实例名或池成员 ID |
 | 8. 验证和同步文档 | 先已有相关用例与关键失败边界，再按影响范围执行工程检查和实际通信验收 | 核对 Handler 接线、参数/回执、旧 LoginID、重复/冲突、超时未知结果；涉及资金时核对原 ID、实际扣返和最终账务。生成同步通过不表示上述行为已验收 |
 
+**从地鼠 Enter 看一条最小接线**：
+
+1. [game.proto](../nodes/access/proto/demo/v1/game.proto) 定义客户端消息，生成 Go/TS 类型；[comMole.ProtocolHandlers](../nodes/access/commole.go) 将 Enter MsgID 直接绑定 `onEnter`。
+2. `onEnter` 读取当前连接身份、检查进入准入，使用生成的 [moleentry 契约](../common/rpc/moleentry/commands.gen.go) Call 地鼠入口；入口和游戏 Service 的命令、Handler 与组装分别在 [MoleEntryService](../nodes/mole/moleentryservice.go)、[MoleService](../nodes/mole/moleservice.go) 和 [MainService](../nodes/mole/main_service.go)。
+3. `onEnter` 校验回包并保存组路由，再通过 `reply.Response` 返回客户端快照和余额；推送由组件的 `CommandHandlers` 注册，`Disconnect` 尽力离开。[Agent](../nodes/access/agent.go) 的 `games` 清单只需追加一次组件构造，统一完成注册和清理。
+
+新游戏替换自己的协议、Service 和校验，不复制地鼠记账规则。客户端协议生成与 RPC 常量生成是两个独立步骤；以上只展示进入链路，超时、离开及资金边界须按该游戏实际设计补齐。
+
 工程命令统一见 [README](../README.md#开发与验证)，状态与恢复承诺归 [DESIGN](DESIGN.md)，接口字段与调用顺序归 [PROTOCOL](PROTOCOL.md)。
 
 有频繁凑组、周期刷新或批量广播时，按 [性能优化经验](DESIGN.md#94-按需复用的性能优化经验) 检查是否存在无效遍历或长回调；先建立同口径样本，再决定是否增加索引、队列或自身续批。未出现实测需要时，沿用简单实现。

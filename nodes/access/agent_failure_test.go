@@ -131,7 +131,7 @@ func TestGameInvalidEnterReplyKeepsCleanupRoute(t *testing.T) {
 					switch {
 					case node == "mole" && service == moleentry.ServiceName && command == moleentry.MoleEnterCommand:
 						snapshot := fixtureSnapshot()
-						snapshot["silver"] = map[string]any{"balance": int64(1000)}
+						snapshot["silver"] = map[string]any{"balance": int64(1000), "available": int64(1000), "revision": uint64(1)}
 						switch name {
 						case "mole balance":
 							snapshot["silver"] = map[string]any{"balance": "invalid"}

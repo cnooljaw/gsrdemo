@@ -51,17 +51,25 @@ func clientBalance(value any) (*demopb.Balance, error) {
 	if !ok {
 		return nil, errInvalidBackendReply
 	}
-	if _, ok := fields["balance"].(int64); !ok {
+	amount, amountOK := fields["balance"].(int64)
+	available, availableOK := fields["available"].(int64)
+	revision, revisionOK := fields["revision"].(uint64)
+	if !amountOK || amount < 0 || !availableOK || available < 0 || !revisionOK || revision == 0 {
+		return nil, errInvalidBackendReply
+	}
+	confirmedAmount, hasAmount := fields["confirmed_balance"]
+	confirmedVersion, hasVersion := fields["version"]
+	if hasAmount != hasVersion {
 		return nil, errInvalidBackendReply
 	}
 	balance := &demopb.Balance{}
 	if err := clientMessage(value, balance); err != nil {
 		return nil, err
 	}
-	if amount, exists := fields["confirmed_balance"]; exists {
-		confirmed, amountOK := amount.(int64)
-		version, versionOK := fields["version"].(uint64)
-		if !amountOK || !versionOK {
+	if hasAmount {
+		confirmed, amountOK := confirmedAmount.(int64)
+		version, versionOK := confirmedVersion.(uint64)
+		if !amountOK || confirmed < 0 || !versionOK {
 			return nil, errInvalidBackendReply
 		}
 		balance.Confirmed = &demopb.ConfirmedSilver{Amount: confirmed, Version: version}

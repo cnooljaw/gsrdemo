@@ -80,18 +80,18 @@ func TestAgentPushFailureIsLocal(t *testing.T) {
 				}
 				for revision := uint64(1); revision <= 2; revision++ {
 					_, err := self.Call(ctx, failedID, accessagent.MoleBalanceCorrectionPushCommand, "current-login",
-						map[string]any{"balance": int64(1), "revision": revision})
+						map[string]any{"balance": int64(1), "available": int64(1), "revision": revision})
 					// GSR 将未分类的 Gate 错误归一化，不将底层错误原文暴露给 Call 方。
 					if !errors.Is(err, runtime.ErrHandlerFailed) {
 						return fmt.Errorf("push failure: got %v want %v", err, runtime.ErrHandlerFailed)
 					}
 					if _, err := self.Call(ctx, healthyID, accessagent.MoleBalanceCorrectionPushCommand, "current-login",
-						map[string]any{"balance": int64(1000) - int64(revision)*100, "revision": revision}); err != nil {
+						map[string]any{"balance": int64(1000) - int64(revision)*100, "available": int64(1000) - int64(revision)*100, "revision": revision}); err != nil {
 						return fmt.Errorf("healthy push: %w", err)
 					}
 				}
 				_, err = self.Call(ctx, failedID, accessagent.MoleBalanceCorrectionPushCommand, "old-login",
-					map[string]any{"balance": int64(0), "revision": uint64(99)})
+					map[string]any{"balance": int64(0), "available": int64(0), "revision": uint64(99)})
 				return err
 			}}
 			if err := gsr.Run(ctx, gsr.Config{Logging: logging.Config{Directory: t.TempDir()}}, main); err != nil {
@@ -130,7 +130,7 @@ func enteredMoleAgent(t *testing.T, client *accessPushClient, registry *protocol
 				t.Fatalf("未直连地鼠进入服务: %s/%s/%d", node, name, command)
 			}
 			snapshot := fixtureSnapshot()
-			snapshot["silver"] = map[string]any{"balance": int64(1000)}
+			snapshot["silver"] = map[string]any{"balance": int64(1000), "available": int64(1000), "revision": uint64(1)}
 			return snapshot, nil
 		},
 	})

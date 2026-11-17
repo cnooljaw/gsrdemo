@@ -21,7 +21,7 @@ func TestGamePushCommands(t *testing.T) {
 		payload  map[string]any
 	}{
 		{name: "mole snapshot", command: accessagent.MoleSnapshotPushCommand, response: demopb.MsgId_S2C_SNAPSHOT_PUSH, routeKey: "attack_name", payload: map[string]any{"attack_name": "mole-room"}},
-		{name: "mole balance correction", command: accessagent.MoleBalanceCorrectionPushCommand, response: demopb.MsgId_S2C_BALANCE_PUSH, payload: map[string]any{"balance": int64(900), "revision": uint64(2)}},
+		{name: "mole balance correction", command: accessagent.MoleBalanceCorrectionPushCommand, response: demopb.MsgId_S2C_BALANCE_PUSH, payload: map[string]any{"balance": int64(900), "available": int64(900), "revision": uint64(2)}},
 		{name: "landlord snapshot", command: accessagent.LandlordSnapshotPushCommand, response: demopb.MsgId_S2C_LANDLORD_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
