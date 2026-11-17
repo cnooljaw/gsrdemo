@@ -29,6 +29,7 @@ const (
 	moleLoadDuration                          = 5 * time.Second
 	moleLoadCallers                           = 4
 	moleLoadPushNodes                         = 2
+	moleLoadSinksPerNode                      = 32
 	moleLoadPairPeriod                        = 20 * time.Millisecond
 )
 
@@ -40,36 +41,38 @@ type moleLoadLatency struct {
 }
 
 type moleLoadReport struct {
-	GoVersion     string          `json:"go_version"`
-	GOMAXPROCS    int             `json:"gomaxprocs"`
-	Members       int             `json:"members"`
-	Groups        int             `json:"groups"`
-	Refresh       string          `json:"refresh"`
-	Seconds       float64         `json:"seconds"`
-	RPCPerSecond  float64         `json:"rpc_per_second"`
-	GeneratorLag  float64         `json:"generator_max_lag_ms"`
-	Tick          moleLoadLatency `json:"tick"`
-	Hit           moleLoadLatency `json:"hit"`
-	Snapshot      moleLoadLatency `json:"snapshot"`
-	ScheduledHit  moleLoadLatency `json:"scheduled_hit"`
-	ScheduledView moleLoadLatency `json:"scheduled_snapshot"`
-	RefreshWork   moleLoadLatency `json:"refresh_work"`
-	Refreshes     uint64          `json:"target_refreshes"`
-	RefreshMin    uint64          `json:"refreshes_per_group_min"`
-	RefreshMax    uint64          `json:"refreshes_per_group_max"`
-	RefreshLag    float64         `json:"oldest_refresh_lag_ms"`
-	AcceptedHits  int             `json:"accepted_hits"`
-	Unavailable   int             `json:"target_unavailable"`
-	RequestErrors int             `json:"request_errors"`
-	Errors        []string        `json:"errors,omitempty"`
-	PushAttempted uint64          `json:"push_attempted"`
-	PushAccepted  uint64          `json:"push_accepted"`
-	PushReceived  uint64          `json:"push_received"`
-	HeapBeforeMB  float64         `json:"heap_before_mib"`
-	HeapAfterMB   float64         `json:"heap_after_mib"`
-	AllocatedMB   float64         `json:"allocated_mib"`
-	GCCycles      uint32          `json:"gc_cycles"`
-	Verified      bool            `json:"verified"`
+	PushReceiversPerNode int               `json:"push_receivers_per_node"`
+	GoVersion            string            `json:"go_version"`
+	GOMAXPROCS           int               `json:"gomaxprocs"`
+	Members              int               `json:"members"`
+	Groups               int               `json:"groups"`
+	Refresh              string            `json:"refresh"`
+	Seconds              float64           `json:"seconds"`
+	RPCPerSecond         float64           `json:"rpc_per_second"`
+	GeneratorLag         float64           `json:"generator_max_lag_ms"`
+	Tick                 moleLoadLatency   `json:"tick"`
+	Hit                  moleLoadLatency   `json:"hit"`
+	Snapshot             moleLoadLatency   `json:"snapshot"`
+	ScheduledHit         moleLoadLatency   `json:"scheduled_hit"`
+	ScheduledView        moleLoadLatency   `json:"scheduled_snapshot"`
+	RefreshWork          moleLoadLatency   `json:"refresh_work"`
+	Refreshes            uint64            `json:"target_refreshes"`
+	RefreshMin           uint64            `json:"refreshes_per_group_min"`
+	RefreshMax           uint64            `json:"refreshes_per_group_max"`
+	RefreshLag           float64           `json:"oldest_refresh_lag_ms"`
+	AcceptedHits         int               `json:"accepted_hits"`
+	Unavailable          int               `json:"target_unavailable"`
+	RequestErrors        int               `json:"request_errors"`
+	Errors               []string          `json:"errors,omitempty"`
+	PushAttempted        uint64            `json:"push_attempted"`
+	PushAccepted         uint64            `json:"push_accepted"`
+	PushReceived         uint64            `json:"push_received"`
+	PushErrors           map[string]uint64 `json:"push_error_samples,omitempty"`
+	HeapBeforeMB         float64           `json:"heap_before_mib"`
+	HeapAfterMB          float64           `json:"heap_after_mib"`
+	AllocatedMB          float64           `json:"allocated_mib"`
+	GCCycles             uint32            `json:"gc_cycles"`
+	Verified             bool              `json:"verified"`
 }
 
 // moleLoadCodec 保留发布版 ValueCodec，只统计符合本用例推送形状的编码尝试。
@@ -88,10 +91,22 @@ func (codec *moleLoadCodec) Encode(value any) ([]byte, error) {
 }
 
 // 业务错误单独计数，日志队列丢弃也计入拒绝数；不依赖可能丢失的日志文本推断接纳率。
-type moleLoadLog struct{ lines atomic.Uint64 }
+type moleLoadLog struct {
+	lines atomic.Uint64
+	// 只有日志写入线程修改，Logger.Close 排空后读取；队列丢弃的日志没有原因样本。
+	errors map[string]uint64
+}
 
 func (writer *moleLoadLog) Write(data []byte) (int, error) {
 	writer.lines.Add(uint64(bytes.Count(data, []byte{'\n'})))
+	var entry struct {
+		Fields struct {
+			Error string `json:"error"`
+		} `json:"fields"`
+	}
+	if json.Unmarshal(data, &entry) == nil && entry.Fields.Error != "" {
+		writer.errors[entry.Fields.Error]++
+	}
 	return len(data), nil
 }
 
@@ -285,10 +300,10 @@ func measureMoleOwner(t *testing.T, members int, refresh string) moleLoadReport 
 	routes := make(map[cluster.NodeID]string)
 	for node := range moleLoadPushNodes {
 		name := moleLoadNode(node)
-		address, _ := startMoleTestNode(t, string(name), nil, &moleTestPeer{node: string(name), name: "load-agent", service: &moleLoadSink{}})
+		address, _ := startMoleTestNode(t, string(name), nil, &moleTestPeer{node: string(name), name: "load-agent", service: &moleLoadSinkGroup{}})
 		routes[name] = address
 	}
-	writer := &moleLoadLog{}
+	writer := &moleLoadLog{errors: make(map[string]uint64)}
 	logger, err := logging.New(logging.Config{Writer: writer})
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +329,7 @@ func measureMoleOwner(t *testing.T, members int, refresh string) moleLoadReport 
 			owner.addGroup(group)
 		}
 		oldSize := len(group.members)
-		group.members[uid] = moleMember{UserID: uid, LoginID: "load", AccessNode: string(moleLoadNode(index % moleLoadPushNodes)), AgentName: "load-agent", Seat: int64(index % attackSeats)}
+		group.members[uid] = moleMember{UserID: uid, LoginID: "load", AccessNode: string(moleLoadNode(index % moleLoadPushNodes)), AgentName: fmt.Sprintf("load-agent-%d", (index/moleLoadPushNodes)%moleLoadSinksPerNode), Seat: int64(index % attackSeats)}
 		owner.updateAvailableGroup(group, oldSize)
 		owner.users[uid] = name
 		owner.accounting.updateBalance(uid, silverBalance{Amount: 1000000, Version: 1})
@@ -345,7 +360,7 @@ func measureMoleOwner(t *testing.T, members int, refresh string) moleLoadReport 
 	}
 	callers.Wait()
 	close(results)
-	report := moleLoadReport{GoVersion: runtime.Version(), GOMAXPROCS: runtime.GOMAXPROCS(0), Members: members, Groups: (members + attackSeats - 1) / attackSeats, Refresh: refresh}
+	report := moleLoadReport{PushReceiversPerNode: moleLoadSinksPerNode, GoVersion: runtime.Version(), GOMAXPROCS: runtime.GOMAXPROCS(0), Members: members, Groups: (members + attackSeats - 1) / attackSeats, Refresh: refresh}
 	var hits, snapshots, scheduledHits, scheduledViews []time.Duration
 	var elapsed, lag time.Duration
 	for result := range results {
@@ -375,6 +390,7 @@ func measureMoleOwner(t *testing.T, members int, refresh string) moleLoadReport 
 		t.Fatal("business log contains an error unrelated to push rejection")
 	}
 	report.PushAccepted = report.PushAttempted - rejected
+	report.PushErrors = writer.errors
 	report.Tick, report.Hit, report.Snapshot = moleLoadPercentiles(owner.ticks), moleLoadPercentiles(hits), moleLoadPercentiles(snapshots)
 	report.ScheduledHit, report.ScheduledView = moleLoadPercentiles(scheduledHits), moleLoadPercentiles(scheduledViews)
 	report.RefreshWork = moleLoadPercentiles(owner.refreshWork)
@@ -513,4 +529,42 @@ func moleLoadPercentiles(values []time.Duration) moleLoadLatency {
 	slices.Sort(values)
 	ms := func(value time.Duration) float64 { return float64(value) / float64(time.Millisecond) }
 	return moleLoadLatency{Samples: len(values), P95MS: ms(values[(len(values)*95+99)/100-1]), P99MS: ms(values[(len(values)*99+99)/100-1]), MaxMS: ms(values[len(values)-1])}
+}
+
+// moleLoadSinkGroup 汇总本节点的独立接收者；每份计数由各自 Service 拥有，汇总只通过 Call 读取。
+type moleLoadSinkGroup struct{ members []gsrruntime.ServiceID }
+
+var _ gsr.Service = (*moleLoadSinkGroup)(nil)
+
+func (group *moleLoadSinkGroup) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	for index := range moleLoadSinksPerNode {
+		id, err := self.CreateService(ctx, &moleLoadSink{})
+		if err != nil {
+			return err
+		}
+		if err := self.Node().RegisterService(cluster.ServiceName(fmt.Sprintf("load-agent-%d", index)), id); err != nil {
+			return err
+		}
+		group.members = append(group.members, id)
+	}
+	return nil
+}
+func (*moleLoadSinkGroup) OnStop(context.Context) error { return nil }
+func (group *moleLoadSinkGroup) Handle(self gsr.CommandContext, cmd gsrruntime.CommandID, _ ...any) (any, error) {
+	if cmd != moleLoadSinkCommand {
+		return nil, gsrruntime.ErrUnknownCommand
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var received, invalid uint64
+	for _, id := range group.members {
+		value, err := self.Call(ctx, id, moleLoadSinkCommand)
+		if err != nil {
+			return nil, err
+		}
+		fields := value.(map[string]any)
+		received += fields["received"].(uint64)
+		invalid += fields["invalid"].(uint64)
+	}
+	return map[string]any{"received": received, "invalid": invalid}, nil
 }
