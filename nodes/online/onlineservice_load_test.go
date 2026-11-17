@@ -13,23 +13,14 @@ import (
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
-// TestOnlineClusterLoad 测量真实 TCP 多接入调用汇聚下两档目录规模的处理率和尾延迟，默认不运行容量测试。
+// TestOnlineClusterLoad 测量 12,000 条目录记录下真实 TCP 多接入调用的处理率和尾延迟，默认不运行容量测试。
 func TestOnlineClusterLoad(t *testing.T) {
 	if os.Getenv("GSRDEMO_ONLINE_LOAD") != "1" {
-		t.Skip("set GSRDEMO_ONLINE_LOAD=1 to run the two one-minute capacity samples")
+		t.Skip("set GSRDEMO_ONLINE_LOAD=1 to run the one-minute 12,000-user capacity sample")
 	}
-	for _, sample := range []struct {
-		name       string
-		population int
-		rate       int
-	}{
-		{"actual_12000", 12000, 2400},
-		{"reserve_100000", 100000, 5000},
-	} {
-		t.Run(sample.name, func(t *testing.T) {
-			measureOnlineLoad(t, sample.population, sample.rate)
-		})
-	}
+	t.Run("actual_12000", func(t *testing.T) {
+		measureOnlineLoad(t, 12000, 2400)
+	})
 }
 
 func measureOnlineLoad(t *testing.T, population, rate int) {

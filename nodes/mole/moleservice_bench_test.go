@@ -9,7 +9,8 @@ import (
 
 // BenchmarkMoleEnterFullGroups 比较满组积累对入场再离开的影响，仅测内存路径，不包含通信、广播或存储。
 func BenchmarkMoleEnterFullGroups(b *testing.B) {
-	for _, count := range []int{0, 100, 1000, 10000, 30000} {
+	// 连同待测入场用户，样本最多 12,000 人。
+	for _, count := range []int{0, 100, 1000, (12000 - 1) / attackSeats} {
 		b.Run(fmt.Sprintf("groups=%d", count), func(b *testing.B) {
 			service := readyMole()
 			now := time.Now()

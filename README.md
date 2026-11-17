@@ -208,7 +208,7 @@ unset demo_password
 
 斗地主选桌的可选内存基准：`GOWORK=off go -C nodes/landlord test -run '^$' -bench '^BenchmarkLandlordResolveFullTables$' -benchmem`。比较不同满桌数量下的一次预留再释放，不包含牌桌 Service 创建、通信或存储。
 
-地鼠单 owner 的可选容量样本：`./scripts/dev.sh load mole`，结果写入 `.cache/mole-owner-load.json`。六档样本的输入、指标与适用边界见[并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)；只需本地 TCP，不访问 Redis/MySQL，也不启动 WebSocket 客户端。默认 `check` 跳过该测试。
+地鼠单 owner 的可选容量样本：`./scripts/dev.sh load mole`，结果写入 `.cache/mole-owner-load.json`。四档样本的输入、指标与适用边界见[并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)；只需本地 TCP，不访问 Redis/MySQL，也不启动 WebSocket 客户端。默认 `check` 跳过该测试。
 
 协议定义在 [game.proto](nodes/access/proto/demo/v1/game.proto)，生成产物入库。需要编辑器 workspace 时执行 `cp go.work.example go.work`，编辑器的 Go SDK 同样须为 1.24+。
 

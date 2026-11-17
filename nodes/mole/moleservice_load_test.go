@@ -29,7 +29,6 @@ const (
 	moleLoadDuration                          = 5 * time.Second
 	moleLoadCallers                           = 4
 	moleLoadPushNodes                         = 2
-	moleLoadSinksPerNode                      = 32
 	moleLoadPairPeriod                        = 20 * time.Millisecond
 )
 
@@ -269,10 +268,10 @@ type moleLoadCallerResult struct {
 // TestMoleOwnerLoad 测量单 owner 在刷新和业务请求混合时的等待、推送与内存，默认跳过，不访问 Redis/MySQL。
 func TestMoleOwnerLoad(t *testing.T) {
 	if os.Getenv("GSRDEMO_MOLE_LOAD") != "1" {
-		t.Skip("run ./scripts/dev.sh load mole for the six short capacity samples")
+		t.Skip("run ./scripts/dev.sh load mole for the four short capacity samples")
 	}
 	var reports []moleLoadReport
-	for _, members := range []int{1200, 12000, 100000} {
+	for _, members := range []int{1200, 12000} {
 		for _, refresh := range []string{"staggered", "burst"} {
 			t.Run(fmt.Sprintf("members=%d/%s", members, refresh), func(t *testing.T) {
 				reports = append(reports, measureMoleOwner(t, members, refresh))
@@ -300,7 +299,7 @@ func measureMoleOwner(t *testing.T, members int, refresh string) moleLoadReport 
 	routes := make(map[cluster.NodeID]string)
 	for node := range moleLoadPushNodes {
 		name := moleLoadNode(node)
-		address, _ := startMoleTestNode(t, string(name), nil, &moleTestPeer{node: string(name), name: "load-agent", service: &moleLoadSinkGroup{}})
+		address, _ := startMoleTestNode(t, string(name), nil, &moleTestPeer{node: string(name), name: "load-agent", service: &moleLoadSink{}})
 		routes[name] = address
 	}
 	writer := &moleLoadLog{errors: make(map[string]uint64)}
@@ -329,7 +328,7 @@ func measureMoleOwner(t *testing.T, members int, refresh string) moleLoadReport 
 			owner.addGroup(group)
 		}
 		oldSize := len(group.members)
-		group.members[uid] = moleMember{UserID: uid, LoginID: "load", AccessNode: string(moleLoadNode(index % moleLoadPushNodes)), AgentName: fmt.Sprintf("load-agent-%d", (index/moleLoadPushNodes)%moleLoadSinksPerNode), Seat: int64(index % attackSeats)}
+		group.members[uid] = moleMember{UserID: uid, LoginID: "load", AccessNode: string(moleLoadNode(index % moleLoadPushNodes)), AgentName: "load-agent", Seat: int64(index % attackSeats)}
 		owner.updateAvailableGroup(group, oldSize)
 		owner.users[uid] = name
 		owner.accounting.updateBalance(uid, silverBalance{Amount: 1000000, Version: 1})
@@ -360,7 +359,7 @@ func measureMoleOwner(t *testing.T, members int, refresh string) moleLoadReport 
 	}
 	callers.Wait()
 	close(results)
-	report := moleLoadReport{PushReceiversPerNode: moleLoadSinksPerNode, GoVersion: runtime.Version(), GOMAXPROCS: runtime.GOMAXPROCS(0), Members: members, Groups: (members + attackSeats - 1) / attackSeats, Refresh: refresh}
+	report := moleLoadReport{PushReceiversPerNode: 1, GoVersion: runtime.Version(), GOMAXPROCS: runtime.GOMAXPROCS(0), Members: members, Groups: (members + attackSeats - 1) / attackSeats, Refresh: refresh}
 	var hits, snapshots, scheduledHits, scheduledViews []time.Duration
 	var elapsed, lag time.Duration
 	for result := range results {
@@ -529,42 +528,4 @@ func moleLoadPercentiles(values []time.Duration) moleLoadLatency {
 	slices.Sort(values)
 	ms := func(value time.Duration) float64 { return float64(value) / float64(time.Millisecond) }
 	return moleLoadLatency{Samples: len(values), P95MS: ms(values[(len(values)*95+99)/100-1]), P99MS: ms(values[(len(values)*99+99)/100-1]), MaxMS: ms(values[len(values)-1])}
-}
-
-// moleLoadSinkGroup 汇总本节点的独立接收者；每份计数由各自 Service 拥有，汇总只通过 Call 读取。
-type moleLoadSinkGroup struct{ members []gsrruntime.ServiceID }
-
-var _ gsr.Service = (*moleLoadSinkGroup)(nil)
-
-func (group *moleLoadSinkGroup) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for index := range moleLoadSinksPerNode {
-		id, err := self.CreateService(ctx, &moleLoadSink{})
-		if err != nil {
-			return err
-		}
-		if err := self.Node().RegisterService(cluster.ServiceName(fmt.Sprintf("load-agent-%d", index)), id); err != nil {
-			return err
-		}
-		group.members = append(group.members, id)
-	}
-	return nil
-}
-func (*moleLoadSinkGroup) OnStop(context.Context) error { return nil }
-func (group *moleLoadSinkGroup) Handle(self gsr.CommandContext, cmd gsrruntime.CommandID, _ ...any) (any, error) {
-	if cmd != moleLoadSinkCommand {
-		return nil, gsrruntime.ErrUnknownCommand
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	var received, invalid uint64
-	for _, id := range group.members {
-		value, err := self.Call(ctx, id, moleLoadSinkCommand)
-		if err != nil {
-			return nil, err
-		}
-		fields := value.(map[string]any)
-		received += fields["received"].(uint64)
-		invalid += fields["invalid"].(uint64)
-	}
-	return map[string]any{"received": received, "invalid": invalid}, nil
 }
