@@ -147,17 +147,15 @@ func (recorder *landlordResultPushRecorder) Handle(_ gsr.CommandContext, cmd run
 	if cmd == 99 {
 		return map[string]any{"pending": recorder.pending, "terminal": recorder.terminal}, nil
 	}
-	if cmd != accessagent.LandlordSnapshotPushCommand {
-		return nil, runtime.ErrUnknownCommand
+	if cmd != accessagent.LandlordSettlementPushCommand {
+		return nil, nil
 	}
 	view := args[1].(map[string]any)
-	if view["phase"] == "finished" {
-		receipt := view["settlement"].(map[string]any)
-		if receipt["status"] == "pending" {
-			recorder.pending++
-		} else {
-			recorder.terminal++
-		}
+	receipt := view["settlement"].(map[string]any)
+	if receipt["status"] == "pending" {
+		recorder.pending++
+	} else {
+		recorder.terminal++
 	}
 	return nil, nil
 }
@@ -225,7 +223,10 @@ func TestLandlordReceiptSurvivesCleanupFailure(t *testing.T) {
 					time.Sleep(20 * time.Millisecond)
 				}
 			} else {
-				view = landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand, uid, "login", turn, []any{int64(3)}).(map[string]any)
+				if landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand, uid, "login", turn, []any{int64(3)}) != true {
+					t.Fatal("出牌未确认")
+				}
+				view = landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uid, "login").(map[string]any)
 			}
 			if receipt := view["settlement"].(map[string]any); receipt["status"] != status || receipt["balance"] != int64(10000) {
 				t.Fatalf("有效回执被 Redis 清理失败掩盖: %v", receipt)
@@ -319,8 +320,9 @@ func TestLandlordJournalOutageRetriesOriginalOperation(t *testing.T) {
 	service := newAttackService(game.Name, journal, nil, "settlement")
 	service.game = *game
 	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: directoryForLandlordTables(service)})
-	view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
-		game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)}).(map[string]any)
+	landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
+		game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)})
+	view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
 	if view["settlement"].(map[string]any)["status"] != "pending" || backend.calls.Load() != 0 || journal.client.HLen(context.Background(), journal.key).Val() != 0 {
 		t.Fatal("保存失败仍调用结算或伪造终态")
 	}
@@ -372,8 +374,9 @@ func TestLandlordUnconfirmedCallRetriesOriginalOperation(t *testing.T) {
 			service := newAttackService(game.Name, journal, nil, "settlement")
 			service.game = *game
 			startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: directoryForLandlordTables(service)})
-			view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
-				game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)}).(map[string]any)
+			landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand,
+				game.Players[game.Seat].UserID, "login", game.Turn, []any{int64(3)})
+			view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
 			if view["settlement"].(map[string]any)["status"] != "pending" || !journal.client.HExists(context.Background(), journal.key, "landlord-"+game.Name).Val() {
 				t.Fatal("未确认结果被当作终态或丢失原请求")
 			}
@@ -460,7 +463,7 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 	}
 	select {
 	case result := <-done:
-		if result.err != nil || result.value == nil || result.value.(map[string]any)["settlement"].(map[string]any)["status"] != "pending" {
+		if result.err != nil || result.value != true {
 			t.Fatalf("接入等待先于内层超时或丢失待结果: %+v", result)
 		}
 	case <-time.After(3 * time.Second):

@@ -1,5 +1,4 @@
 import { create, toBinary } from "@bufbuild/protobuf";
-import { setTimeout as delay } from "node:timers/promises";
 import { DemoClient } from "./client.js";
 import {
   LandlordEnterRequestSchema, LandlordReadyRequestSchema, LandlordPlayRequestSchema,
@@ -14,25 +13,36 @@ function rank(card: bigint): number {
   return value >= 14 ? value + 2 : value < 3 ? value + 13 : value;
 }
 
-// 演示机器人只用单张和不出跑完一局；服务端独立校验全部牌型，不信任此选择。
+// 演示机器人由牌桌事件驱动；只在事件缺口或等待超时时恢复场景。
 export async function runLandlord(client: DemoClient, print: Printer, timeout: number): Promise<void> {
   const entry = await client.request(MsgId.C2S_LANDLORD_ENTER,
     toBinary(LandlordEnterRequestSchema, create(LandlordEnterRequestSchema)), MsgId.S2C_LANDLORD_ENTER, LandlordEnterResponseSchema);
   if (!entry.snapshot) throw new Error("missing landlord snapshot");
-  client.landlord = entry.snapshot;
+  client.setLandlord(entry.snapshot);
   print("landlord_enter", entry.snapshot);
-  const ready = await client.request(MsgId.C2S_LANDLORD_READY,
+  await client.request(MsgId.C2S_LANDLORD_READY,
     toBinary(LandlordReadyRequestSchema, create(LandlordReadyRequestSchema)), MsgId.S2C_LANDLORD_READY, LandlordReadyResponseSchema);
-  print("landlord_ready", ready.snapshot);
   const deadline = Date.now() + Math.max(90_000, timeout);
+  let lastAction = "";
   let settled = false;
   while (Date.now() < deadline) {
-    const response = await client.request(MsgId.C2S_LANDLORD_SNAPSHOT,
-      toBinary(LandlordSnapshotRequestSchema, create(LandlordSnapshotRequestSchema)), MsgId.S2C_LANDLORD_SNAPSHOT, LandlordSnapshotResponseSchema);
-    const snapshot = response.snapshot;
-    if (!snapshot) throw new Error("missing landlord snapshot");
-    client.landlord = snapshot;
-    if ((snapshot.phase === "calling" || snapshot.phase === "robbing") && snapshot.seat === snapshot.turnSeat) {
+    if (client.landlordNeedsSync) {
+      const response = await client.request(MsgId.C2S_LANDLORD_SNAPSHOT,
+        toBinary(LandlordSnapshotRequestSchema, create(LandlordSnapshotRequestSchema)), MsgId.S2C_LANDLORD_SNAPSHOT, LandlordSnapshotResponseSchema);
+      if (!response.snapshot) throw new Error("missing landlord snapshot");
+      client.setLandlord(response.snapshot);
+      continue;
+    }
+    const snapshot = client.landlord;
+    if (!snapshot) throw new Error("missing landlord scene");
+    if (snapshot.phase === "finished" && snapshot.settlement?.status === "committed") {
+      print("landlord_settlement", snapshot.settlement);
+      settled = true;
+      break;
+    }
+    const action = `${snapshot.phase}:${snapshot.turn}`;
+    if ((snapshot.phase === "calling" || snapshot.phase === "robbing") && snapshot.seat === snapshot.turnSeat && lastAction !== action) {
+      lastAction = action;
       print("landlord_bid", { phase: snapshot.phase, turn: snapshot.turn, yes: true });
       if (snapshot.phase === "calling") {
         await client.request(MsgId.C2S_LANDLORD_CALL,
@@ -43,28 +53,31 @@ export async function runLandlord(client: DemoClient, print: Printer, timeout: n
           toBinary(LandlordRobRequestSchema, create(LandlordRobRequestSchema, { turn: snapshot.turn, yes: true })),
           MsgId.S2C_LANDLORD_ROB, LandlordRobResponseSchema);
       }
-    } else if (snapshot.phase === "playing" && snapshot.seat === snapshot.turnSeat) {
+      continue;
+    }
+    if (snapshot.phase === "playing" && snapshot.seat === snapshot.turnSeat && lastAction !== action) {
+      lastAction = action;
       const selected = snapshot.lastCards.length === 0 ? snapshot.hand[0] :
-        snapshot.lastCards.length === 1 ? snapshot.hand.find(card => rank(card) > rank(snapshot.lastCards[0])) : undefined;
+        snapshot.lastCards.length === 1 ? snapshot.hand.find(card => rank(card) > rank(snapshot.lastCards[0]!)) : undefined;
       const cards = selected === undefined ? [] : [selected];
       print("landlord_action", { turn: snapshot.turn, cards });
-      const played = await client.request(MsgId.C2S_LANDLORD_PLAY,
+      await client.request(MsgId.C2S_LANDLORD_PLAY,
         toBinary(LandlordPlayRequestSchema, create(LandlordPlayRequestSchema, { turn: snapshot.turn, cards })),
         MsgId.S2C_LANDLORD_PLAY, LandlordPlayResponseSchema);
-      print("landlord_play", played.snapshot);
-    } else if (snapshot.phase === "finished" && snapshot.settlement?.status !== "pending") {
-      const receipt = snapshot.settlement;
-      if (!receipt || !receipt.operationId) throw new Error("missing round settlement");
-      print("landlord_settlement", receipt);
-      if (receipt.status !== "committed") throw new Error(`landlord settlement rejected: ${receipt.reason}`);
-      settled = true;
-      break;
+      continue;
     }
-    await delay(25);
+    // 定时器只在当前阶段预计应有下一次变化后查询，不持续轮询牌桌。
+    const wait = snapshot.phase !== "finished" && snapshot.deadlineMs > 0n ? Math.max(1000, Number(snapshot.deadlineMs) - Date.now() + 1000) : 15_000;
+    if (!await client.waitLandlord(snapshot.revision, Math.min(wait, 15_000))) {
+      const response = await client.request(MsgId.C2S_LANDLORD_SNAPSHOT,
+        toBinary(LandlordSnapshotRequestSchema, create(LandlordSnapshotRequestSchema)), MsgId.S2C_LANDLORD_SNAPSHOT, LandlordSnapshotResponseSchema);
+      if (!response.snapshot) throw new Error("missing landlord snapshot");
+      client.setLandlord(response.snapshot);
+    }
   }
   if (!settled) throw new Error("landlord demo did not finish; keep original operation ID and query snapshot");
   await client.request(MsgId.C2S_LANDLORD_LEAVE,
     toBinary(LandlordLeaveRequestSchema, create(LandlordLeaveRequestSchema)), MsgId.S2C_LANDLORD_LEAVE, LandlordLeaveResponseSchema);
-  client.landlord = undefined;
+  client.leaveLandlord();
   print("landlord_leave", {});
 }

@@ -61,12 +61,15 @@ func verifyLandlordCLI(t *testing.T, ctx context.Context, players []accessDemoPl
 	}
 	var totalDelta int64
 	var operationID string
+	var firstPlays [][]byte
 	bidCount, playCount := 0, 0
 	for index, player := range players {
 		if clientErrors[index] != nil {
 			t.Fatalf("斗地主客户端 %d: %v %s", index, clientErrors[index], player.output.Bytes())
 		}
 		var receipt landlordCLIReceipt
+		var plays [][]byte
+		ownActions, ownBroadcasts, deals := 0, 0, 0
 		found, left := false, false
 		for _, line := range bytes.Split(player.output.Bytes(), []byte{'\n'}) {
 			var event landlordCLIEvent
@@ -74,7 +77,7 @@ func verifyLandlordCLI(t *testing.T, ctx context.Context, players []accessDemoPl
 				continue
 			}
 			switch event.Event {
-			case "landlord_enter", "landlord_ready", "landlord_snapshot", "landlord_play":
+			case "landlord_enter", "landlord_snapshot":
 				var view landlordCLIView
 				if err := json.Unmarshal(event.Value, &view); err != nil {
 					t.Fatal(err)
@@ -103,6 +106,27 @@ func verifyLandlordCLI(t *testing.T, ctx context.Context, players []accessDemoPl
 				bidCount++
 			case "landlord_action":
 				playCount++
+				ownActions++
+			case "landlord_event_deal":
+				var deal struct {
+					Hand []string `json:"hand"`
+				}
+				if err := json.Unmarshal(event.Value, &deal); err != nil || len(deal.Hand) != 17 {
+					t.Fatalf("发牌事件没有本人手牌: %s", event.Value)
+				}
+				deals++
+			case "landlord_event_play":
+				var played struct {
+					UserID string          `json:"userId"`
+					Hand   json.RawMessage `json:"hand"`
+				}
+				if err := json.Unmarshal(event.Value, &played); err != nil || played.UserID == "" || len(played.Hand) != 0 {
+					t.Fatalf("非法出牌广播: %s", event.Value)
+				}
+				if played.UserID == strconv.FormatUint(player.id, 10) {
+					ownBroadcasts++
+				}
+				plays = append(plays, append([]byte(nil), event.Value...))
 			case "landlord_settlement":
 				if err := json.Unmarshal(event.Value, &receipt); err != nil {
 					t.Fatal(err)
@@ -112,6 +136,20 @@ func verifyLandlordCLI(t *testing.T, ctx context.Context, players []accessDemoPl
 				t.Fatal("客户端在财务终态后仍重复查账")
 			case "landlord_leave":
 				left = true
+			}
+		}
+		if deals != 1 || ownBroadcasts != ownActions || len(plays) == 0 {
+			t.Fatalf("广播不完整: deals=%d own actions=%d own broadcasts=%d all plays=%d", deals, ownActions, ownBroadcasts, len(plays))
+		}
+		if index == 0 {
+			firstPlays = plays
+		} else if len(plays) != len(firstPlays) {
+			t.Fatalf("三人收到的出牌次数不同: %d != %d", len(plays), len(firstPlays))
+		} else {
+			for i := range plays {
+				if !bytes.Equal(plays[i], firstPlays[i]) {
+					t.Fatalf("出牌广播内容或顺序不一致: %s / %s", plays[i], firstPlays[i])
+				}
 			}
 		}
 		if !found || !left || receipt.Status != "committed" || receipt.ID == "" {

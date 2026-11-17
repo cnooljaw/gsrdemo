@@ -20,7 +20,12 @@ const (
 	moleSnapshotPushCommand          runtime.CommandID = 100
 	replacedCommand                  runtime.CommandID = 101
 	moleBalanceCorrectionPushCommand runtime.CommandID = 102
-	landlordSnapshotPushCommand      runtime.CommandID = 110
+	landlordSeatPushCommand          runtime.CommandID = 111
+	landlordReadyPushCommand         runtime.CommandID = 112
+	landlordDealPushCommand          runtime.CommandID = 113
+	landlordBidPushCommand           runtime.CommandID = 114
+	landlordPlayPushCommand          runtime.CommandID = 115
+	landlordSettlementPushCommand    runtime.CommandID = 116
 )
 
 // agent 独占当前连接身份和路由，不持有权威游戏状态或钱包。

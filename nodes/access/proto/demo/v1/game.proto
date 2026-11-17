@@ -148,8 +148,33 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_RESPONSE
   }];
-  S2C_LANDLORD_PUSH = 1161 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordPush"
+  S2C_LANDLORD_SEAT_PUSH = 1191 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordSeatPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  S2C_LANDLORD_READY_PUSH = 1192 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordReadyPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  S2C_LANDLORD_DEAL_PUSH = 1193 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordDealPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  S2C_LANDLORD_BID_PUSH = 1194 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordBidPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  S2C_LANDLORD_PLAY_PUSH = 1195 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordPlayPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  S2C_LANDLORD_SETTLEMENT_PUSH = 1196 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordSettlementPush"
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_PUSH
   }];
@@ -293,13 +318,12 @@ message LandlordOperationResponse {
  string reason = 4;
 }
 message LandlordEnterResponse { LandlordSnapshot snapshot = 1; }
-message LandlordReadyResponse { LandlordSnapshot snapshot = 1; }
-message LandlordPlayResponse { LandlordSnapshot snapshot = 1; }
+message LandlordReadyResponse {}
+message LandlordPlayResponse {}
 message LandlordSnapshotResponse { LandlordSnapshot snapshot = 1; }
 message LandlordLeaveResponse { LandlordSnapshot snapshot = 1; }
-message LandlordCallResponse { LandlordSnapshot snapshot = 1; }
-message LandlordRobResponse { LandlordSnapshot snapshot = 1; }
-message LandlordPush { LandlordSnapshot snapshot = 1; }
+message LandlordCallResponse {}
+message LandlordRobResponse {}
 message LandlordCallRequest {uint64 turn=1; bool yes=2;}
 message LandlordRobRequest {uint64 turn=1; bool yes=2;}
 message LandlordPlayer {
@@ -337,4 +361,13 @@ message LandlordSnapshot {
  int64 multiplier=15;
  int64 candidate_seat=16;
  int64 redeals=17;
+ uint64 revision=18;
 }
+
+// 牌桌事件的 revision 在同一牌桌内递增；发牌与结算内容按接收者分别生成。
+message LandlordSeatPush { string room_name=1; uint64 revision=2; uint64 user_id=3; int64 seat=4; bool joined=5; bool ready=6; }
+message LandlordReadyPush { string room_name=1; uint64 revision=2; uint64 user_id=3; int64 seat=4; bool ready=5; }
+message LandlordDealPush { string room_name=1; uint64 revision=2; repeated int64 hand=3; uint64 turn=4; int64 turn_seat=5; int64 deadline_ms=6; int64 redeals=7; }
+message LandlordBidPush { string room_name=1; uint64 revision=2; uint64 user_id=3; bool rob=4; bool yes=5; string phase=6; uint64 turn=7; int64 turn_seat=8; int64 deadline_ms=9; int64 candidate_seat=10; int64 landlord_seat=11; int64 multiplier=12; repeated int64 bottom=13; bool redealt=14; }
+message LandlordPlayPush { string room_name=1; uint64 revision=2; uint64 user_id=3; repeated int64 cards=4; int64 remaining=5; string phase=6; uint64 turn=7; int64 turn_seat=8; int64 deadline_ms=9; repeated int64 last_cards=10; int64 last_seat=11; int64 winner_seat=12; int64 multiplier=13; }
+message LandlordSettlementPush { string room_name=1; uint64 revision=2; LandlordSettlement settlement=3; }

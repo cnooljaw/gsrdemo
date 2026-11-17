@@ -97,11 +97,11 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 
 Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go) 和 [comLandlord](../nodes/access/comlandlord.go) 组件。组件与 Agent 同属 access 根目录的 `package main`，通过文件和类型组织职责；组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。Join 已返回但客户端回包校验失败时，仍保留已知路由供断线清理；持有路由不表示客户端已收到进入成功。回包校验与离开确认见[游戏 RPC 契约](PROTOCOL.md#24-mole进入与组内操作)。
 
-组件通过 [componentDependencies](../nodes/access/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主快照 110；101 用于旧登录替换，不使用 kind 字符串二次分发。
+组件通过 [componentDependencies](../nodes/access/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主座位、准备、发牌、叫抢、出牌、结算事件 111～116；101 用于旧登录替换，不使用 kind 字符串二次分发。
 
 这些业务命令同属一个 Agent Service，统一在 [agent.go](../nodes/access/agent.go) 定义；Agent 与游戏组件直接引用同包源常量，远端节点引用生成的 `accessagent` 契约。Agent 名称由连接启动时生成，契约不包含固定 ServiceName。Gate 断线事件使用框架命令。
 
-TypeScript CLI 完成密码认证再 Token 登录，也可显式保存 0600 Token 文件，后续直接 Token 登录。银子和身份使用 bigint；地鼠按绝对余额与 revision 接受更新。只有明确的 `target_unavailable` 拒绝会触发重新选目标；超时、繁忙、断线等未知结果停止操作并保留 ActionID，不自动重发命中。地鼠客户端收到 accepted 即继续玩法，斗地主等待终态快照；两者都不追加逐笔查账。
+TypeScript CLI 完成密码认证再 Token 登录，也可显式保存 0600 Token 文件，后续直接 Token 登录。银子和身份使用 bigint；地鼠按绝对余额与 revision 接受更新。只有明确的 `target_unavailable` 拒绝会触发重新选目标；超时、繁忙、断线等未知结果停止操作并保留 ActionID，不自动重发命中。地鼠客户端收到 accepted 即继续玩法，斗地主按事件更新场景、等待结算事件；两者都不追加逐笔查账。
 
 ## 4. Online 位置目录
 
@@ -218,19 +218,21 @@ Ready 查询钱包通过后，在当前回调的局部 `attackGame` 值上更新
 
 底分为 10，初次叫地主不翻倍，每次抢地主、炸弹/王炸各翻倍。当前不计算春天、明牌、个人加倍或手续费。设统一倍率为 M：地主胜时地主 Credit=20M、两农民各 Debit=10M；地主负时反向。规则校验倍率和金额上限，三人净变化合计为零。
 
+牌桌按业务动作发送座位、准备、发牌、叫抢、出牌与结算事件；操作本人和其他玩家使用相同的事件路径。发牌和结算按玩家生成私有字段。每桌维护事件序号，场景快照携带当前序号；客户端处理缺口或等待超时可查询场景，详细字段与恢复约定见[斗地主协议](PROTOCOL.md#14-斗地主协议)。
+
 准备时查询钱包，至少 20 银子才可准备；这是准入预判，不冻结账户。局末使用一个 SettleEqualGroup 原子结算：每位输家最多扣到 0，赢家均分实际扣款，余数按 UserID 从大到小分配；客户端显示回执中的实际扣返和确认余额。
 
-确定胜负的当前回调按以下顺序执行：
+确定胜负的当前回调先广播出牌事件，再按以下顺序执行：
 
 ```text
 prepareOperation：固定本局 OperationID 与三人金额
   → submit：保存 Redis 待请求，Call settlement-write / 7
   → applyReceipt：校验返回的原 ID、实际扣返和三人余额，确认本桌财务终态
-  → pushSnapshots：向三人的当前连接发起推送
+  → pushSettlement：向三人的当前连接发送各自结算事件
   → deletePendingSettlement：删除 Redis 待记录
 ```
 
-[roundSettlement](../nodes/landlord/roundsettlement.go) 用 `operation *landlordOperation` 保存固定请求及确认结果，`snapshotFor` 组装本人实际扣返、状态、余额与版本；pending 的实际扣返为 0；[landlordJournal](../nodes/landlord/landlordjournal.go) 只持久化请求字段。正常局末不先广播 finished + pending；当前出牌回调拿到合法回执后直接返回终态快照，并向三人的当前连接发起推送，不再追加查账。临时故障返回或主动查询快照时仍可能看到未确认状态。
+[roundSettlement](../nodes/landlord/roundsettlement.go) 用 `operation *landlordOperation` 保存固定请求及确认结果，`snapshotFor` 组装本人实际扣返、状态、余额与版本；pending 的实际扣返为 0；[landlordJournal](../nodes/landlord/landlordjournal.go) 只持久化请求字段。最后一手先发起出牌事件，在同一回调尝试保存并 Call 结算，然后返回出牌成功确认；取得合法回执后发送各自结算事件，不伪造 pending 的财务结果。保存或结算暂时失败不撤销已接受的出牌，主动查询场景仍可能看到未确认状态。最后一手的响应时间包含这次结算等待，外层超时时结果可能未知。
 
 ### 6.3 重试、清理与恢复
 
@@ -239,7 +241,7 @@ prepareOperation：固定本局 OperationID 与三人金额
 - 保存时请求无效或同 ID 内容冲突、Call 返回非临时 Domain 错误，或命令不存在/参数不匹配时，设置本桌 `fault` 停止自动提交，保留内存原请求及已有 Redis 记录，不覆盖冲突记录、不伪造财务终态。先核查并修复问题；已保存请求可在重启时按原 ID 恢复，仅存在内存中的请求不能靠 Redis 恢复。坏回执只代表结果未确认，不进入此暂停分支。
 - 有效回执只确认当前操作的完整终态，确认后不重复调用结算。发起推送后就清理 Redis，不等待客户端确认收到；推送失败不撤销入账。删除失败只保留清理标记，从本次等待结束后至少退避 1 秒再清理；等待期间的 Tick 不访问 Redis，也不重新调用结算。
 - Leave 的 true 表示本桌已接纳离开：先清推送地址，waiting 时同时取消 Ready；目录回收可能尚未完成。进行中或仍有待确认结算时保留三人身份；waiting 或结算已确认时，通过本地 Call 请求目录释放成员，确认无同桌新预留后才移除座位。释放失败不撤销已接纳的离开，保留原 LoginID/Membership 供后续回收，不覆盖新成员。
-- Pulse 一轮回收中实际移除成员后，向剩余在线玩家发起一次最新快照推送；部分回收成功、随后报错时也通知已完成的变化。Join 触发回收时，若部分成功后失败，同样先发起变更推送并保留原错误；成功 Join 只推送最终快照。未移除成员、新预留阻止回收、空转 Tick 或纯 Redis 清理不额外触发回收通知。沿用 Send 的接纳语义，推送失败不撤销回收，客户端仍可查询当前快照。
+- Pulse 或 Join 回收时，每实际移除一名成员即向剩余在线玩家发送离座事件；部分成功后失败仍保留已完成事件及原错误。未移除成员、新预留阻止回收、空转 Tick 或纯 Redis 清理不额外发送离座事件。Send 接纳不保证送达，客户端可恢复场景。
 - 每桌私有 [landlordPulse](../nodes/landlord/landlordpulse.go) 通过 GSR After 每 250ms 唤醒本桌，处理超时、重提和清理。目录释放每次最多等待 1 秒，失败后用 `releaseRetryAt` 从等待结束至少退避 1 秒再补做；已离开状态由空推送地址判断。waiting 的 Join 会立即核对待回收座位，不受后台退避阻挡，避免目录已放位而桌仍占满。
 - 预留核对最多等待 1 秒，无论成功或失败，均用 `reservationCheckAt` 从本次等待结束至少间隔 1 秒再检查；目录不可用时保留原状态。即使无人入座，牌桌仍继续核对；只有目录确认没有成员或有效预留、桌内无人且无待结算/Redis 清理任务时才退出。最后一个实际成员离开也沿用此边界，空桌不会提前终止其他人的有效预留。
 - 启动时加载 Redis 待请求，为各请求创建恢复专用 AttackService；不发布可加入桌名，也不向旧连接广播，确认并清理后退出。只恢复已保存的局末账务，不恢复进行中手牌。清理前崩溃会再次按原 ID 幂等补交。

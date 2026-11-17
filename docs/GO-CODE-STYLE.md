@@ -23,7 +23,7 @@ GSR API 以实际依赖版本为准，参考入口见 [GSR 与参考边界](DESI
 
 ### 2.2 名称表达实际行为
 
-- 使用稳定的业务术语，区分操作、请求、回执和快照。名称同时表达动作和完成程度：`snapshotFor` 组装数据，`applyReceipt` 应用结果，`submitBatch` 提交任务，`pushSnapshots` 发送数据；提交不等于入账完成，组装快照不等于推送。
+- 使用稳定的业务术语，区分操作、请求、回执和快照。名称同时表达动作和完成程度：`snapshotFor` 组装数据，`applyReceipt` 应用结果，`submitBatch` 提交任务，`pushPlay` 发送出牌事件；提交不等于入账完成，组装快照不等于推送。
 - 避免 `data`、`obj`、`tmp`、`ret` 等缺少含义的名称；不同职责不要只靠大小写区分。access 的连接 Service 使用 Agent，内部组件按自身职责命名，不强制统一后缀。
 - 缩写遵循 Go 习惯，如 `ID`、`URL`、`HTTP`、`RPC`、`GSR`。
 - 同一类型的接收者名称保持一致，不用 `this` 或 `self`。普通 `context.Context` 参数用 `ctx`；`gsr.ServiceContext`、`gsr.CommandContext` 参数用 `self`；未使用的参数用 `_`。

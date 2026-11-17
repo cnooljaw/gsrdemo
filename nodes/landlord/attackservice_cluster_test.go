@@ -228,7 +228,10 @@ func TestReadyFailureKeepsTableAndRetryDealsOnce(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("失败的 Ready 改变了准备、轮次或手牌")
 	}
-	dealt := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomReadyCommand, uint64(3), "login").(map[string]any)
+	if landlordTestValue(t, routes, "landlord", room, landlordattack.RoomReadyCommand, uint64(3), "login") != true {
+		t.Fatal("准备未确认")
+	}
+	dealt := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login").(map[string]any)
 	if dealt["phase"] != "calling" || dealt["turn"] != before["turn"].(uint64)+1 || len(dealt["hand"].([]any)) != 17 || len(dealt["bottom"].([]any)) != 0 {
 		t.Fatal("重试未正常发牌或提前公开底牌")
 	}
@@ -246,7 +249,7 @@ func TestReadyFailureKeepsTableAndRetryDealsOnce(t *testing.T) {
 	}
 }
 
-// landlordMemberPushRecorder 只观察第三个座位收到的快照，计数和最后快照均由本 Service 管理。
+// landlordMemberPushRecorder 观察剩余在线座位收到的成员事件，计数和最后事件均由本 Service 管理。
 type landlordMemberPushRecorder struct {
 	count  int64
 	latest map[string]any
@@ -260,14 +263,12 @@ func (recorder *landlordMemberPushRecorder) Handle(_ gsr.CommandContext, cmd run
 	if cmd == 99 {
 		return map[string]any{"count": recorder.count, "snapshot": recorder.latest}, nil
 	}
-	if cmd != accessagent.LandlordSnapshotPushCommand {
+	if cmd != accessagent.LandlordSeatPushCommand {
 		return nil, runtime.ErrUnknownCommand
 	}
 	view := args[1].(map[string]any)
-	if view["seat"] == int64(2) {
-		recorder.count++
-		recorder.latest = view
-	}
+	recorder.count++
+	recorder.latest = view
 	return nil, nil
 }
 
@@ -314,8 +315,8 @@ func (self *landlordReclaimContext) CallName(ctx context.Context, name cluster.S
 	return self.CommandContext.CallName(ctx, name, cmd, args...)
 }
 
-// TestReclaimedMembersPushSnapshot 保护实际回收和部分成功均通知剩余玩家，新预留或空转 Tick 不额外推送。
-func TestReclaimedMembersPushSnapshot(t *testing.T) {
+// TestReclaimedMembersPushEvents 保护每次实际回收和部分成功均通知剩余玩家，新预留或空转 Tick 不额外推送。
+func TestReclaimedMembersPushEvents(t *testing.T) {
 	for _, scenario := range []struct {
 		name, phase    string
 		blockedUID     uint64
@@ -323,10 +324,10 @@ func TestReclaimedMembersPushSnapshot(t *testing.T) {
 		players        int
 		pushes         int64
 	}{
-		{name: "waiting", phase: "waiting", players: 1, pushes: 1},
+		{name: "waiting", phase: "waiting", players: 1, pushes: 2},
 		{name: "partial_failure", phase: "waiting", blockedUID: 2, players: 2, pushes: 1},
 		{name: "new_reservations", phase: "waiting", newReservation: true, players: 3},
-		{name: "settled", phase: "finished", players: 1, pushes: 1},
+		{name: "settled", phase: "finished", players: 1, pushes: 2},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			table, directory := occupiedLandlordTable()
@@ -361,8 +362,8 @@ func TestReclaimedMembersPushSnapshot(t *testing.T) {
 			if observed["count"] != scenario.pushes {
 				t.Fatalf("成员变化推送次数不符: %v", observed)
 			}
-			if scenario.pushes != 0 && !reflect.DeepEqual(view, observed["snapshot"]) {
-				t.Fatal("推送不是回收后的最新快照")
+			if scenario.pushes != 0 && observed["snapshot"].(map[string]any)["joined"] != false {
+				t.Fatal("未广播座位离开")
 			}
 			landlordTestValue(t, routes, "landlord", room, 98)
 			idle := landlordTestValue(t, routes, "access", "agent", 99).(map[string]any)
@@ -373,7 +374,7 @@ func TestReclaimedMembersPushSnapshot(t *testing.T) {
 	}
 }
 
-// TestJoinReclaimPushesCurrentMembers 保护 Join 部分回收后失败仍通知现有玩家，成功只推送最终快照，未回收则不补推。
+// TestJoinReclaimPushesCurrentMembers 保护 Join 回收过程逐项通知现有玩家，失败仍保留已发生的事件。
 func TestJoinReclaimPushesCurrentMembers(t *testing.T) {
 	for _, scenario := range []struct {
 		name       string
@@ -383,7 +384,7 @@ func TestJoinReclaimPushesCurrentMembers(t *testing.T) {
 	}{
 		{name: "partial_failure", blockedUID: 2, players: 2, pushes: 1},
 		{name: "failure_without_change", blockedUID: 1, players: 3},
-		{name: "joined_after_reclaim", players: 2, pushes: 1},
+		{name: "joined_after_reclaim", players: 2, pushes: 3},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			table, directory := occupiedLandlordTable()
@@ -416,8 +417,8 @@ func TestJoinReclaimPushesCurrentMembers(t *testing.T) {
 			if observed["count"] != scenario.pushes {
 				t.Fatalf("成员变化推送次数不符: %v", observed)
 			}
-			if scenario.pushes != 0 && !reflect.DeepEqual(view, observed["snapshot"]) {
-				t.Fatal("推送没有反映最新成员状态")
+			if scenario.pushes != 0 && observed["snapshot"].(map[string]any)["joined"] != (scenario.blockedUID == 0) {
+				t.Fatal("成员变化事件与 Join 结果不符")
 			}
 			_, memberErr := landlordTestRPC(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(4), "login")
 			if (scenario.blockedUID != 0 && !errors.Is(memberErr, errLandlordStale)) || (scenario.blockedUID == 0 && memberErr != nil) {
@@ -551,7 +552,10 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 		if name != view["room_name"] {
 			t.Fatal("未凑到同桌")
 		}
-		first = landlordTestValue(t, routes, "landlord", name, landlordattack.RoomReadyCommand, uid, "login").(map[string]any)
+		if landlordTestValue(t, routes, "landlord", name, landlordattack.RoomReadyCommand, uid, "login") != true {
+			t.Fatal("准备未确认")
+		}
+		first = landlordTestValue(t, routes, "landlord", name, landlordattack.RoomSnapshotCommand, uid, "login").(map[string]any)
 	}
 	if first["phase"] != "calling" || len(first["bottom"].([]any)) != 0 {
 		t.Fatal("未进入叫地主或提前泄露底牌")
@@ -575,7 +579,8 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 		t.Fatal("第四人进入满桌")
 	}
 	other := second["room_name"].(string)
-	if view := landlordTestValue(t, routes, "landlord", other, landlordattack.RoomReadyCommand, uint64(4), "login").(map[string]any); view["phase"] != "waiting" {
+	landlordTestValue(t, routes, "landlord", other, landlordattack.RoomReadyCommand, uint64(4), "login")
+	if view := landlordTestValue(t, routes, "landlord", other, landlordattack.RoomSnapshotCommand, uint64(4), "login").(map[string]any); view["phase"] != "waiting" {
 		t.Fatal("其他桌状态异常")
 	}
 	// 等实际 10 秒叫地主超时；不修改 owner 内部字段，也不注入生产测试命令。

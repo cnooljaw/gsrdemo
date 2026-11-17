@@ -7,5 +7,10 @@ const (
 	MoleSnapshotPushCommand          = 100
 	ReplacedCommand                  = 101
 	MoleBalanceCorrectionPushCommand = 102
-	LandlordSnapshotPushCommand      = 110
+	LandlordSeatPushCommand          = 111
+	LandlordReadyPushCommand         = 112
+	LandlordDealPushCommand          = 113
+	LandlordBidPushCommand           = 114
+	LandlordPlayPushCommand          = 115
+	LandlordSettlementPushCommand    = 116
 )

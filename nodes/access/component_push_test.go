@@ -22,7 +22,12 @@ func TestGamePushCommands(t *testing.T) {
 	}{
 		{name: "mole snapshot", command: accessagent.MoleSnapshotPushCommand, response: demopb.MsgId_S2C_SNAPSHOT_PUSH, routeKey: "attack_name", payload: map[string]any{"attack_name": "mole-room"}},
 		{name: "mole balance correction", command: accessagent.MoleBalanceCorrectionPushCommand, response: demopb.MsgId_S2C_BALANCE_PUSH, payload: map[string]any{"balance": int64(900), "available": int64(900), "revision": uint64(2)}},
-		{name: "landlord snapshot", command: accessagent.LandlordSnapshotPushCommand, response: demopb.MsgId_S2C_LANDLORD_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room"}},
+		{name: "landlord play", command: accessagent.LandlordPlayPushCommand, response: demopb.MsgId_S2C_LANDLORD_PLAY_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room", "revision": uint64(1), "user_id": uint64(7)}},
+		{name: "landlord seat", command: accessagent.LandlordSeatPushCommand, response: demopb.MsgId_S2C_LANDLORD_SEAT_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room", "revision": uint64(1), "user_id": uint64(7)}},
+		{name: "landlord ready", command: accessagent.LandlordReadyPushCommand, response: demopb.MsgId_S2C_LANDLORD_READY_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room", "revision": uint64(1), "user_id": uint64(7)}},
+		{name: "landlord deal", command: accessagent.LandlordDealPushCommand, response: demopb.MsgId_S2C_LANDLORD_DEAL_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room", "revision": uint64(1), "hand": []any{int64(1), int64(2), int64(3), int64(4), int64(5), int64(6), int64(7), int64(8), int64(9), int64(10), int64(11), int64(12), int64(13), int64(17), int64(18), int64(19), int64(20)}}},
+		{name: "landlord bid", command: accessagent.LandlordBidPushCommand, response: demopb.MsgId_S2C_LANDLORD_BID_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room", "revision": uint64(1), "user_id": uint64(7)}},
+		{name: "landlord settlement", command: accessagent.LandlordSettlementPushCommand, response: demopb.MsgId_S2C_LANDLORD_SETTLEMENT_PUSH, routeKey: "room_name", payload: map[string]any{"room_name": "landlord-room", "revision": uint64(1), "settlement": map[string]any{"operation_id": "round", "status": "committed"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			identity := agentIdentity{UserID: 7, LoginID: "current-login"}
@@ -37,7 +42,7 @@ func TestGamePushCommands(t *testing.T) {
 			mole, landlord := newComMole(deps), newComLandlord(deps)
 			mole.groupID, landlord.room = "mole-room", "landlord-room"
 			var component gameComponent = mole
-			if test.command == accessagent.LandlordSnapshotPushCommand {
+			if test.routeKey == "room_name" {
 				component = landlord
 			}
 			handler, ok := component.CommandHandlers()[test.command].(func(gsr.CommandContext, string, map[string]any) error)
@@ -58,7 +63,7 @@ func TestGamePushCommands(t *testing.T) {
 			}
 			mole.groupID, landlord.room = "mole-room", "landlord-room"
 			if test.routeKey != "" {
-				if err := handler(nil, identity.LoginID, map[string]any{test.routeKey: "previous-room"}); err != nil {
+				if err := handler(nil, identity.LoginID, map[string]any{test.routeKey: "previous-room", "revision": uint64(1)}); err != nil {
 					t.Fatal(err)
 				}
 			}

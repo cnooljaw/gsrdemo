@@ -82,18 +82,14 @@ func TestMoleLeaveRequiresConfirmation(t *testing.T) {
 	}
 }
 
-// TestGameSnapshotRepliesMatchCurrentRoute 保护主动快照及各桌内操作拒绝其他组/桌的回包，匹配路由时正常返回。
+// TestGameSnapshotRepliesMatchCurrentRoute 保护主动快照拒绝其他组/桌的回包，匹配路由时正常返回。
 func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 	for _, request := range []struct {
 		name string
 		id   demopb.MsgId
 	}{
 		{"mole snapshot", demopb.MsgId_C2S_SNAPSHOT},
-		{"landlord ready", demopb.MsgId_C2S_LANDLORD_READY},
-		{"landlord play", demopb.MsgId_C2S_LANDLORD_PLAY},
 		{"landlord snapshot", demopb.MsgId_C2S_LANDLORD_SNAPSHOT},
-		{"landlord call", demopb.MsgId_C2S_LANDLORD_CALL},
-		{"landlord rob", demopb.MsgId_C2S_LANDLORD_ROB},
 	} {
 		t.Run(request.name, func(t *testing.T) {
 			for _, route := range []string{"other-room", "current-room"} {
@@ -138,6 +134,32 @@ func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// TestLandlordActionsRequireConfirmation 保护桌内操作只有明确成功才能返回成功响应。
+func TestLandlordActionsRequireConfirmation(t *testing.T) {
+	for _, id := range []demopb.MsgId{demopb.MsgId_C2S_LANDLORD_READY, demopb.MsgId_C2S_LANDLORD_PLAY, demopb.MsgId_C2S_LANDLORD_CALL, demopb.MsgId_C2S_LANDLORD_ROB} {
+		for _, value := range []any{true, false, "invalid"} {
+			landlord := newComLandlord(componentDependencies{
+				Identity: func() agentIdentity { return agentIdentity{UserID: 7, LoginID: "current"} },
+				Call: func(_ gsr.ServiceContext, _ cluster.NodeID, service cluster.ServiceName, _ runtime.CommandID, args ...any) (any, error) {
+					if service != "current-room" || args[0] != uint64(7) || args[1] != "current" {
+						t.Fatalf("错误身份或房间: %s %v", service, args)
+					}
+					return value, nil
+				},
+			})
+			landlord.room = "current-room"
+			response, err := componentRequest(t, landlord, id)
+			if value == true {
+				if err != nil || response.MsgId == uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+					t.Fatalf("已确认动作没有成功响应: %v %v", response, err)
+				}
+			} else if !errors.Is(err, errInvalidBackendReply) {
+				t.Fatalf("未确认动作返回成功: %v %v", response, err)
+			}
+		}
 	}
 }
 

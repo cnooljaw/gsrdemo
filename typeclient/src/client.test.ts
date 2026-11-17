@@ -3,7 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { DemoClient } from "./client.js";
 import { EnvelopeSchema } from "./gen/gsr/common/v1/common_pb.js";
-import { LandlordPushSchema, LandlordSnapshotSchema, BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
+import { LandlordSeatPushSchema, LandlordPlayPushSchema, LandlordSnapshotSchema, BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
 
 // 仅替代传输，业务请求/推送仍经过实际 Envelope 编解码和 DemoClient 分发。
 class FakeSocket extends EventTarget {
@@ -92,25 +92,43 @@ test("连接关闭结束在途等待", async () => {
 });
 
 
-// 保护斗地主推送只更新当前桌，迟到轮次及离开后的推送不会覆盖当前显示。
-test("斗地主推送限定桌地址及单调轮次", async () => {
+// 保护同桌事件按序应用，旧事件和其他桌事件不覆盖当前场景。
+test("斗地主事件按牌桌序号应用并恢复缺口", async () => {
   const client = await DemoClient.connect("ws://fixture", 1000);
   try {
-    client.landlord = create(LandlordSnapshotSchema, { roomName: "table-a", phase: "calling", turn: 1n, hand: [3n] });
-    let pushed = 0;
-    client.onPush = kind => { assert.equal(kind, "landlord_snapshot"); pushed++; };
-    const send = (roomName: string, turn: bigint) => FakeSocket.last.envelope(MsgId.S2C_LANDLORD_PUSH, 0,
-      toBinary(LandlordPushSchema, create(LandlordPushSchema, { snapshot: { roomName, turn, phase: "robbing", hand: [4n] } })));
-    send("table-b", 100n);
-    assert.equal(client.landlord.turn, 1n);
-    send("table-a", 2n);
-    send("table-a", 1n);
-    assert.equal(client.landlord.turn, 2n);
-    assert.deepEqual(client.landlord.hand, [4n]);
-    assert.equal(pushed, 1);
-    client.landlord = undefined;
-    send("table-a", 3n);
-    assert.equal(client.landlord, undefined);
-    assert.equal(pushed, 1);
+    client.setLandlord(create(LandlordSnapshotSchema, { roomName: "table-a", seat: 0n, phase: "playing", turn: 1n, revision: 3n, hand: [3n, 4n], players: [{ userId: 1n, seat: 0n, remaining: 2n }] }));
+    const play = (roomName: string, revision: bigint, card: bigint) => FakeSocket.last.envelope(MsgId.S2C_LANDLORD_PLAY_PUSH, 0,
+      toBinary(LandlordPlayPushSchema, create(LandlordPlayPushSchema, { roomName, revision, userId: 1n, cards: [card], remaining: 1n, phase: "playing", turn: 2n, turnSeat: 1n })));
+    const seat = (roomName: string, revision: bigint) => FakeSocket.last.envelope(MsgId.S2C_LANDLORD_SEAT_PUSH, 0,
+      toBinary(LandlordSeatPushSchema, create(LandlordSeatPushSchema, { roomName, revision, userId: 2n, seat: 1n, joined: true })));
+    seat("other", 4n);
+    play("table-a", 5n, 3n);
+    assert.equal(client.landlordNeedsSync, true);
+    assert.deepEqual(client.landlord?.hand, [3n, 4n]);
+    seat("table-a", 4n);
+    assert.equal(client.landlordNeedsSync, false);
+    assert.equal(client.landlord?.revision, 5n);
+    assert.deepEqual(client.landlord?.hand, [4n]);
+    play("table-a", 5n, 3n);
+    assert.deepEqual(client.landlord?.hand, [4n]);
+    client.leaveLandlord();
+  } finally { client.close(); }
+});
+
+// 保护恢复场景不会丢掉请求期间已收到的更新，也不会应用场景已经包含的旧事件。
+test("斗地主恢复场景后接续较新事件", async () => {
+  const client = await DemoClient.connect("ws://fixture", 1000);
+  try {
+    client.setLandlord(create(LandlordSnapshotSchema, { roomName: "table", revision: 4n }));
+    const send = (revision: bigint, userId: bigint) => FakeSocket.last.envelope(MsgId.S2C_LANDLORD_SEAT_PUSH, 0,
+      toBinary(LandlordSeatPushSchema, create(LandlordSeatPushSchema, { roomName: "table", revision, userId, seat: BigInt(userId - 1n), joined: true })));
+    send(7n, 3n);
+    assert.equal(client.landlordNeedsSync, true);
+    client.setLandlord(create(LandlordSnapshotSchema, { roomName: "table", revision: 6n, players: [{ userId: 1n, seat: 0n }, { userId: 2n, seat: 1n }] }));
+    assert.equal(client.landlordNeedsSync, false);
+    assert.equal(client.landlord?.revision, 7n);
+    assert.deepEqual(client.landlord?.players.map(player => player.userId), [1n, 2n, 3n]);
+    send(6n, 9n);
+    assert.deepEqual(client.landlord?.players.map(player => player.userId), [1n, 2n, 3n]);
   } finally { client.close(); }
 });

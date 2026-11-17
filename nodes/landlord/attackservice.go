@@ -8,7 +8,6 @@ import (
 	"github.com/cnooljaw/gsr"
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
-	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
@@ -33,6 +32,7 @@ const reservationCheckInterval = time.Second
 // attackService 独占一桌状态；局末直接 Call 结算，确认后推送结果并清理待请求。
 type attackService struct {
 	game               attackGame
+	revision           uint64
 	settlement         roundSettlement
 	recovery           bool
 	releaseRetryAt     time.Time
@@ -84,25 +84,31 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	if self.Source() == 0 {
 		return runtime.ErrUnknownCommand
 	}
-	changed, err := service.game.timeout(time.Now())
+	before := service.game
+	var cards []int64
+	now := time.Now()
+	if before.Phase == "playing" && !now.Before(before.Deadline) {
+		cards = before.defaultPlay()
+	}
+	changed, err := service.game.timeout(now)
 	if err != nil {
 		return err
 	}
 	if changed {
-		service.settlement.prepareOperation(service.game)
-		if !service.settlement.pending() {
-			service.pushSnapshots(self)
+		userID := before.Players[before.Seat].UserID
+		if before.Phase == "playing" {
+			service.pushPlay(self, userID, cards)
+		} else {
+			service.pushBid(self, before, userID, false)
 		}
+		service.settlement.prepareOperation(service.game)
 	}
 	service.retrySettlement(self)
 	if time.Now().Before(service.releaseRetryAt) {
 		return nil
 	}
 	if !service.settlement.pending() && (service.game.Phase == "waiting" || service.game.Phase == "finished") {
-		reclaimed, err := service.releaseDetachedPlayers(self)
-		if reclaimed {
-			service.pushSnapshots(self)
-		}
+		_, err := service.releaseDetachedPlayers(self)
 		if err != nil {
 			return err
 		}
@@ -161,6 +167,7 @@ func (service *attackService) releaseDetachedPlayers(self gsr.ServiceContext) (b
 		}
 		if released {
 			service.game.remove(seat)
+			service.pushSeat(self, player.UserID, seat, false, false)
 			reclaimed = true
 		}
 	}
@@ -194,7 +201,7 @@ func (service *attackService) retrySettlement(self gsr.ServiceContext) {
 			return
 		}
 		if !service.recovery {
-			service.pushSnapshots(self)
+			service.pushSettlement(self)
 		}
 	}
 	service.deletePendingSettlement(self)
@@ -232,56 +239,58 @@ func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, lo
 	}
 	// 目录可能已释放旧成员而本桌丢失了回执；主动 Join 不等待后台回收的退避期。
 	if service.game.Phase == "waiting" {
-		reclaimed, err := service.releaseDetachedPlayers(self)
+		_, err := service.releaseDetachedPlayers(self)
 		if err != nil {
-			// 已完成的回收仍需通知现有成员，Join 继续返回原错误。
-			if reclaimed {
-				service.pushSnapshots(self)
-			}
+			// 已回收的成员已逐个通知，Join 继续返回原错误。
 			return nil, err
 		}
 	}
 	if err := service.game.join(uid, login, node, agent, membership); err != nil {
 		return nil, err
 	}
-	service.pushSnapshots(self)
+	seat, _ := service.game.member(uid, login)
+	service.pushSeat(self, uid, seat, true, service.game.Players[seat].Ready)
 	return service.snapshotFor(uid), nil
 }
 
-func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
+func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, login string) (bool, error) {
 	seat, err := service.game.readySeat(uid, login)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	balance, err := self.Cluster().Call(ctx, service.settlement.node, settlementread.ServiceName, settlementread.GetBalanceCommand, uid)
 	cancel()
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	fields, ok := balance.(map[string]any)
 	if !ok {
-		return nil, errLandlordInput
+		return false, errLandlordInput
 	}
 	amount, ok := fields["amount"].(int64)
 	if !ok || amount < 2*baseSilver {
-		return nil, errLandlordFunds
+		return false, errLandlordFunds
 	}
 	// 当前回调内暂存准备和发牌结果；markReady 只改值字段，deal 分配新的手牌切片。
 	next := service.game
-	if next.markReady(seat) {
+	dealt := next.markReady(seat)
+	if dealt {
 		deck, err := shuffledDeck()
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		if err := self.SendName(landlordName, sealCommand, next.Name, true); err != nil {
-			return nil, err
+			return false, err
 		}
 		next.deal(deck, rand.IntN(3), time.Now())
 	}
 	service.game = next
-	service.pushSnapshots(self)
-	return service.snapshotFor(uid), nil
+	service.pushReady(self, uid, seat)
+	if dealt {
+		service.pushDeal(self)
+	}
+	return true, nil
 }
 
 func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, login string) (bool, error) {
@@ -291,6 +300,9 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 	}
 	player := service.game.Players[seat]
 	service.game.detach(seat)
+	if player.Ready && service.game.Phase == "waiting" {
+		service.pushSeat(self, uid, seat, true, false)
+	}
 	if (service.game.Phase != "waiting" && service.game.Phase != "finished") || service.settlement.pending() {
 		return true, nil
 	}
@@ -304,66 +316,65 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 	}
 	service.game.remove(seat)
 	// 即使本桌已空，也由 Pulse 核对其他有效预留后再退出。
-	service.pushSnapshots(self)
+	service.pushSeat(self, uid, seat, false, false)
 	return true, nil
 }
 
-func (service *attackService) bid(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (map[string]any, error) {
+func (service *attackService) bid(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (bool, error) {
 	if _, err := service.game.member(uid, login); err != nil {
-		return nil, err
+		return false, err
 	}
 	if !time.Now().Before(service.game.Deadline) {
-		return nil, errLandlordTurn
+		return false, errLandlordTurn
 	}
+	before := service.game
 	if err := service.game.applyBid(uid, turn, yes, time.Now()); err != nil {
-		return nil, err
+		return false, err
 	}
-	service.pushSnapshots(self)
-	return service.snapshotFor(uid), nil
+	service.pushBid(self, before, uid, yes)
+	return true, nil
 }
 
-func (service *attackService) handleCallLandlord(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (map[string]any, error) {
+func (service *attackService) handleCallLandlord(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (bool, error) {
 	if service.game.Phase != "calling" {
-		return nil, errLandlordTurn
+		return false, errLandlordTurn
 	}
 	return service.bid(self, uid, login, turn, yes)
 }
 
-func (service *attackService) handleRobLandlord(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (map[string]any, error) {
+func (service *attackService) handleRobLandlord(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (bool, error) {
 	if service.game.Phase != "robbing" {
-		return nil, errLandlordTurn
+		return false, errLandlordTurn
 	}
 	return service.bid(self, uid, login, turn, yes)
 }
 
-func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, login string, turn uint64, values []any) (map[string]any, error) {
+func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, login string, turn uint64, values []any) (bool, error) {
 	if _, err := service.game.member(uid, login); err != nil {
-		return nil, err
+		return false, err
 	}
 	cards := make([]int64, len(values))
 	if len(values) > 20 {
-		return nil, errLandlordCards
+		return false, errLandlordCards
 	}
 	for i, v := range values {
 		card, ok := v.(int64)
 		if !ok {
-			return nil, errLandlordCards
+			return false, errLandlordCards
 		}
 		cards[i] = card
 	}
 	now := time.Now()
 	if !now.Before(service.game.Deadline) {
-		return nil, errLandlordTurn
+		return false, errLandlordTurn
 	}
 	if err := service.game.play(uid, turn, cards, now); err != nil {
-		return nil, err
+		return false, err
 	}
+	service.pushPlay(self, uid, cards)
 	service.settlement.prepareOperation(service.game)
-	if !service.settlement.pending() {
-		service.pushSnapshots(self)
-	}
 	service.retrySettlement(self)
-	return service.snapshotFor(uid), nil
+	return true, nil
 }
 
 func (service *attackService) handleSnapshot(_ gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
@@ -375,22 +386,9 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, uid uint64, l
 
 func (service *attackService) snapshotFor(uid uint64) map[string]any {
 	view := service.game.view(uid)
+	view["revision"] = service.revision
 	if settlement := service.settlement.snapshotFor(uid); settlement != nil {
 		view["settlement"] = settlement
 	}
 	return view
-}
-
-func (service *attackService) pushSnapshots(self gsr.ServiceContext) {
-	if service.settlement.pending() {
-		return
-	}
-	for _, p := range service.game.Players {
-		if p.UserID == 0 || p.AccessNode == "" {
-			continue
-		}
-		if err := self.Cluster().Send(cluster.NodeID(p.AccessNode), cluster.ServiceName(p.AgentName), accessagent.LandlordSnapshotPushCommand, p.LoginID, service.snapshotFor(p.UserID)); err != nil {
-			_ = self.Logger().Error("斗地主推送未接纳，客户端可查询快照", "error", err.Error())
-		}
-	}
 }

@@ -16,7 +16,7 @@
 | 身份与路由 | 客户端不填写 UserID、LoginID、节点或 Service 地址，由 Agent 根据当前连接补齐 |
 | 进入准入 | 游戏请求要求已登录；一个连接不能同时进入地鼠和斗地主；游戏操作还要求已有对应路由 |
 | 64 位整数 | 银子、UserID、SpawnSeq、Turn、版本和修订号在 TS 中使用 bigint，不先转 Number 再计算 |
-| 消息交错 | 推送可先于对应响应到达；按当前路由、修订号和轮次处理，不用到达顺序推断业务先后 |
+| 消息交错 | 推送与其他请求响应可能交错；按当前路由、事件序号和余额修订号处理，不用到达顺序推断业务先后 |
 | 超时 | 超时不表示未执行；客户端不自动重发命中或出牌，不换操作 ID 掩盖未知结果 |
 
 以下表格按实际业务顺序排列。请求/响应类型遵循 `.proto` 中的独立消息定义，空请求也有自己的类型。
@@ -65,19 +65,29 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 | 接口 | 请求 ID → 响应 ID | 请求字段 | 当前成功响应 |
 | --- | --- | --- | --- |
 | Enter | 1101 → 1102 | 空 | `snapshot`；随机入桌或重登回原桌 |
-| Ready | 1111 → 1112 | 空 | `snapshot`；三人准备后发牌 |
-| Call | 1171 → 1172 | `turn uint64`、`yes bool` | `snapshot`；当前 calling 操作者叫/不叫 |
-| Rob | 1181 → 1182 | `turn uint64`、`yes bool` | `snapshot`；当前 robbing 操作者抢/不抢 |
-| Play | 1121 → 1122 | `turn uint64`、`cards int64[]` | `snapshot`；空 cards 表示不出 |
+| Ready | 1111 → 1112 | 空 | 空成功响应；准备、发牌通过事件通知 |
+| Call | 1171 → 1172 | `turn uint64`、`yes bool` | 空成功响应；叫/不叫结果广播全桌 |
+| Rob | 1181 → 1182 | `turn uint64`、`yes bool` | 空成功响应；抢/不抢结果广播全桌 |
+| Play | 1121 → 1122 | `turn uint64`、`cards int64[]` | 空成功响应；空 cards 表示不出，出牌事件广播全桌 |
 | Snapshot | 1131 → 1132 | 空 | `snapshot`，当前阶段与本人手牌 |
 | Leave | 1141 → 1142 | 空 | 空 `LandlordLeaveResponse`；当前 Handler 不填其中预留的 snapshot 字段，成功表示牌桌已接纳离开，目录回收可稍后完成 |
-| Push | 服务端 → 1161 | 无请求 | `snapshot`，含普通游戏更新、成员回收后的更新或局末结算结果；回收通知见[设计](DESIGN.md#63-重试清理与恢复) |
+
+事件均带 `room_name` 和牌桌内递增的 `revision`，普通事件包括操作本人；具体字段以 [game.proto](../nodes/access/proto/demo/v1/game.proto) 为准。
+
+| 推送 | 消息 ID | 主要字段与含义 |
+| --- | --- | --- |
+| Seat | 1191 | `user_id, seat, joined, ready`；坐下、准备取消或回收座位 |
+| Ready | 1192 | `user_id, seat, ready`；玩家准备 |
+| Deal | 1193 | `hand, turn, turn_seat, deadline_ms, redeals`；每人只收到自己的手牌 |
+| Bid | 1194 | `user_id, rob, yes, phase, turn, turn_seat, deadline_ms, candidate_seat, landlord_seat, multiplier, bottom, redealt`；叫抢及确定地主 |
+| Play | 1195 | `user_id, cards, remaining, phase, turn, turn_seat, deadline_ms, last_cards, last_seat, winner_seat, multiplier`；空 cards 为不出 |
+| Settlement | 1196 | `settlement`；每人只收到自己的实际扣返和确认余额 |
 
 | 快照字段组 | 字段与类型 | 含义 |
 | --- | --- | --- |
 | 标识与阶段 | `room_name string`、`phase string` | phase 为 waiting/calling/robbing/playing/finished |
 | 座位 | `seat/turn_seat/last_seat/landlord_seat/candidate_seat/winner_seat int64` | 座位从 0 开始；未确定的地主/候选/胜方为 -1，last_seat 无值时也为 -1 |
-| 轮次与时间 | `turn uint64`、`deadline_ms int64`、`redeals int64` | 请求回传当前 turn，重发牌不归零；无计时阶段 deadline_ms=0 |
+| 轮次与时间 | `turn uint64`、`deadline_ms int64`、`redeals int64`、`revision uint64` | turn 用于操作校验；revision 是当前事件序号，进入或恢复用作基线；无计时阶段 deadline_ms=0 |
 | 玩家 | `players[]`：`user_id uint64`、`seat/remaining/call_choice/rob_choice int64`、`ready bool` | 不暴露他人手牌；choice 为 0 未决定、-1 否、1 是 |
 | 牌面 | `hand/bottom/last_cards int64[]` | hand 仅本人手牌；bottom 确定地主后公开；last_cards 为上一手牌 |
 | 倍率 | `multiplier int64` | 全桌统一倍率 |
@@ -86,9 +96,9 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 牌编码为四种花色的 `0x01..0x0d`、`0x11..0x1d`、`0x21..0x2d`、`0x31..0x3d`，加小王 `0x4e`、大王 `0x4f`；比较顺序为 3..K、A、2、小王、大王。每张牌使用实际不重复编码。具体牌型、叫抢和超时规则见[斗地主设计](DESIGN.md#6-斗地主牌桌与局末结算)与 [cards.go](../nodes/landlord/cards.go)。
 
-进行中 Leave 只断开推送并保留牌位，超时动作继续。正常局末不先推送 finished + pending，取得有效结算回执后才推送终态；主动 Snapshot 仍可能读到 pending，其默认零余额不代表已确认余额。客户端使用终态快照，不再追加逐局查账。
+进行中 Leave 只断开推送并保留牌位，超时动作继续。出牌事件先通知动作；局末结算确认后单独发送 Settlement，主动 Snapshot 仍可能读到 pending，其默认零余额不代表已确认余额。成功响应表示牌桌已执行动作，不表示广播一定送达；失败、断线或超时可能结果未知，不盲目重复出牌。
 
-同一 Agent 串行处理请求和推送；请求等待牌桌时到达的推送，排在本次响应之后写入 Gate。但推送也可能先于尚未处理的请求响应，客户端仍需处理交错。`turn` 是操作轮次，不是所有快照变化的版本：准备、成员变化和结算状态可能保持相同 turn，不能仅凭 turn 严格排序同轮快照。示例客户端只在同房间过滤较小 turn 的推送，尚不提供完整快照版本；其他客户端若异步处理消息，须自行避免旧处理结果覆盖新状态。
+客户端以 Enter/Snapshot 的 revision 建立基线，对同桌事件按序应用，忽略已包含的旧事件，发现缺口请求 Snapshot；同一事件序号对每名在线玩家均有对应消息，发牌和结算的内容按本人生成。缓冲过多事件、场景不一致或等待预计更新超时也可恢复场景；最后一条事件丢失不能单靠序号发现。TS 演示客户端按事件驱动，恢复时最多保留 128 条在途事件。`turn` 仍只用于操作校验，不充当事件序号。
 
 ### 1.5 错误与保留编号
 
@@ -172,17 +182,17 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | --- | --- | --- | --- |
 | `landlord / 1` Resolve | Call | `U, L` | map：`room_name/membership string`，本次预留有效 30 秒；重试会生成新 Membership 并更新期限 |
 | `RoomName / 1` Join | Call | `U, L, N, A, M` | 本人桌快照 map；核对 Online、目录成员实例及预留期限；过期返回 stale_login |
-| `RoomName / 2` Ready | Call | `U, L` | 本人桌快照；钱包余额至少 20，未冻结资金；失败保持原桌状态，发牌后再 Ready 返回 busy，详见[准备与发牌](DESIGN.md#61-凑桌规则与可见性) |
-| `RoomName / 6` Call | Call | `U, L, turn uint64, yes bool` | 本人桌快照；叫/不叫 |
-| `RoomName / 7` Rob | Call | `U, L, turn uint64, yes bool` | 本人桌快照；抢/不抢 |
-| `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | 本人桌快照；空列表表示不出 |
+| `RoomName / 2` Ready | Call | `U, L` | true；钱包至少 20，未冻结资金；失败保持原桌状态，发牌后再 Ready 返回 busy |
+| `RoomName / 6` Call | Call | `U, L, turn uint64, yes bool` | true；叫/不叫 |
+| `RoomName / 7` Rob | Call | `U, L, turn uint64, yes bool` | true；抢/不抢 |
+| `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | true；空列表表示不出 |
 | `RoomName / 4` Snapshot | Call | `U, L` | 本人桌快照 |
 | `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回空 C/S LeaveResponse；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
 | `landlord / 5` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
-快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Ready、Call、Rob、Play、Snapshot 回包的 `room_name` 与本次请求目标一致，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
+快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Snapshot 回包的 `room_name` 与本次请求目标一致，Ready、Call、Rob、Play 只接受 true 成功确认，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
 
-Join 失败仍可能伴随旧成员回收的更新推送；该推送不代表本次进入成功，Call 继续返回原错误。成功 Join 只推送最终状态，回收通知规则见[设计](DESIGN.md#63-重试清理与恢复)。
+Join 失败仍可能伴随旧成员回收的更新推送；该推送不代表本次进入成功，Call 继续返回原错误。成功 Join 广播入座事件，回收通知规则见[设计](DESIGN.md#63-重试清理与恢复)。
 
 ### 2.6 通用银子结算接口
 
@@ -241,7 +251,7 @@ Call 成功返回回执后，财务结果仍看每项 status。1/6 的 rejected 
 
 OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容复用原终态，不重复扣返；不同内容或切换接口策略报 identity_conflict。摘要由规范化内部结构的 JSON 作 SHA-256：单人及均分明细按 UserID/Reason/Debit/Credit 排序但不合并，批次操作顺序保持有意义；接口 8 的付款明细按付款、收款 UserID 排序。Single、均分 Group、明细 Group 的内部 BatchID 分别使用 `single-`、`group-equal-`、`group-transfer-` 加 OperationID 的 SHA-256 十六进制。历史结果仍可查询，旧 Group 写入口不再提供。
 
-斗地主由本桌直接 Call 写池，校验原 OperationID、终态和三名参与者余额后立即返回/推送最终快照，再清理待记录。结果未知保留原请求，确认后不再调用结算；等待预算、重试及恢复边界见[斗地主恢复设计](DESIGN.md#63-重试清理与恢复)。
+斗地主由本桌直接 Call 写池，校验原 OperationID、终态和三名参与者余额后推送各自的结算事件，再清理待记录。结果未知保留原请求，确认后不再调用结算；等待预算、重试及恢复边界见[斗地主恢复设计](DESIGN.md#63-重试清理与恢复)。
 
 地鼠由 Submission 直接 Call 写池并校验 BatchID、逐项结果和全部参与者余额；结果未知按原批次退避重试。有效回执先完成 Redis 检查点，再通过节点内消息交付 MoleService。等待与失败边界见[地鼠检查点设计](DESIGN.md#54-检查点与故障边界)。
 
@@ -249,13 +259,18 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 ### 2.7 回调 access：快照、校正与旧登录替换
 
-目标均为对应玩家的 `AccessNode / AgentName`，以 Cluster.Send 调用。四个业务命令同属动态 Agent Service，共享常量见 [Agent 契约](../common/rpc/accessagent/commands.gen.go)，不包含固定 ServiceName。Agent 先核对当前 LoginID，游戏组件另核对自身路由。
+目标均为对应玩家的 `AccessNode / AgentName`，以 Cluster.Send 调用。业务命令同属动态 Agent Service，共享常量见 [Agent 契约](../common/rpc/accessagent/commands.gen.go)，不包含固定 ServiceName。Agent 先核对当前 LoginID，游戏组件另核对自身路由。
 
 | 来源 / Command | 顺序参数 | 接收行为 | 对应 C/S 消息 |
 | --- | --- | --- | --- |
 | mole / 100 SnapshotPush | `L, snapshot map` | 核对当前组，推送本人快照 | 1061 |
 | mole / 102 BalanceCorrection | `L, balance map` | 当前登录且仍在地鼠中才推送绝对余额 | 1062 |
-| landlord / 110 SnapshotPush | `L, snapshot map` | 核对当前桌，推送本人快照或结算结果 | 1161 |
+| landlord / 111 SeatPush | `L, event map` | 核对当前桌，转发坐下、准备取消或离座 | 1191 |
+| landlord / 112 ReadyPush | `L, event map` | 转发准备事件 | 1192 |
+| landlord / 113 DealPush | `L, event map` | 转发本人的发牌 | 1193 |
+| landlord / 114 BidPush | `L, event map` | 转发叫抢事件 | 1194 |
+| landlord / 115 PlayPush | `L, event map` | 转发出牌事件 | 1195 |
+| landlord / 116 SettlementPush | `L, event map` | 转发本人的结算回执 | 1196 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
@@ -372,12 +387,14 @@ MoleService/accounting.flush 本地 Send 原批次给 Submission
 ```text
 1101 Enter → Call landlord/landlord/1 → Call RoomName/1 Join
   → 桌核对 Online 与本地成员实例 → 返回本人快照
-1111 Ready → Call RoomName/2 → Call settlement-read/4 准入
+1111 Ready → Call RoomName/2 → Call settlement-read/4 准入 → 广播准备/发牌
 1171 Call / 1181 Rob / 1121 Play → 桌 / 6、7、3（携带当前 Turn）
+  → 桌更新状态、Send 事件给三名玩家
+  → 未结束时返回空成功响应；最后一手继续执行以下结算后再返回
   → 本桌确定胜负，固定一个 OperationID 与三人金额
   → 保存 Redis 待请求，Call settlement-write/7
   → 池成员完成 MySQL 原子判定，直接返回回执或错误
-  → applyReceipt → Send 三人的当前 Agent/110 → C/S 1161
+  → applyReceipt → Send 三人的当前 Agent/116 → C/S 1196
   → 删除 Redis 待记录；删除失败只重试删除
 ```
 

@@ -71,21 +71,21 @@ func TestAccessLandlordSnapshotResponseBeforePush(t *testing.T) {
 		t.Fatal(err)
 	}
 	barrier.wait(t)
-	accessFixtureRPC(t, backend, 98, uint64(accessagent.LandlordSnapshotPushCommand), location["login_id"], map[string]any{"room_name": "room", "turn": uint64(2)})
+	accessFixtureRPC(t, backend, 98, uint64(accessagent.LandlordPlayPushCommand), location["login_id"], map[string]any{"room_name": "room", "revision": uint64(2), "user_id": uint64(7), "turn": uint64(2)})
 	barrier.release()
 	response, push := readAccessEnvelope(t, client), readAccessEnvelope(t, client)
-	if response.RequestId != 2 || response.MsgId != uint32(demopb.MsgId_S2C_LANDLORD_SNAPSHOT) || push.RequestId != 0 || push.MsgId != uint32(demopb.MsgId_S2C_LANDLORD_PUSH) {
+	if response.RequestId != 2 || response.MsgId != uint32(demopb.MsgId_S2C_LANDLORD_SNAPSHOT) || push.RequestId != 0 || push.MsgId != uint32(demopb.MsgId_S2C_LANDLORD_PLAY_PUSH) {
 		t.Fatalf("消息顺序错误: response=%v push=%v", response, push)
 	}
 	var old demopb.LandlordSnapshotResponse
-	var newer demopb.LandlordPush
+	var newer demopb.LandlordPlayPush
 	if err := proto.Unmarshal(response.Payload, &old); err != nil {
 		t.Fatal(err)
 	}
 	if err := proto.Unmarshal(push.Payload, &newer); err != nil {
 		t.Fatal(err)
 	}
-	if old.GetSnapshot().GetTurn() != 1 || newer.GetSnapshot().GetTurn() != 2 {
+	if old.GetSnapshot().GetTurn() != 1 || newer.GetTurn() != 2 {
 		t.Fatalf("快照轮次错误: response=%v push=%v", &old, &newer)
 	}
 }

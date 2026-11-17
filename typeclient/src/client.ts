@@ -1,6 +1,9 @@
 import { create, fromBinary, toBinary, type DescMessage, type MessageShape } from "@bufbuild/protobuf";
 import { EnvelopeSchema, ErrorResponseSchema, MsgId as CommonMsgId, type Envelope } from "./gen/gsr/common/v1/common_pb.js";
-import { LandlordPushSchema, type LandlordSnapshot, BalancePushSchema, BalanceSchema, MsgId, SnapshotPushSchema, type Balance, type Snapshot } from "./gen/demo/v1/game_pb.js";
+import { type LandlordSnapshot, BalancePushSchema, BalanceSchema, MsgId, SnapshotPushSchema, type Balance, type Snapshot,
+  LandlordSeatPushSchema, LandlordReadyPushSchema, LandlordDealPushSchema, LandlordBidPushSchema, LandlordPlayPushSchema, LandlordSettlementPushSchema,
+} from "./gen/demo/v1/game_pb.js";
+import { applyLandlordEvent, type LandlordEvent } from "./landlord_state.js";
 import { authenticatedFrame, completeClientHandshake, createClientHandshake, type ClientAuthenticator } from "./secure_auth.js";
 
 interface Pending {
@@ -18,6 +21,10 @@ export class DemoClient {
   private handshake?: { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void };
   snapshot?: Snapshot;
   landlord?: LandlordSnapshot;
+  private landlordEvents: LandlordEvent[] = [];
+  private landlordOverflow = false;
+  private landlordDiscardedThrough = 0n;
+  private landlordWake?: () => void;
   silver?: Balance;
   onPush: (kind: string, value: unknown) => void = () => {};
 
@@ -125,6 +132,73 @@ export class DemoClient {
     return true;
   }
 
+  // 进入和恢复使用完整场景；保留同时在途的较新事件，按序接续。
+  setLandlord(snapshot: LandlordSnapshot): void {
+    if (this.landlord?.roomName === snapshot.roomName && this.landlord.revision > snapshot.revision) return;
+    if (this.landlord && this.landlord.roomName !== snapshot.roomName) this.landlordDiscardedThrough = 0n;
+    this.landlord = snapshot;
+    this.landlordOverflow = snapshot.revision < this.landlordDiscardedThrough;
+    this.landlordEvents = this.landlordEvents.filter(event => event.value.roomName === snapshot.roomName && event.value.revision > snapshot.revision);
+    this.drainLandlordEvents();
+    this.landlordWake?.();
+  }
+
+  leaveLandlord(): void {
+    this.landlord = undefined;
+    this.landlordEvents = [];
+    this.landlordOverflow = false;
+    this.landlordDiscardedThrough = 0n;
+  }
+
+  get landlordNeedsSync(): boolean {
+    return this.landlordOverflow || !!(this.landlord && this.landlordEvents.some(event => event.value.roomName === this.landlord!.roomName && event.value.revision > this.landlord!.revision + 1n));
+  }
+
+  async waitLandlord(revision: bigint, timeoutMs: number): Promise<boolean> {
+    if (this.socket.readyState !== WebSocket.OPEN) throw new Error("connection closed; landlord scene must be restored");
+    if (!this.landlord || this.landlord.revision !== revision || this.landlordNeedsSync) return true;
+    return await new Promise<boolean>(resolve => {
+      const timer = setTimeout(() => { this.landlordWake = undefined; resolve(false); }, timeoutMs);
+      this.landlordWake = () => { clearTimeout(timer); this.landlordWake = undefined; resolve(true); };
+    });
+  }
+
+  private receiveLandlordEvent(event: LandlordEvent): void {
+    if (!event.value.roomName || event.value.revision === 0n) throw new Error("invalid landlord event");
+    if (this.landlord && event.value.roomName !== this.landlord.roomName) return;
+    if (this.landlord && event.value.revision <= this.landlord.revision) return;
+    if (this.landlordEvents.length >= 128) {
+      for (const item of this.landlordEvents) {
+        if (item.value.revision > this.landlordDiscardedThrough) this.landlordDiscardedThrough = item.value.revision;
+      }
+      if (event.value.revision > this.landlordDiscardedThrough) this.landlordDiscardedThrough = event.value.revision;
+      this.landlordEvents = [];
+      this.landlordOverflow = true;
+    } else if (!this.landlordEvents.some(item => item.value.roomName === event.value.roomName && item.value.revision === event.value.revision)) {
+      this.landlordEvents.push(event);
+    }
+    this.drainLandlordEvents();
+    this.landlordWake?.();
+  }
+
+  private drainLandlordEvents(): void {
+    const view = this.landlord;
+    if (!view || this.landlordOverflow) return;
+    for (;;) {
+      const index = this.landlordEvents.findIndex(event => event.value.roomName === view.roomName && event.value.revision === view.revision + 1n);
+      if (index < 0) break;
+      const [event] = this.landlordEvents.splice(index, 1);
+      try {
+        applyLandlordEvent(view, event!);
+      } catch {
+        this.landlordOverflow = true;
+        this.landlordDiscardedThrough = event!.value.revision;
+        return;
+      }
+      this.onPush(`landlord_event_${event!.kind}`, event!.value);
+    }
+  }
+
   close(): void {
     this.fail(new Error("client closed"));
     if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) this.socket.close();
@@ -139,12 +213,18 @@ export class DemoClient {
       waiting.resolve(envelope);
       return;
     }
-    if (envelope.msgId === MsgId.S2C_LANDLORD_PUSH) {
-      const message = fromBinary(LandlordPushSchema, envelope.payload);
-      if (message.snapshot && message.snapshot.roomName === this.landlord?.roomName && message.snapshot.turn >= this.landlord.turn) {
-        this.landlord = message.snapshot;
-        this.onPush("landlord_snapshot", message.snapshot);
-      }
+    if (envelope.msgId === MsgId.S2C_LANDLORD_SEAT_PUSH) {
+      this.receiveLandlordEvent({ kind: "seat", value: fromBinary(LandlordSeatPushSchema, envelope.payload) });
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_READY_PUSH) {
+      this.receiveLandlordEvent({ kind: "ready", value: fromBinary(LandlordReadyPushSchema, envelope.payload) });
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_DEAL_PUSH) {
+      this.receiveLandlordEvent({ kind: "deal", value: fromBinary(LandlordDealPushSchema, envelope.payload) });
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_BID_PUSH) {
+      this.receiveLandlordEvent({ kind: "bid", value: fromBinary(LandlordBidPushSchema, envelope.payload) });
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_PLAY_PUSH) {
+      this.receiveLandlordEvent({ kind: "play", value: fromBinary(LandlordPlayPushSchema, envelope.payload) });
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_SETTLEMENT_PUSH) {
+      this.receiveLandlordEvent({ kind: "settlement", value: fromBinary(LandlordSettlementPushSchema, envelope.payload) });
     } else if (envelope.msgId === MsgId.S2C_SNAPSHOT_PUSH) {
       const message = fromBinary(SnapshotPushSchema, envelope.payload);
       if (message.snapshot && this.snapshot?.attackName === message.snapshot.attackName) {
@@ -167,5 +247,6 @@ export class DemoClient {
       waiting.reject(error);
     }
     this.pending.clear();
+    this.landlordWake?.();
   }
 }

@@ -31,10 +31,7 @@ type landlordSavedResult struct {
 
 func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, request proto.Message) *demopb.LandlordSnapshot {
 	t.Helper()
-	var response interface {
-		proto.Message
-		GetSnapshot() *demopb.LandlordSnapshot
-	}
+	var response proto.Message
 	switch id {
 	case demopb.MsgId_C2S_LANDLORD_ENTER:
 		response = &demopb.LandlordEnterResponse{}
@@ -52,10 +49,20 @@ func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, re
 		t.Fatal("unsupported landlord response")
 	}
 	accessProcessResponse(t, client, id, request, response)
-	if response.GetSnapshot() == nil {
+	if action, ok := response.(interface {
+		GetSnapshot() *demopb.LandlordSnapshot
+	}); ok {
+		if action.GetSnapshot() == nil {
+			t.Fatal("missing landlord snapshot")
+		}
+		return action.GetSnapshot()
+	}
+	var snapshot demopb.LandlordSnapshotResponse
+	accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
+	if snapshot.GetSnapshot() == nil {
 		t.Fatal("missing landlord snapshot")
 	}
-	return response.GetSnapshot()
+	return snapshot.GetSnapshot()
 }
 
 func landlordRedis(t *testing.T, ctx context.Context, address string, args ...string) []byte {
