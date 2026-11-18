@@ -11,7 +11,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file demo/v1/game.proto.
  */
 export const file_demo_v1_game: GenFile = /*@__PURE__*/
-  fileDesc("ChJkZW1vL3YxL2dhbWUucHJvdG8SB2RlbW8udjEiCwoJQWN0aW9uQWNrIjkKE1Bhc3N3b3JkQXV0aFJlcXVlc3QSEAoIdXNlcm5hbWUYASABKAkSEAoIcGFzc3dvcmQYAiABKAkiVAoUUGFzc3dvcmRBdXRoUmVzcG9uc2USDwoHdXNlcl9pZBgBIAEoBBIUCgxhY2Nlc3NfdG9rZW4YAiABKAkSFQoNZXhwaXJlc19hdF9tcxgDIAEoAyIkCgxMb2dpblJlcXVlc3QSFAoMYWNjZXNzX3Rva2VuGAEgASgJIiAKDUxvZ2luUmVzcG9uc2USDwoHdXNlcl9pZBgBIAEoBCIOCgxFbnRlclJlcXVlc3QiVgoNRW50ZXJSZXNwb25zZRIjCghzbmFwc2hvdBgBIAEoCzIRLmRlbW8udjEuU25hcHNob3QSIAoGc2lsdmVyGAIgASgLMhAuZGVtby52MS5CYWxhbmNlIkAKCkhpdFJlcXVlc3QSEQoJYWN0aW9uX2lkGAEgASgJEhEKCXNwYXduX3NlcRgCIAEoBBIMCgRob2xlGAMgASgDIl0KC0hpdFJlc3BvbnNlEhkKA2hpdBgBIAEoCzIMLmRlbW8udjEuSGl0EiAKBnNpbHZlchgCIAEoCzIQLmRlbW8udjEuQmFsYW5jZRIRCglyZWplY3Rpb24YAyABKAkiEQoPU25hcHNob3RSZXF1ZXN0IjcKEFNuYXBzaG90UmVzcG9uc2USIwoIc25hcHNob3QYASABKAsyES5kZW1vLnYxLlNuYXBzaG90Ig4KDExlYXZlUmVxdWVzdCIzCgxTbmFwc2hvdFB1c2gSIwoIc25hcHNob3QYASABKAsyES5kZW1vLnYxLlNuYXBzaG90Ii8KC0JhbGFuY2VQdXNoEiAKBnNpbHZlchgBIAEoCzIQLmRlbW8udjEuQmFsYW5jZSJsCgdCYWxhbmNlEg8KB2JhbGFuY2UYASABKAMSKwoJY29uZmlybWVkGAIgASgLMhguZGVtby52MS5Db25maXJtZWRTaWx2ZXISEQoJYXZhaWxhYmxlGAMgASgDEhAKCHJldmlzaW9uGAQgASgEIjIKD0NvbmZpcm1lZFNpbHZlchIOCgZhbW91bnQYASABKAMSDwoHdmVyc2lvbhgCIAEoBCInCgZNZW1iZXISDwoHdXNlcl9pZBgBIAEoBBIMCgRzZWF0GAIgASgDIk8KBlRhcmdldBIRCglzcGF3bl9zZXEYASABKAQSDAoEaG9sZRgCIAEoAxITCgtkZWFkbGluZV9tcxgDIAEoAxIPCgdjbGFpbWVkGAQgASgIIngKA0hpdBIOCgZoaXRfaWQYASABKAkSEQoJYWN0aW9uX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRINCgVkZWJpdBgEIAEoAxIOCgZjcmVkaXQYBSABKAMSEQoJc3Bhd25fc2VxGAYgASgEEgwKBGhvbGUYByABKAMioAEKCFNuYXBzaG90EhMKC2F0dGFja19uYW1lGAEgASgJEhEKCXNlcnZlcl9tcxgCIAEoAxIMCgRzZWF0GAMgASgDEiAKB21lbWJlcnMYBCADKAsyDy5kZW1vLnYxLk1lbWJlchIgCgd0YXJnZXRzGAUgAygLMg8uZGVtby52MS5UYXJnZXQSGgoEaGl0cxgGIAMoCzIMLmRlbW8udjEuSGl0IhYKFExhbmRsb3JkRW50ZXJSZXF1ZXN0IhYKFExhbmRsb3JkUmVhZHlSZXF1ZXN0IikKFkxhbmRsb3JkVHJ1c3RlZVJlcXVlc3QSDwoHZW5hYmxlZBgBIAEoCCIyChNMYW5kbG9yZFBsYXlSZXF1ZXN0EgwKBHR1cm4YASABKAQSDQoFY2FyZHMYAiADKAMiGQoXTGFuZGxvcmRTbmFwc2hvdFJlcXVlc3QiFgoUTGFuZGxvcmRMZWF2ZVJlcXVlc3QiRAoVTGFuZGxvcmRFbnRlclJlc3BvbnNlEisKCHNuYXBzaG90GAEgASgLMhkuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90IkcKGExhbmRsb3JkU25hcHNob3RSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCIwChNMYW5kbG9yZENhbGxSZXF1ZXN0EgwKBHR1cm4YASABKAQSCwoDeWVzGAIgASgIIi8KEkxhbmRsb3JkUm9iUmVxdWVzdBIMCgR0dXJuGAEgASgEEgsKA3llcxgCIAEoCCKLAQoOTGFuZGxvcmRQbGF5ZXISDwoHdXNlcl9pZBgBIAEoBBIMCgRzZWF0GAIgASgDEg0KBXJlYWR5GAMgASgIEhEKCXJlbWFpbmlu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YW5kbG9yZFNldHRsZW1lbnQilgEKE0xhbmRsb3JkVHJ1c3RlZVB1c2gSEQoJcm9vbV9uYW1lGAEgASgJEhAKCHJldmlzaW9uGAIgASgEEg8KB3VzZXJfaWQYAyABKAQSDwoHdHJ1c3RlZRgEIAEoCBITCgtkZWFkbGluZV9tcxgFIAEoAxIRCglzZXJ2ZXJfbXMYBiABKAMSEAoIc3RhcnRfbXMYByABKAMijwEKEExhbmRsb3JkVHVyblB1c2gSEQoJcm9vbV9uYW1lGAEgASgJEhAKCHJldmlzaW9uGAIgASgEEg0KBXBoYXNlGAMgASgJEgwKBHR1cm4YBCABKAQSEQoJdHVybl9zZWF0GAUgASgDEhMKC2RlYWRsaW5lX21zGAYgASgDEhEKCXNlcnZlcl9tcxgHIAEoAyrEDwoFTXNnSWQSFgoSTVNHX0lEX1VOU1BFQ0lGSUVEEAASMQoOUzJDX0FDVElPTl9BQ0sQ7QcaHIq1GBgKEi5kZW1vLnYxLkFjdGlvbkFjaxACGAMSLwoJQzJTX0xPR0lOEOkHGh+KtRgbChUuZGVtby52MS5Mb2dpblJlcXVlc3QQARgBEjAKCVMyQ19MT0dJThDqBxogirUYHAoWLmRlbW8udjEuTG9naW5SZXNwb25zZRACGAMSPgoRQzJTX1BBU1NXT1JEX0FVVEgQ6wcaJoq1GCIKHC5kZW1vLnYxLlBhc3N3b3JkQXV0aFJlcXVlc3QQARgBEj8KEVMyQ19QQVNTV09SRF9BVVRIEOwHGieKtRgjCh0uZGVtby52MS5QYXNzd29yZEF1dGhSZXNwb25zZRACGAMSLwoJQzJTX0VOVEVSEPMHGh+KtRgbChUuZGVtby52MS5FbnRlclJlcXVlc3QQARgBEjAKCVMyQ19FTlRFUhD0BxogirUYHAoWLmRlbW8udjEuRW50ZXJSZXNwb25zZRACGAMSKwoHQzJTX0hJVBD9BxodirUYGQoTLmRlbW8udjEuSGl0UmVxdWVzdBABGAESLAoHUzJDX0hJVBD+BxoeirUYGgoULmRlbW8udjEuSGl0UmVzcG9uc2UQAhgDEjUKDEMyU19TTkFQU0hPVBCHCBoiirUYHgoYLmRlbW8udjEuU25hcHNob3RSZXF1ZXN0EAEYARI2CgxTMkNfU05BUFNIT1QQiAgaI4q1GB8KGS5kZW1vLnYxLlNuYXBzaG90UmVzcG9uc2UQAhgDEi8KCUMyU19MRUFWRRCRCBofirUYGwoVLmRlbW8udjEuTGVhdmVSZXF1ZXN0EAEYARI3ChFTMkNfU05BUFNIT1RfUFVTSBClCBofirUYGwoVLmRlbW8udjEuU25hcHNob3RQdXNoEAIYBBI1ChBTMkNfQkFMQU5DRV9QVVNIEKYIGh6KtRgaChQuZGVtby52MS5CYWxhbmNlUHVzaBACGAQSQAoSQzJTX0xBTkRMT1JEX0VOVEVSEM0IGieKtRgjCh0uZGVtby52MS5MYW5kbG9yZEVudGVyUmVxdWVzdBABGAESQQoSUzJDX0xBTkRMT1JEX0VOVEVSEM4IGiiKtRgkCh4uZGVtby52MS5MYW5kbG9yZEVudGVyUmVzcG9uc2UQAhgDEkAKEkMyU19MQU5ETE9SRF9SRUFEWRDXCBonirUYIwodLmRlbW8udjEuTGFuZGxvcmRSZWFkeVJlcXVlc3QQARgBEj4KEUMyU19MQU5ETE9SRF9QTEFZEOEIGiaKtRgiChwuZGVtby52MS5MYW5kbG9yZFBsYXlSZXF1ZXN0EAEYARJGChVDMlNfTEFORExPUkRfU05BUFNIT1QQ6wgaKoq1GCYKIC5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3RSZXF1ZXN0EAEYARJHChVTMkNfTEFORExPUkRfU05BUFNIT1QQ7AgaK4q1GCcKIS5kZW1vLnYxLkxhbmRsb3JkU25hcHNob3RSZXNwb25zZRACGAMSQAoSQzJTX0xBTkRMT1JEX0xFQVZFEPUIGieKtRgjCh0uZGVtby52MS5MYW5kbG9yZExlYXZlUmVxdWVzdBABGAESQAoWUzJDX0xBTkRMT1JEX1NFQVRfUFVTSBCnCRojirUYHwoZLmRlbW8udjEuTGFuZGxvcmRTZWF0UHVzaBACGAQSQgoXUzJDX0xBTkRMT1JEX1JFQURZX1BVU0gQqAkaJIq1GCAKGi5kZW1vLnYxLkxhbmRsb3JkUmVhZHlQdXNoEAIYBBJAChZTMkNfTEFORExPUkRfREVBTF9QVVNIEKkJGiOKtRgfChkuZGVtby52MS5MYW5kbG9yZERlYWxQdXNoEAIYBBI+ChVTMkNfTEFORExPUkRfQklEX1BVU0gQqgkaIoq1GB4KGC5kZW1vLnYxLkxhbmRsb3JkQmlkUHVzaBACGAQSQAoWUzJDX0xBTkRMT1JEX1BMQVlfUFVTSBCrCRojirUYHwoZLmRlbW8udjEuTGFuZGxvcmRQbGF5UHVzaBACGAQSTAocUzJDX0xBTkRMT1JEX1NFVFRMRU1FTlRfUFVTSBCsCRopirUYJQofLmRlbW8udjEuTGFuZGxvcmRTZXR0bGVtZW50UHVzaBACGAQSRgoZUzJDX0xBTkRMT1JEX1RSVVNURUVfUFVTSBCtCRomirUYIgocLmRlbW8udjEuTGFuZGxvcmRUcnVzdGVlUHVzaBACGAQSRAoUQzJTX0xBTkRMT1JEX1RSVVNURUUQsQkaKYq1GCUKHy5kZW1vLnYxLkxhbmRsb3JkVHJ1c3RlZVJlcXVlc3QQARgBEkAKFlMyQ19MQU5ETE9SRF9UVVJOX1BVU0gQrgkaI4q1GB8KGS5kZW1vLnYxLkxhbmRsb3JkVHVyblB1c2gQAhgEEj4KEUMyU19MQU5ETE9SRF9DQUxMEJMJGiaKtRgiChwuZGVtby52MS5MYW5kbG9yZENhbGxSZXF1ZXN0EAEYARI8ChBDMlNfTEFORExPUkRfUk9CEJ0JGiWKtRghChsuZGVtby52MS5MYW5kbG9yZFJvYlJlcXVlc3QQARgBQj1aO2dpdGh1Yi5jb20vY25vb2xqYXcvZ3NyZGVtby9ub2Rlcy9hY2Nlc3MvZ2VuL2RlbW8vdjE7ZGVtb3BiYgZwcm90bzM", [file_gsr_protocol_v1_options]);
+  fileDesc("ChJkZW1vL3YxL2dhbWUucHJvdG8SB2RlbW8udjEiCwoJQWN0aW9uQWNrIjkKE1Bhc3N3b3JkQXV0aFJlcXVlc3QSEAoIdXNlcm5hbWUYASABKAkSEAoIcGFzc3dvcmQYAiABKAkiVAoUUGFzc3dvcmRBdXRoUmVzcG9uc2USDwoHdXNlcl9pZBgBIAEoBBIUCgxhY2Nlc3NfdG9rZW4YAiABKAkSFQoNZXhwaXJlc19hdF9tcxgDIAEoAyIkCgxMb2dpblJlcXVlc3QSFAoMYWNjZXNzX3Rva2VuGAEgASgJIiAKDUxvZ2luUmVzcG9uc2USDwoHdXNlcl9pZBgBIAEoBCIOCgxFbnRlclJlcXVlc3QiVgoNRW50ZXJSZXNwb25zZRIjCghzbmFwc2hvdBgBIAEoCzIRLmRlbW8udjEuU25hcHNob3QSIAoGc2lsdmVyGAIgASgLMhAuZGVtby52MS5CYWxhbmNlIkAKCkhpdFJlcXVlc3QSEQoJYWN0aW9uX2lkGAEgASgJEhEKCXNwYXduX3NlcRgCIAEoBBIMCgRob2xlGAMgASgDIl0KC0hpdFJlc3BvbnNlEhkKA2hpdBgBIAEoCzIMLmRlbW8udjEuSGl0EiAKBnNpbHZlchgCIAEoCzIQLmRlbW8udjEuQmFsYW5jZRIRCglyZWplY3Rpb24YAyABKAkiEQoPU25hcHNob3RSZXF1ZXN0IjcKEFNuYXBzaG90UmVzcG9uc2USIwoIc25hcHNob3QYASABKAsyES5kZW1vLnYxLlNuYXBzaG90Ig4KDExlYXZlUmVxdWVzdCIzCgxTbmFwc2hvdFB1c2gSIwoIc25hcHNob3QYASABKAsyES5kZW1vLnYxLlNuYXBzaG90Ii8KC0JhbGFuY2VQdXNoEiAKBnNpbHZlchgBIAEoCzIQLmRlbW8udjEuQmFsYW5jZSJsCgdCYWxhbmNlEg8KB2JhbGFuY2UYASABKAMSKwoJY29uZmlybWVkGAIgASgLMhguZGVtby52MS5Db25maXJtZWRTaWx2ZXISEQoJYXZhaWxhYmxlGAMgASgDEhAKCHJldmlzaW9uGAQgASgEIjIKD0NvbmZpcm1lZFNpbHZlchIOCgZhbW91bnQYASABKAMSDwoHdmVyc2lvbhgCIAEoBCInCgZNZW1iZXISDwoHdXNlcl9pZBgBIAEoBBIMCgRzZWF0GAIgASgDIk8KBlRhcmdldBIRCglzcGF3bl9zZXEYASABKAQSDAoEaG9sZRgCIAEoAxITCgtkZWFkbGluZV9tcxgDIAEoAxIPCgdjbGFpbWVkGAQgASgIIngKA0hpdBIOCgZoaXRfaWQYASABKAkSEQoJYWN0aW9uX2lkGAIgASgJEg4KBnN0YXR1cxgDIAEoCRINCgVkZWJpdBgEIAEoAxIOCgZjcmVkaXQYBSABKAMSEQoJc3Bhd25fc2VxGAYgASgEEgwKBGhvbGUYByABKAMioAEKCFNuYXBzaG90EhMKC2F0dGFja19uYW1lGAEgASgJEhEKCXNlcnZlcl9tcxgCIAEoAxIMCgRzZWF0GAMgASgDEiAKB21lbWJlcnMYBCADKAsyDy5kZW1vLnYxLk1lbWJlchIgCgd0YXJnZXRzGAUgAygLMg8uZGVtby52MS5UYXJnZXQSGgoEaGl0cxgGIAMoCzIMLmRlbW8udjEuSGl0IhYKFExhbmRsb3JkRW50ZXJSZXF1ZXN0IkQKFUxhbmRsb3JkRW50ZXJSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCIWChRMYW5kbG9yZFJlYWR5UmVxdWVzdCIwChNMYW5kbG9yZENhbGxSZXF1ZXN0EgwKBHR1cm4YASABKAQSCwoDeWVzGAIgASgIIi8KEkxhbmRsb3JkUm9iUmVxdWVzdBIMCgR0dXJuGAEgASgEEgsKA3llcxgCIAEoCCIyChNMYW5kbG9yZFBsYXlSZXF1ZXN0EgwKBHR1cm4YASABKAQSDQoFY2FyZHMYAiADKAMiKQoWTGFuZGxvcmRUcnVzdGVlUmVxdWVzdBIPCgdlbmFibGVkGAEgASgIIhkKF0xhbmRsb3JkU25hcHNob3RSZXF1ZXN0IkcKGExhbmRsb3JkU25hcHNob3RSZXNwb25zZRIrCghzbmFwc2hvdBgBIAEoCzIZLmRlbW8udjEuTGFuZGxvcmRTbmFwc2hvdCIWChRMYW5kbG9yZExlYXZlUmVxdWVzdCLJAwoQTGFuZGxvcmRTbmFwc2hvdBIRCglyb29tX25hbWUYASABKAkSDQoFcGhhc2UYAiABKAkSDAoEc2VhdBgDIAEoAxIoCgdwbGF5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YW5kbG9yZFNldHRsZW1lbnQilgEKE0xhbmRsb3JkVHJ1c3RlZVB1c2gSEQoJcm9vbV9uYW1lGAEgASgJEhAKCHJldmlzaW9uGAIgASgEEg8KB3VzZXJfaWQYAyABKAQSDwoHdHJ1c3RlZRgEIAEoCBITCgtkZWFkbGluZV9tcxgFIAEoAxIRCglzZXJ2ZXJfbXMYBiABKAMSEAoIc3RhcnRfbXMYByABKAMijwEKEExhbmRsb3JkVHVyblB1c2gSEQoJcm9vbV9uYW1lGAEgASgJEhAKCHJldmlzaW9uGAIgASgEEg0KBXBoYXNlGAMgASgJEgwKBHR1cm4YBCABKAQSEQoJdHVybl9zZWF0GAUgASgDEhMKC2RlYWRsaW5lX21zGAYgASgDEhEKCXNlcnZlcl9tcxgHIAEoAyrEDwoFTXNnSWQSFgoSTVNHX0lEX1VOU1BFQ0lGSUVEEAASMQoOUzJDX0FDVElPTl9BQ0sQ7QcaHIq1GBgKEi5kZW1vLnYxLkFjdGlvbkFjaxACGAMSPgoRQzJTX1BBU1NXT1JEX0FVVEgQ6wcaJoq1GCIKHC5kZW1vLnYxLlBhc3N3b3JkQXV0aFJlcXVlc3QQARgBEj8KEVMyQ19QQVNTV09SRF9BVVRIEOwHGieKtRgjCh0uZGVtby52MS5QYXNzd29yZEF1dGhSZXNwb25zZRACGAMSLwoJQzJTX0xPR0lOEOkHGh+KtRgbChUuZGVtby52MS5Mb2dpblJlcXVlc3QQARgBEjAKCVMyQ19MT0dJThDqBxogirUYHAoWLmRlbW8udjEuTG9naW5SZXNwb25zZRACGAMSLwoJQzJTX0VOVEVSEPMHGh+KtRgbChUuZGVtby52MS5FbnRlclJlcXVlc3QQARgBEjAKCVMyQ19FTlRFUhD0BxogirUYHAoWLmRlbW8udjEuRW50ZXJSZXNwb25zZRACGAMSKwoHQzJTX0hJVBD9BxodirUYGQoTLmRlbW8udjEuSGl0UmVxdWVzdBABGAESLAoHUzJDX0hJVBD+BxoeirUYGgoULmRlbW8udjEuSGl0UmVzcG9uc2UQAhgDEjUKDEMyU19TTkFQU0hPVBCHCBoiirUYHgoYLmRlbW8udjEuU25hcHNob3RSZXF1ZXN0EAEYARI2CgxTMkNfU05BUFNIT1QQiAgaI4q1GB8KGS5kZW1vLnYxLlNuYXBzaG90UmVzcG9uc2UQAhgDEi8KCUMyU19MRUFWRRCRCBofirUYGwoVLmRlbW8udjEuTGVhdmVSZXF1ZXN0EAEYARI3ChFTMkNfU05BUFNIT1RfUFVTSBClCBofirUYGwoVLmRlbW8udjEuU25hcHNob3RQdXNoEAIYBBI1ChBTMkNfQkFMQU5DRV9QVVNIEKYIGh6KtRgaChQuZGVtby52MS5CYWxhbmNlUHVzaBACGAQSQAoSQzJTX0xBTkRMT1JEX0VOVEVSEM0IGieKtRgjCh0uZGVtby52MS5MYW5kbG9yZEVudGVyUmVxdWVzdBABGAESQQoSUzJDX0xBTkRMT1JEX0VOVEVSEM4IGiiKtRgkCh4uZGVtby52MS5MYW5kbG9yZEVudGVyUmVzcG9uc2UQAhgDEkAKEkMyU19MQU5ETE9SRF9SRUFEWRDXCBonirUYIwodLmRlbW8udjEuTGFuZGxvcmRSZWFkeVJlcXVlc3QQARgBEj4KEUMyU19MQU5ETE9SRF9DQUxMEJMJGiaKtRgiChwuZGVtby52MS5MYW5kbG9yZENhbGxSZXF1ZXN0EAEYARI8ChBDMlNfTEFORExPUkRfUk9CEJ0JGiWKtRghChsuZGVtby52MS5MYW5kbG9yZFJvYlJlcXVlc3QQARgBEj4KEUMyU19MQU5ETE9SRF9QTEFZEOEIGiaKtRgiChwuZGVtby52MS5MYW5kbG9yZFBsYXlSZXF1ZXN0EAEYARJEChRDMlNfTEFORExPUkRfVFJVU1RFRRCxCRopirUYJQofLmRlbW8udjEuTGFuZGxvcmRUcnVzdGVlUmVxdWVzdBABGAESRgoVQzJTX0xBTkRMT1JEX1NOQVBTSE9UEOsIGiqKtRgmCiAuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90UmVxdWVzdBABGAESRwoVUzJDX0xBTkRMT1JEX1NOQVBTSE9UEOwIGiuKtRgnCiEuZGVtby52MS5MYW5kbG9yZFNuYXBzaG90UmVzcG9uc2UQAhgDEkAKEkMyU19MQU5ETE9SRF9MRUFWRRD1CBonirUYIwodLmRlbW8udjEuTGFuZGxvcmRMZWF2ZVJlcXVlc3QQARgBEkAKFlMyQ19MQU5ETE9SRF9TRUFUX1BVU0gQpwkaI4q1GB8KGS5kZW1vLnYxLkxhbmRsb3JkU2VhdFB1c2gQAhgEEkIKF1MyQ19MQU5ETE9SRF9SRUFEWV9QVVNIEKgJGiSKtRggChouZGVtby52MS5MYW5kbG9yZFJlYWR5UHVzaBACGAQSQAoWUzJDX0xBTkRMT1JEX0RFQUxfUFVTSBCpCRojirUYHwoZLmRlbW8udjEuTGFuZGxvcmREZWFsUHVzaBACGAQSPgoVUzJDX0xBTkRMT1JEX0JJRF9QVVNIEKoJGiKKtRgeChguZGVtby52MS5MYW5kbG9yZEJpZFB1c2gQAhgEEkAKFlMyQ19MQU5ETE9SRF9QTEFZX1BVU0gQqwkaI4q1GB8KGS5kZW1vLnYxLkxhbmRsb3JkUGxheVB1c2gQAhgEEkwKHFMyQ19MQU5ETE9SRF9TRVRUTEVNRU5UX1BVU0gQrAkaKYq1GCUKHy5kZW1vLnYxLkxhbmRsb3JkU2V0dGxlbWVudFB1c2gQAhgEEkYKGVMyQ19MQU5ETE9SRF9UUlVTVEVFX1BVU0gQrQkaJoq1GCIKHC5kZW1vLnYxLkxhbmRsb3JkVHJ1c3RlZVB1c2gQAhgEEkAKFlMyQ19MQU5ETE9SRF9UVVJOX1BVU0gQrgkaI4q1GB8KGS5kZW1vLnYxLkxhbmRsb3JkVHVyblB1c2gQAhgEQj1aO2dpdGh1Yi5jb20vY25vb2xqYXcvZ3NyZGVtby9ub2Rlcy9hY2Nlc3MvZ2VuL2RlbW8vdjE7ZGVtb3BiYgZwcm90bzM", [file_gsr_protocol_v1_options]);
 
 /**
  * @generated from message demo.v1.ActionAck
@@ -112,6 +112,8 @@ export const LoginResponseSchema: GenMessage<LoginResponse> = /*@__PURE__*/
   messageDesc(file_demo_v1_game, 4);
 
 /**
+ * 地鼠请求、响应与推送。
+ *
  * @generated from message demo.v1.EnterRequest
  */
 export type EnterRequest = Message<"demo.v1.EnterRequest"> & {
@@ -481,7 +483,7 @@ export const SnapshotSchema: GenMessage<Snapshot> = /*@__PURE__*/
   messageDesc(file_demo_v1_game, 19);
 
 /**
- * 斗地主使用独立消息，不改变地鼠客户端协议；空出牌列表表示不出。
+ * 斗地主请求与响应。
  *
  * @generated from message demo.v1.LandlordEnterRequest
  */
@@ -494,84 +496,6 @@ export type LandlordEnterRequest = Message<"demo.v1.LandlordEnterRequest"> & {
  */
 export const LandlordEnterRequestSchema: GenMessage<LandlordEnterRequest> = /*@__PURE__*/
   messageDesc(file_demo_v1_game, 20);
-
-/**
- * @generated from message demo.v1.LandlordReadyRequest
- */
-export type LandlordReadyRequest = Message<"demo.v1.LandlordReadyRequest"> & {
-};
-
-/**
- * Describes the message demo.v1.LandlordReadyRequest.
- * Use `create(LandlordReadyRequestSchema)` to create a new message.
- */
-export const LandlordReadyRequestSchema: GenMessage<LandlordReadyRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 21);
-
-/**
- * @generated from message demo.v1.LandlordTrusteeRequest
- */
-export type LandlordTrusteeRequest = Message<"demo.v1.LandlordTrusteeRequest"> & {
-  /**
-   * @generated from field: bool enabled = 1;
-   */
-  enabled: boolean;
-};
-
-/**
- * Describes the message demo.v1.LandlordTrusteeRequest.
- * Use `create(LandlordTrusteeRequestSchema)` to create a new message.
- */
-export const LandlordTrusteeRequestSchema: GenMessage<LandlordTrusteeRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 22);
-
-/**
- * @generated from message demo.v1.LandlordPlayRequest
- */
-export type LandlordPlayRequest = Message<"demo.v1.LandlordPlayRequest"> & {
-  /**
-   * @generated from field: uint64 turn = 1;
-   */
-  turn: bigint;
-
-  /**
-   * @generated from field: repeated int64 cards = 2;
-   */
-  cards: bigint[];
-};
-
-/**
- * Describes the message demo.v1.LandlordPlayRequest.
- * Use `create(LandlordPlayRequestSchema)` to create a new message.
- */
-export const LandlordPlayRequestSchema: GenMessage<LandlordPlayRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 23);
-
-/**
- * @generated from message demo.v1.LandlordSnapshotRequest
- */
-export type LandlordSnapshotRequest = Message<"demo.v1.LandlordSnapshotRequest"> & {
-};
-
-/**
- * Describes the message demo.v1.LandlordSnapshotRequest.
- * Use `create(LandlordSnapshotRequestSchema)` to create a new message.
- */
-export const LandlordSnapshotRequestSchema: GenMessage<LandlordSnapshotRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 24);
-
-/**
- * @generated from message demo.v1.LandlordLeaveRequest
- */
-export type LandlordLeaveRequest = Message<"demo.v1.LandlordLeaveRequest"> & {
-};
-
-/**
- * Describes the message demo.v1.LandlordLeaveRequest.
- * Use `create(LandlordLeaveRequestSchema)` to create a new message.
- */
-export const LandlordLeaveRequestSchema: GenMessage<LandlordLeaveRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 25);
 
 /**
  * @generated from message demo.v1.LandlordEnterResponse
@@ -588,24 +512,20 @@ export type LandlordEnterResponse = Message<"demo.v1.LandlordEnterResponse"> & {
  * Use `create(LandlordEnterResponseSchema)` to create a new message.
  */
 export const LandlordEnterResponseSchema: GenMessage<LandlordEnterResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 26);
+  messageDesc(file_demo_v1_game, 21);
 
 /**
- * @generated from message demo.v1.LandlordSnapshotResponse
+ * @generated from message demo.v1.LandlordReadyRequest
  */
-export type LandlordSnapshotResponse = Message<"demo.v1.LandlordSnapshotResponse"> & {
-  /**
-   * @generated from field: demo.v1.LandlordSnapshot snapshot = 1;
-   */
-  snapshot?: LandlordSnapshot | undefined;
+export type LandlordReadyRequest = Message<"demo.v1.LandlordReadyRequest"> & {
 };
 
 /**
- * Describes the message demo.v1.LandlordSnapshotResponse.
- * Use `create(LandlordSnapshotResponseSchema)` to create a new message.
+ * Describes the message demo.v1.LandlordReadyRequest.
+ * Use `create(LandlordReadyRequestSchema)` to create a new message.
  */
-export const LandlordSnapshotResponseSchema: GenMessage<LandlordSnapshotResponse> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 27);
+export const LandlordReadyRequestSchema: GenMessage<LandlordReadyRequest> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 22);
 
 /**
  * @generated from message demo.v1.LandlordCallRequest
@@ -627,7 +547,7 @@ export type LandlordCallRequest = Message<"demo.v1.LandlordCallRequest"> & {
  * Use `create(LandlordCallRequestSchema)` to create a new message.
  */
 export const LandlordCallRequestSchema: GenMessage<LandlordCallRequest> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 28);
+  messageDesc(file_demo_v1_game, 23);
 
 /**
  * @generated from message demo.v1.LandlordRobRequest
@@ -649,103 +569,95 @@ export type LandlordRobRequest = Message<"demo.v1.LandlordRobRequest"> & {
  * Use `create(LandlordRobRequestSchema)` to create a new message.
  */
 export const LandlordRobRequestSchema: GenMessage<LandlordRobRequest> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 24);
+
+/**
+ * @generated from message demo.v1.LandlordPlayRequest
+ */
+export type LandlordPlayRequest = Message<"demo.v1.LandlordPlayRequest"> & {
+  /**
+   * @generated from field: uint64 turn = 1;
+   */
+  turn: bigint;
+
+  /**
+   * 空列表表示不出。
+   *
+   * @generated from field: repeated int64 cards = 2;
+   */
+  cards: bigint[];
+};
+
+/**
+ * Describes the message demo.v1.LandlordPlayRequest.
+ * Use `create(LandlordPlayRequestSchema)` to create a new message.
+ */
+export const LandlordPlayRequestSchema: GenMessage<LandlordPlayRequest> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 25);
+
+/**
+ * @generated from message demo.v1.LandlordTrusteeRequest
+ */
+export type LandlordTrusteeRequest = Message<"demo.v1.LandlordTrusteeRequest"> & {
+  /**
+   * @generated from field: bool enabled = 1;
+   */
+  enabled: boolean;
+};
+
+/**
+ * Describes the message demo.v1.LandlordTrusteeRequest.
+ * Use `create(LandlordTrusteeRequestSchema)` to create a new message.
+ */
+export const LandlordTrusteeRequestSchema: GenMessage<LandlordTrusteeRequest> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 26);
+
+/**
+ * @generated from message demo.v1.LandlordSnapshotRequest
+ */
+export type LandlordSnapshotRequest = Message<"demo.v1.LandlordSnapshotRequest"> & {
+};
+
+/**
+ * Describes the message demo.v1.LandlordSnapshotRequest.
+ * Use `create(LandlordSnapshotRequestSchema)` to create a new message.
+ */
+export const LandlordSnapshotRequestSchema: GenMessage<LandlordSnapshotRequest> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 27);
+
+/**
+ * @generated from message demo.v1.LandlordSnapshotResponse
+ */
+export type LandlordSnapshotResponse = Message<"demo.v1.LandlordSnapshotResponse"> & {
+  /**
+   * @generated from field: demo.v1.LandlordSnapshot snapshot = 1;
+   */
+  snapshot?: LandlordSnapshot | undefined;
+};
+
+/**
+ * Describes the message demo.v1.LandlordSnapshotResponse.
+ * Use `create(LandlordSnapshotResponseSchema)` to create a new message.
+ */
+export const LandlordSnapshotResponseSchema: GenMessage<LandlordSnapshotResponse> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 28);
+
+/**
+ * @generated from message demo.v1.LandlordLeaveRequest
+ */
+export type LandlordLeaveRequest = Message<"demo.v1.LandlordLeaveRequest"> & {
+};
+
+/**
+ * Describes the message demo.v1.LandlordLeaveRequest.
+ * Use `create(LandlordLeaveRequestSchema)` to create a new message.
+ */
+export const LandlordLeaveRequestSchema: GenMessage<LandlordLeaveRequest> = /*@__PURE__*/
   messageDesc(file_demo_v1_game, 29);
 
 /**
- * @generated from message demo.v1.LandlordPlayer
- */
-export type LandlordPlayer = Message<"demo.v1.LandlordPlayer"> & {
-  /**
-   * @generated from field: uint64 user_id = 1;
-   */
-  userId: bigint;
-
-  /**
-   * @generated from field: int64 seat = 2;
-   */
-  seat: bigint;
-
-  /**
-   * @generated from field: bool ready = 3;
-   */
-  ready: boolean;
-
-  /**
-   * @generated from field: int64 remaining = 4;
-   */
-  remaining: bigint;
-
-  /**
-   * @generated from field: int64 call_choice = 5;
-   */
-  callChoice: bigint;
-
-  /**
-   * @generated from field: int64 rob_choice = 6;
-   */
-  robChoice: bigint;
-
-  /**
-   * @generated from field: bool trustee = 7;
-   */
-  trustee: boolean;
-};
-
-/**
- * Describes the message demo.v1.LandlordPlayer.
- * Use `create(LandlordPlayerSchema)` to create a new message.
- */
-export const LandlordPlayerSchema: GenMessage<LandlordPlayer> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 30);
-
-/**
- * @generated from message demo.v1.LandlordSettlement
- */
-export type LandlordSettlement = Message<"demo.v1.LandlordSettlement"> & {
-  /**
-   * @generated from field: string operation_id = 1;
-   */
-  operationId: string;
-
-  /**
-   * @generated from field: string status = 2;
-   */
-  status: string;
-
-  /**
-   * @generated from field: string reason = 3;
-   */
-  reason: string;
-
-  /**
-   * @generated from field: int64 debit = 4;
-   */
-  debit: bigint;
-
-  /**
-   * @generated from field: int64 credit = 5;
-   */
-  credit: bigint;
-
-  /**
-   * @generated from field: int64 balance = 6;
-   */
-  balance: bigint;
-
-  /**
-   * @generated from field: uint64 version = 7;
-   */
-  version: bigint;
-};
-
-/**
- * Describes the message demo.v1.LandlordSettlement.
- * Use `create(LandlordSettlementSchema)` to create a new message.
- */
-export const LandlordSettlementSchema: GenMessage<LandlordSettlement> = /*@__PURE__*/
-  messageDesc(file_demo_v1_game, 31);
-
-/**
+ * 斗地主快照与局末结算。
+ *
  * @generated from message demo.v1.LandlordSnapshot
  */
 export type LandlordSnapshot = Message<"demo.v1.LandlordSnapshot"> & {
@@ -860,6 +772,100 @@ export type LandlordSnapshot = Message<"demo.v1.LandlordSnapshot"> & {
  * Use `create(LandlordSnapshotSchema)` to create a new message.
  */
 export const LandlordSnapshotSchema: GenMessage<LandlordSnapshot> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 30);
+
+/**
+ * @generated from message demo.v1.LandlordPlayer
+ */
+export type LandlordPlayer = Message<"demo.v1.LandlordPlayer"> & {
+  /**
+   * @generated from field: uint64 user_id = 1;
+   */
+  userId: bigint;
+
+  /**
+   * @generated from field: int64 seat = 2;
+   */
+  seat: bigint;
+
+  /**
+   * @generated from field: bool ready = 3;
+   */
+  ready: boolean;
+
+  /**
+   * @generated from field: int64 remaining = 4;
+   */
+  remaining: bigint;
+
+  /**
+   * @generated from field: int64 call_choice = 5;
+   */
+  callChoice: bigint;
+
+  /**
+   * @generated from field: int64 rob_choice = 6;
+   */
+  robChoice: bigint;
+
+  /**
+   * @generated from field: bool trustee = 7;
+   */
+  trustee: boolean;
+};
+
+/**
+ * Describes the message demo.v1.LandlordPlayer.
+ * Use `create(LandlordPlayerSchema)` to create a new message.
+ */
+export const LandlordPlayerSchema: GenMessage<LandlordPlayer> = /*@__PURE__*/
+  messageDesc(file_demo_v1_game, 31);
+
+/**
+ * @generated from message demo.v1.LandlordSettlement
+ */
+export type LandlordSettlement = Message<"demo.v1.LandlordSettlement"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string status = 2;
+   */
+  status: string;
+
+  /**
+   * @generated from field: string reason = 3;
+   */
+  reason: string;
+
+  /**
+   * @generated from field: int64 debit = 4;
+   */
+  debit: bigint;
+
+  /**
+   * @generated from field: int64 credit = 5;
+   */
+  credit: bigint;
+
+  /**
+   * @generated from field: int64 balance = 6;
+   */
+  balance: bigint;
+
+  /**
+   * @generated from field: uint64 version = 7;
+   */
+  version: bigint;
+};
+
+/**
+ * Describes the message demo.v1.LandlordSettlement.
+ * Use `create(LandlordSettlementSchema)` to create a new message.
+ */
+export const LandlordSettlementSchema: GenMessage<LandlordSettlement> = /*@__PURE__*/
   messageDesc(file_demo_v1_game, 32);
 
 /**
@@ -1322,11 +1328,23 @@ export enum MsgId {
   MSG_ID_UNSPECIFIED = 0,
 
   /**
-   * 只确认执行成功的操作共用一个响应，业务状态由各游戏事件更新。
+   * 通用成功响应，使用原 request_id。
    *
    * @generated from enum value: S2C_ACTION_ACK = 1005;
    */
   S2C_ACTION_ACK = 1005,
+
+  /**
+   * 认证与登录。
+   *
+   * @generated from enum value: C2S_PASSWORD_AUTH = 1003;
+   */
+  C2S_PASSWORD_AUTH = 1003,
+
+  /**
+   * @generated from enum value: S2C_PASSWORD_AUTH = 1004;
+   */
+  S2C_PASSWORD_AUTH = 1004,
 
   /**
    * @generated from enum value: C2S_LOGIN = 1001;
@@ -1339,16 +1357,8 @@ export enum MsgId {
   S2C_LOGIN = 1002,
 
   /**
-   * @generated from enum value: C2S_PASSWORD_AUTH = 1003;
-   */
-  C2S_PASSWORD_AUTH = 1003,
-
-  /**
-   * @generated from enum value: S2C_PASSWORD_AUTH = 1004;
-   */
-  S2C_PASSWORD_AUTH = 1004,
-
-  /**
+   * 地鼠请求与响应。
+   *
    * @generated from enum value: C2S_ENTER = 1011;
    */
   C2S_ENTER = 1011,
@@ -1384,6 +1394,8 @@ export enum MsgId {
   C2S_LEAVE = 1041,
 
   /**
+   * 地鼠推送。
+   *
    * @generated from enum value: S2C_SNAPSHOT_PUSH = 1061;
    */
   S2C_SNAPSHOT_PUSH = 1061,
@@ -1394,6 +1406,8 @@ export enum MsgId {
   S2C_BALANCE_PUSH = 1062,
 
   /**
+   * 斗地主请求与响应。
+   *
    * @generated from enum value: C2S_LANDLORD_ENTER = 1101;
    */
   C2S_LANDLORD_ENTER = 1101,
@@ -1409,9 +1423,24 @@ export enum MsgId {
   C2S_LANDLORD_READY = 1111,
 
   /**
+   * @generated from enum value: C2S_LANDLORD_CALL = 1171;
+   */
+  C2S_LANDLORD_CALL = 1171,
+
+  /**
+   * @generated from enum value: C2S_LANDLORD_ROB = 1181;
+   */
+  C2S_LANDLORD_ROB = 1181,
+
+  /**
    * @generated from enum value: C2S_LANDLORD_PLAY = 1121;
    */
   C2S_LANDLORD_PLAY = 1121,
+
+  /**
+   * @generated from enum value: C2S_LANDLORD_TRUSTEE = 1201;
+   */
+  C2S_LANDLORD_TRUSTEE = 1201,
 
   /**
    * @generated from enum value: C2S_LANDLORD_SNAPSHOT = 1131;
@@ -1429,6 +1458,8 @@ export enum MsgId {
   C2S_LANDLORD_LEAVE = 1141,
 
   /**
+   * 斗地主牌桌事件。
+   *
    * @generated from enum value: S2C_LANDLORD_SEAT_PUSH = 1191;
    */
   S2C_LANDLORD_SEAT_PUSH = 1191,
@@ -1464,24 +1495,9 @@ export enum MsgId {
   S2C_LANDLORD_TRUSTEE_PUSH = 1197,
 
   /**
-   * @generated from enum value: C2S_LANDLORD_TRUSTEE = 1201;
-   */
-  C2S_LANDLORD_TRUSTEE = 1201,
-
-  /**
    * @generated from enum value: S2C_LANDLORD_TURN_PUSH = 1198;
    */
   S2C_LANDLORD_TURN_PUSH = 1198,
-
-  /**
-   * @generated from enum value: C2S_LANDLORD_CALL = 1171;
-   */
-  C2S_LANDLORD_CALL = 1171,
-
-  /**
-   * @generated from enum value: C2S_LANDLORD_ROB = 1181;
-   */
-  C2S_LANDLORD_ROB = 1181,
 }
 
 /**

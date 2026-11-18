@@ -9,23 +9,14 @@ option go_package = "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1;demopb
 enum MsgId {
   MSG_ID_UNSPECIFIED = 0;
 
-  // 只确认执行成功的操作共用一个响应，业务状态由各游戏事件更新。
+  // 通用成功响应，使用原 request_id。
   S2C_ACTION_ACK = 1005 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.ActionAck"
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_RESPONSE
   }];
 
-  C2S_LOGIN = 1001 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LoginRequest"
-    direction: DIRECTION_CLIENT_TO_SERVER
-    kind: KIND_REQUEST
-  }];
-  S2C_LOGIN = 1002 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LoginResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
-  }];
+  // 认证与登录。
   C2S_PASSWORD_AUTH = 1003 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.PasswordAuthRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
@@ -36,6 +27,18 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_RESPONSE
   }];
+  C2S_LOGIN = 1001 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LoginRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_LOGIN = 1002 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LoginResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+
+  // 地鼠请求与响应。
   C2S_ENTER = 1011 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.EnterRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
@@ -71,6 +74,8 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
+
+  // 地鼠推送。
   S2C_SNAPSHOT_PUSH = 1061 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.SnapshotPush"
     direction: DIRECTION_SERVER_TO_CLIENT
@@ -81,6 +86,8 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_PUSH
   }];
+
+  // 斗地主请求与响应。
   C2S_LANDLORD_ENTER = 1101 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordEnterRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
@@ -96,8 +103,23 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
+  C2S_LANDLORD_CALL = 1171 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordCallRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_LANDLORD_ROB = 1181 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordRobRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
   C2S_LANDLORD_PLAY = 1121 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordPlayRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_LANDLORD_TRUSTEE = 1201 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.LandlordTrusteeRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
@@ -116,6 +138,8 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
+
+  // 斗地主牌桌事件。
   S2C_LANDLORD_SEAT_PUSH = 1191 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordSeatPush"
     direction: DIRECTION_SERVER_TO_CLIENT
@@ -151,27 +175,10 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_PUSH
   }];
-  C2S_LANDLORD_TRUSTEE = 1201 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordTrusteeRequest"
-    direction: DIRECTION_CLIENT_TO_SERVER
-    kind: KIND_REQUEST
-  }];
   S2C_LANDLORD_TURN_PUSH = 1198 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordTurnPush"
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_PUSH
-  }];
-  C2S_LANDLORD_CALL = 1171 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordCallRequest"
-    direction: DIRECTION_CLIENT_TO_SERVER
-    kind: KIND_REQUEST
-  }];
-
-
-  C2S_LANDLORD_ROB = 1181 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordRobRequest"
-    direction: DIRECTION_CLIENT_TO_SERVER
-    kind: KIND_REQUEST
   }];
 }
 
@@ -193,6 +200,8 @@ message LoginRequest {
 message LoginResponse {
   uint64 user_id = 1;
 }
+
+// 地鼠请求、响应与推送。
 message EnterRequest {}
 message EnterResponse {
   Snapshot snapshot = 1;
@@ -261,65 +270,179 @@ message Snapshot {
   repeated Hit hits = 6;
 }
 
-// 斗地主使用独立消息，不改变地鼠客户端协议；空出牌列表表示不出。
+// 斗地主请求与响应。
 message LandlordEnterRequest {}
+
+message LandlordEnterResponse {
+  LandlordSnapshot snapshot = 1;
+}
+
 message LandlordReadyRequest {}
-message LandlordTrusteeRequest { bool enabled = 1; }
-message LandlordPlayRequest { uint64 turn = 1; repeated int64 cards = 2; }
+
+message LandlordCallRequest {
+  uint64 turn = 1;
+  bool yes = 2;
+}
+
+message LandlordRobRequest {
+  uint64 turn = 1;
+  bool yes = 2;
+}
+
+message LandlordPlayRequest {
+  uint64 turn = 1;
+  // 空列表表示不出。
+  repeated int64 cards = 2;
+}
+
+message LandlordTrusteeRequest {
+  bool enabled = 1;
+}
+
 message LandlordSnapshotRequest {}
+
+message LandlordSnapshotResponse {
+  LandlordSnapshot snapshot = 1;
+}
+
 message LandlordLeaveRequest {}
-message LandlordEnterResponse { LandlordSnapshot snapshot = 1; }
-message LandlordSnapshotResponse { LandlordSnapshot snapshot = 1; }
-message LandlordCallRequest {uint64 turn=1; bool yes=2;}
-message LandlordRobRequest {uint64 turn=1; bool yes=2;}
-message LandlordPlayer {
- uint64 user_id = 1;
- int64 seat = 2;
- bool ready = 3;
- int64 remaining = 4;
- int64 call_choice=5;
- int64 rob_choice=6;
- bool trustee=7;
-}
-message LandlordSettlement {
- string operation_id = 1;
- string status = 2;
- string reason = 3;
- int64 debit = 4;
- int64 credit = 5;
- int64 balance = 6;
- uint64 version = 7;
-}
+
+// 斗地主快照与局末结算。
 message LandlordSnapshot {
- string room_name = 1;
- string phase = 2;
- int64 seat = 3;
- repeated LandlordPlayer players = 4;
- repeated int64 hand = 5;
- repeated int64 bottom = 6;
- repeated int64 last_cards = 7;
- int64 last_seat = 8;
- int64 turn_seat = 9;
- uint64 turn = 10;
- int64 deadline_ms = 11;
- int64 landlord_seat = 12;
- int64 winner_seat = 13;
- LandlordSettlement settlement = 14;
- int64 multiplier=15;
- int64 candidate_seat=16;
- int64 redeals=17;
- uint64 revision=18;
- int64 server_ms=19;
- int64 start_ms=20;
- bool can_act=21;
+  string room_name = 1;
+  string phase = 2;
+  int64 seat = 3;
+  repeated LandlordPlayer players = 4;
+  repeated int64 hand = 5;
+  repeated int64 bottom = 6;
+  repeated int64 last_cards = 7;
+  int64 last_seat = 8;
+  int64 turn_seat = 9;
+  uint64 turn = 10;
+  int64 deadline_ms = 11;
+  int64 landlord_seat = 12;
+  int64 winner_seat = 13;
+  LandlordSettlement settlement = 14;
+  int64 multiplier = 15;
+  int64 candidate_seat = 16;
+  int64 redeals = 17;
+  uint64 revision = 18;
+  int64 server_ms = 19;
+  int64 start_ms = 20;
+  bool can_act = 21;
+}
+
+message LandlordPlayer {
+  uint64 user_id = 1;
+  int64 seat = 2;
+  bool ready = 3;
+  int64 remaining = 4;
+  int64 call_choice = 5;
+  int64 rob_choice = 6;
+  bool trustee = 7;
+}
+
+message LandlordSettlement {
+  string operation_id = 1;
+  string status = 2;
+  string reason = 3;
+  int64 debit = 4;
+  int64 credit = 5;
+  int64 balance = 6;
+  uint64 version = 7;
 }
 
 // 牌桌事件的 revision 在同一牌桌内递增；发牌与结算内容按接收者分别生成。
-message LandlordSeatPush { string room_name=1; uint64 revision=2; uint64 user_id=3; int64 seat=4; bool joined=5; bool ready=6; }
-message LandlordReadyPush { string room_name=1; uint64 revision=2; uint64 user_id=3; int64 seat=4; bool ready=5; }
-message LandlordDealPush { string room_name=1; uint64 revision=2; repeated int64 hand=3; uint64 turn=4; int64 turn_seat=5; int64 deadline_ms=6; int64 redeals=7; int64 server_ms=8; int64 start_ms=9; }
-message LandlordBidPush { string room_name=1; uint64 revision=2; uint64 user_id=3; bool rob=4; bool yes=5; string phase=6; uint64 turn=7; int64 turn_seat=8; int64 deadline_ms=9; int64 candidate_seat=10; int64 landlord_seat=11; int64 multiplier=12; repeated int64 bottom=13; bool redealt=14; int64 server_ms=15; int64 start_ms=16; bool can_act=17; }
-message LandlordPlayPush { string room_name=1; uint64 revision=2; uint64 user_id=3; repeated int64 cards=4; int64 remaining=5; string phase=6; uint64 turn=7; int64 turn_seat=8; int64 deadline_ms=9; repeated int64 last_cards=10; int64 last_seat=11; int64 winner_seat=12; int64 multiplier=13; int64 server_ms=14; int64 start_ms=15; bool can_act=16; }
-message LandlordSettlementPush { string room_name=1; uint64 revision=2; LandlordSettlement settlement=3; }
-message LandlordTrusteePush { string room_name=1; uint64 revision=2; uint64 user_id=3; bool trustee=4; int64 deadline_ms=5; int64 server_ms=6; int64 start_ms=7; }
-message LandlordTurnPush { string room_name=1; uint64 revision=2; string phase=3; uint64 turn=4; int64 turn_seat=5; int64 deadline_ms=6; int64 server_ms=7; }
+message LandlordSeatPush {
+  string room_name = 1;
+  uint64 revision = 2;
+  uint64 user_id = 3;
+  int64 seat = 4;
+  bool joined = 5;
+  bool ready = 6;
+}
+
+message LandlordReadyPush {
+  string room_name = 1;
+  uint64 revision = 2;
+  uint64 user_id = 3;
+  int64 seat = 4;
+  bool ready = 5;
+}
+
+message LandlordDealPush {
+  string room_name = 1;
+  uint64 revision = 2;
+  repeated int64 hand = 3;
+  uint64 turn = 4;
+  int64 turn_seat = 5;
+  int64 deadline_ms = 6;
+  int64 redeals = 7;
+  int64 server_ms = 8;
+  int64 start_ms = 9;
+}
+
+message LandlordBidPush {
+  string room_name = 1;
+  uint64 revision = 2;
+  uint64 user_id = 3;
+  bool rob = 4;
+  bool yes = 5;
+  string phase = 6;
+  uint64 turn = 7;
+  int64 turn_seat = 8;
+  int64 deadline_ms = 9;
+  int64 candidate_seat = 10;
+  int64 landlord_seat = 11;
+  int64 multiplier = 12;
+  repeated int64 bottom = 13;
+  bool redealt = 14;
+  int64 server_ms = 15;
+  int64 start_ms = 16;
+  bool can_act = 17;
+}
+
+message LandlordPlayPush {
+  string room_name = 1;
+  uint64 revision = 2;
+  uint64 user_id = 3;
+  repeated int64 cards = 4;
+  int64 remaining = 5;
+  string phase = 6;
+  uint64 turn = 7;
+  int64 turn_seat = 8;
+  int64 deadline_ms = 9;
+  repeated int64 last_cards = 10;
+  int64 last_seat = 11;
+  int64 winner_seat = 12;
+  int64 multiplier = 13;
+  int64 server_ms = 14;
+  int64 start_ms = 15;
+  bool can_act = 16;
+}
+
+message LandlordSettlementPush {
+  string room_name = 1;
+  uint64 revision = 2;
+  LandlordSettlement settlement = 3;
+}
+
+message LandlordTrusteePush {
+  string room_name = 1;
+  uint64 revision = 2;
+  uint64 user_id = 3;
+  bool trustee = 4;
+  int64 deadline_ms = 5;
+  int64 server_ms = 6;
+  int64 start_ms = 7;
+}
+
+message LandlordTurnPush {
+  string room_name = 1;
+  uint64 revision = 2;
+  string phase = 3;
+  uint64 turn = 4;
+  int64 turn_seat = 5;
+  int64 deadline_ms = 6;
+  int64 server_ms = 7;
+}
