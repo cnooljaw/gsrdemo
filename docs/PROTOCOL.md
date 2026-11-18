@@ -6,20 +6,21 @@
 
 ### 1.1 传输与通用约定
 
-客户端只连接 access。业务定义以 [game.proto](../nodes/access/proto/demo/v1/game.proto) 为准，是否可调用还取决于当前 [Agent 注册表](../nodes/access/agent_handlers.go)及各游戏组件的 ProtocolHandlers；保留生成类型不代表入口仍然启用。
+客户端只连接 access。消息编号和字段定义见 [game.proto](../nodes/access/proto/demo/v1/game.proto)，客户端请求由 [Agent](../nodes/access/agent_handlers.go) 和各游戏组件注册。
 
 | 项目 | 当前约定 |
 | --- | --- |
 | 传输 | GSR v1.0.4 MAC WebSocket；握手、序号和 MAC 由 Gate 处理，业务使用 Protobuf Envelope；MAC 不加密载荷 |
 | Envelope | `msg_id uint32`、`request_id uint32`、`payload bytes` |
-| 请求与响应 | 请求使用非零 request_id，响应回同一 ID；服务端推送 request_id=0 |
+| 请求与响应 | `KIND_REQUEST` 使用非零 `request_id`，`KIND_RESPONSE` 携带原 `request_id` |
+| 服务端推送 | `KIND_PUSH` 使用 `request_id=0`，按所属游戏的事件规则更新状态 |
 | 身份与路由 | 客户端不填写 UserID、LoginID、节点或 Service 地址，由 Agent 根据当前连接补齐 |
 | 进入准入 | 游戏请求要求已登录；一个连接不能同时进入地鼠和斗地主；游戏操作还要求已有对应路由 |
 | 64 位整数 | 银子、UserID、SpawnSeq、Turn、版本和修订号在 TS 中使用 bigint，不先转 Number 再计算 |
 | 消息交错 | 推送与其他请求响应可能交错；按当前路由、事件序号和余额修订号处理，不用到达顺序推断业务先后 |
 | 超时 | 超时不表示未执行；客户端不自动重发命中或出牌，不换操作 ID 掩盖未知结果 |
 
-以下表格按业务顺序排列。每个操作有独立的请求编号和类型，客户端按表指定预期的响应编号。只需确认成功的操作统一返回 `1005 ActionAck`（空消息），使用原 `request_id`。失败沿用 `ErrorResponse`。牌桌状态由组播事件或快照更新。
+客户端按下表指定预期的响应编号。只需确认成功的操作共用空消息 `1005 ActionAck`，请求失败时使用[通用错误](#15-错误)。
 
 ### 1.2 认证与登录
 
@@ -36,14 +37,17 @@
 
 处理入口：[comMole](../nodes/access/commole.go)。
 
-| 接口 | 请求 ID → 响应 ID | 请求字段 | 当前成功响应 |
+| 接口 | 请求 ID → 响应 ID | 请求字段 | 业务响应 |
 | --- | --- | --- | --- |
 | Enter | 1011 → 1012 | 空 | `snapshot Snapshot`、`silver Balance`，建立组路由和余额基线 |
-| Hit | 1021 → 1022 | `action_id string`、`spawn_seq uint64`、`hole int64`（0～8） | `hit Hit`、可选 `silver Balance`；明确目标失效时只带 `rejection="target_unavailable"` |
+| Hit | 1021 → 1022 | `action_id string`、`spawn_seq uint64`、`hole int64`（0～8） | 接纳或重放时返回 `hit Hit` 和可选 `silver Balance`。目标失效时只带 `rejection="target_unavailable"` |
 | Snapshot | 1031 → 1032 | 空 | `snapshot Snapshot`，当前组和本人命中记录 |
 | Leave | 1041 → 1005 | 空 | `ActionAck`；接入已清除组路由，已接纳账务继续处理 |
-| SnapshotPush | 服务端 → 1061 | 无请求 | `snapshot Snapshot`，当前组快照 |
-| BalancePush | 服务端 → 1062 | 无请求 | `silver Balance`，绝对余额校正，不是再次奖励 |
+
+| 推送 | 消息 ID | 主要字段与含义 |
+| --- | --- | --- |
+| SnapshotPush | 1061 | `snapshot Snapshot`，当前组快照 |
+| BalancePush | 1062 | `silver Balance`，用绝对余额校正显示值 |
 
 只有 Domain 错误 `mole.target_unavailable` 转为 HitResponse.rejection，表示本次未记账，可刷新快照后以新 ActionID 操作新目标；此时没有 hit/silver。其他错误使用 ErrorResponse。正常命中 `hit.status=accepted`；已明确拒绝的原请求重提可返回 `hit.status=rejected` 且无 silver，不能据此显示奖励。accepted 是内存接纳，不是财务入账完成；客户端继续玩法，不逐锤查询结算状态。
 
