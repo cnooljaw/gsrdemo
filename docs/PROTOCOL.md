@@ -191,12 +191,12 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | `RoomName / 6` Call | Call | `U, L, turn uint64, yes bool` | true；叫/不叫 |
 | `RoomName / 7` Rob | Call | `U, L, turn uint64, yes bool` | true；抢/不抢 |
 | `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | true；空列表表示不出 |
-| `RoomName / 9` Trustee | Call | `U, L, enabled bool` | true；本人托管开关；牌桌广播结果 |
+| `RoomName / 9` Trustee | Call | `U, L, enabled bool` | true 表示已达到请求的托管状态；状态变化时广播 Trustee |
 | `RoomName / 4` Snapshot | Call | `U, L` | 本人桌快照 |
 | `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回 C/S `ActionAck`；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
 | `landlord / 5` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
-快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Snapshot 回包的 `room_name` 与本次请求目标一致，Ready、Call、Rob、Play、Trustee 只接受 true 成功确认，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
+快照 map 与 C/S LandlordSnapshot 字段对应。access 核对 Join、Snapshot 回包的 `room_name`，并将 Ready、Call、Rob、Play、Trustee、Leave 的 `true` 转为 `ActionAck`。异常回包走[非法回包流程](DESIGN.md#33-失败替换与断线)。Join 超时可能已加入，只有明确目标不存在、已关闭或已崩溃才走 Discard 并重新选桌。目录和牌桌之间的本地消息见[节点内协作](#29-节点内协作)。
 
 Join 失败仍可能伴随旧成员回收的更新推送；该推送不代表本次进入成功，Call 继续返回原错误。成功 Join 广播入座事件，回收通知规则见[设计](DESIGN.md#63-重试清理与恢复)。
 
@@ -255,7 +255,7 @@ Group 接口的规则及限制：
 
 Call 成功返回回执后，财务结果仍看每项 status。1/6 的 rejected reason 为 insufficient_silver、balance_overflow 或 version_overflow；committed 时为空。7/8 对余额不足采用封顶，成功结果为 committed；其余额/版本溢出返回错误，不写入 rejected。接口 3 仅返回基本 OperationResult，不返回整组参与者实际扣返或付款明细。
 
-OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容复用原终态，不重复扣返；不同内容或切换接口策略报 identity_conflict。摘要由规范化内部结构的 JSON 作 SHA-256：单人及均分明细按 UserID/Reason/Debit/Credit 排序但不合并，批次操作顺序保持有意义；接口 8 的付款明细按付款、收款 UserID 排序。Single、均分 Group、明细 Group 的内部 BatchID 分别使用 `single-`、`group-equal-`、`group-transfer-` 加 OperationID 的 SHA-256 十六进制。历史结果仍可查询，旧 Group 写入口不再提供。
+OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容复用原终态，不重复扣返；不同内容或切换接口策略报 identity_conflict。摘要由规范化内部结构的 JSON 作 SHA-256：单人及均分明细按 UserID/Reason/Debit/Credit 排序但不合并，批次操作顺序保持有意义；接口 8 的付款明细按付款、收款 UserID 排序。Single、均分 Group、明细 Group 的内部 BatchID 分别使用 `single-`、`group-equal-`、`group-transfer-` 加 OperationID 的 SHA-256 十六进制。
 
 斗地主由本桌直接 Call 写池，校验原 OperationID、终态和三名参与者余额后推送各自的结算事件，再清理待记录。结果未知保留原请求，确认后不再调用结算；等待预算、重试及恢复边界见[斗地主恢复设计](DESIGN.md#63-重试清理与恢复)。
 
@@ -307,7 +307,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 ### 2.9 节点内协作
 
-公开 Service 的命令编号整体生成，不代表私有类型可以远程编解码或取消来源限制。地鼠内部消息均发往固定 MoleService，组与内存账之间使用普通函数；没有 Reserve、Resume、Forget 或准备补偿命令。
+节点内协作使用本地 Call 或 Send。地鼠的 Entry、MoleService 和 Submission 通过消息协作，组与内存账之间直接调用普通函数。
 
 | 调用方 → Service / Command | 方式 | 顺序参数 | 结果与来源限制 |
 | --- | --- | --- | --- |
@@ -363,19 +363,12 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
   → Entry Call online/online/2
   → 本地 Call mole/1 Enter
   → 仅缺余额：Call settlement-read/4，再本地 Call mole/1
-  ← 一次内存回调完成选组、入座、账户初始化并返回快照和 silver
+  ← 1012：一次内存回调完成选组、入座、账户初始化并返回快照和 silver
 
 1021 Hit
   → Agent Call mole/mole/2，携逻辑组标识
   → 私有组校验目标、固定 HitID 与扣返，普通函数调用内存账
-  ← accepted + HitID + 内存余额，客户端可继续
-
-MoleService 本地 Send 原批次给 Submission
-  → 保存 Redis pending，Call settlement-write/1
-  ← 返回完整回执或错误；结果未知按原批次重试
-  → 更新 Redis 确认统计、清除待批次
-  → 本地 Send 回执给 MoleService，应用确认余额并释放待扣
-  → 仅显示有差异：Send 当前 Agent / 102 → 客户端 1062
+  ← 1022：首次接纳返回 HitID 和内存余额，客户端可继续
 ```
 
 ### 3.3 地鼠后台入账与差异校正
@@ -394,16 +387,19 @@ MoleService/accounting.flush 本地 Send 原批次给 Submission
 
 ```text
 1101 Enter → Call landlord/landlord/1 → Call RoomName/1 Join
-  → 桌核对 Online 与本地成员实例 → 返回本人快照
-1111 Ready → Call RoomName/2 → Call settlement-read/4 准入 → 广播准备/发牌
+  → 桌核对 Online 与本地成员实例 → 返回 1102 本人快照
+1111 Ready → Call RoomName/2 → Call settlement-read/4 准入
+  → 广播准备，全员就绪时发牌 → 返回 1005 ActionAck
 1171 Call / 1181 Rob / 1121 Play → 桌 / 6、7、3（携带当前 Turn）
   → 桌更新状态、Send 事件给三名玩家
-  → 未结束时返回 1005 ActionAck；最后一手继续执行以下结算后再返回
-  → 本桌确定胜负，固定一个 OperationID 与三人金额
-  → 保存 Redis 待请求，Call settlement-write/7
-  → 池成员完成 MySQL 原子判定，直接返回回执或错误
-  → applyReceipt → Send 三人的当前 Agent/116 → C/S 1196
-  → 删除 Redis 待记录；删除失败只重试删除
+  → 最后一手固定 OperationID 与三人金额，并在本次回调尝试结算
+  ← 1005 ActionAck：操作已执行
+
+局末尝试结算（最后一手发起，待确认时由 Pulse 推进）
+  → 保存 Redis 待请求后 Call settlement-write/7
+    ├─ 有效回执 → applyReceipt → Send 当前 Agent/116 → C/S 1196 个人结算结果
+    │  → 删除 Redis 待记录，删除失败只重试删除
+    └─ 结果未知 → 保留同一 OperationID 和金额，按原请求重试
 ```
 
 两个游戏在回执未知时都重提原 ID 和原内容，不追加玩家查账。重启只恢复已经保存的账务请求，不恢复未保存命中或进行中手牌；边界见[持久化与故障汇总](DESIGN.md#8-持久化与故障边界汇总)。
