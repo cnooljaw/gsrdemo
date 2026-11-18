@@ -67,6 +67,73 @@ test("斗地主动作失败后恢复而不重复提交", async () => {
   assert.ok(calls.includes(MsgId.C2S_LANDLORD_SNAPSHOT));
 });
 
+// 保护三次无人叫地主后机器人重新准备，并且在事件尚未到达时不重复准备。
+test("斗地主回到等待阶段后重新准备一次", async () => {
+  const calls: number[] = [];
+  const snapshot = create(LandlordSnapshotSchema, { roomName: "table", phase: "calling", seat: 0n, turn: 3n, players: [{ userId: 1n, seat: 0n, ready: true }] });
+  let waits = 0;
+  const client = {
+    landlord: snapshot,
+    landlordNeedsSync: false,
+    setLandlord(view: typeof snapshot) { this.landlord = view; },
+    leaveLandlord() {},
+    landlordRecoveryWait() { return 1; },
+    async waitLandlord() {
+      waits++;
+      if (waits === 1) {
+        this.landlord.phase = "waiting";
+        this.landlord.turn = 12n;
+        this.landlord.players[0]!.ready = false;
+      } else if (waits === 3) {
+        this.landlord.phase = "finished";
+        this.landlord.settlement = createSettlement();
+      }
+      return true;
+    },
+    async request(id: number) {
+      calls.push(id);
+      if (id === MsgId.C2S_LANDLORD_ENTER) return { snapshot };
+      if (id === MsgId.C2S_LANDLORD_READY || id === MsgId.C2S_LANDLORD_LEAVE) return {};
+      throw new Error(`unexpected request ${id}`);
+    },
+  };
+  await runLandlord(client as unknown as DemoClient, () => {});
+  assert.equal(calls.filter(id => id === MsgId.C2S_LANDLORD_READY).length, 1);
+});
+
+// 保护准备回包丢失时先恢复场景：已准备则继续，未准备则报告错误而非反复提交。
+test("斗地主准备结果未知时通过场景确认", async () => {
+  for (const accepted of [true, false]) {
+    const calls: number[] = [];
+    const snapshot = create(LandlordSnapshotSchema, { roomName: "table", phase: "waiting", seat: 0n, turn: 3n, players: [{ userId: 1n, seat: 0n }] });
+    const recovered = create(LandlordSnapshotSchema, { roomName: "table", phase: "waiting", seat: 0n, turn: 3n, players: [{ userId: 1n, seat: 0n, ready: accepted }] });
+    const client = {
+      landlord: snapshot,
+      landlordNeedsSync: false,
+      setLandlord(view: typeof snapshot) { this.landlord = view; },
+      leaveLandlord() {},
+      landlordRecoveryWait() { return 1; },
+      async waitLandlord() {
+        this.landlord.phase = "finished";
+        this.landlord.settlement = createSettlement();
+        return true;
+      },
+      async request(id: number) {
+        calls.push(id);
+        if (id === MsgId.C2S_LANDLORD_ENTER) return { snapshot };
+        if (id === MsgId.C2S_LANDLORD_READY) throw new Error("ready outcome unknown");
+        if (id === MsgId.C2S_LANDLORD_SNAPSHOT) return { snapshot: recovered };
+        if (id === MsgId.C2S_LANDLORD_LEAVE) return {};
+        throw new Error(`unexpected request ${id}`);
+      },
+    };
+    if (accepted) await runLandlord(client as unknown as DemoClient, () => {});
+    else await assert.rejects(runLandlord(client as unknown as DemoClient, () => {}), /ready outcome unknown/);
+    assert.equal(calls.filter(id => id === MsgId.C2S_LANDLORD_READY).length, 1);
+    assert.equal(calls.filter(id => id === MsgId.C2S_LANDLORD_SNAPSHOT).length, 1);
+  }
+});
+
 function createSettlement() {
   return create(LandlordSettlementSchema, { status: "committed", operationId: "round" });
 }

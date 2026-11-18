@@ -20,11 +20,8 @@ export async function runLandlord(client: DemoClient, print: Printer): Promise<v
   if (!entry.snapshot) throw new Error("missing landlord snapshot");
   client.setLandlord(entry.snapshot);
   print("landlord_enter", entry.snapshot);
-  if (entry.snapshot.phase === "waiting" && !entry.snapshot.players.find(player => player.seat === entry.snapshot!.seat)?.ready) {
-    await client.request(MsgId.C2S_LANDLORD_READY,
-      toBinary(LandlordReadyRequestSchema, create(LandlordReadyRequestSchema)), MsgId.S2C_LANDLORD_READY, LandlordReadyResponseSchema);
-  }
   let lastAction = "";
+  let lastReadyTurn: bigint | undefined;
   const recover = async () => {
     const response = await client.request(MsgId.C2S_LANDLORD_SNAPSHOT,
       toBinary(LandlordSnapshotRequestSchema, create(LandlordSnapshotRequestSchema)), MsgId.S2C_LANDLORD_SNAPSHOT, LandlordSnapshotResponseSchema);
@@ -42,8 +39,22 @@ export async function runLandlord(client: DemoClient, print: Printer): Promise<v
       print("landlord_settlement", snapshot.settlement);
       break;
     }
+    const player = snapshot.players.find(item => item.seat === snapshot.seat);
+    if (snapshot.phase === "waiting" && !player?.ready && lastReadyTurn !== snapshot.turn) {
+      const turn = snapshot.turn;
+      lastReadyTurn = turn;
+      try {
+        await client.request(MsgId.C2S_LANDLORD_READY,
+          toBinary(LandlordReadyRequestSchema, create(LandlordReadyRequestSchema)), MsgId.S2C_LANDLORD_READY, LandlordReadyResponseSchema);
+      } catch (error) {
+        await recover();
+        const current = client.landlord;
+        if (current?.phase === "waiting" && current.turn === turn && !current.players.find(item => item.seat === current.seat)?.ready) throw error;
+      }
+      continue;
+    }
     const action = `${snapshot.phase}:${snapshot.turn}`;
-    const trustee = snapshot.players.find(player => player.seat === snapshot.seat)?.trustee ?? false;
+    const trustee = player?.trustee ?? false;
     if (snapshot.canAct && !trustee && (snapshot.phase === "calling" || snapshot.phase === "robbing") && snapshot.seat === snapshot.turnSeat && lastAction !== action) {
       lastAction = action;
       print("landlord_bid", { phase: snapshot.phase, turn: snapshot.turn, yes: true });
