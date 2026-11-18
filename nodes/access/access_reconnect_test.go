@@ -327,21 +327,7 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 	*operationIDs = append(*operationIDs, recoveredHit.HitId)
 	accessWaitCommitted(t, ctx, db, recoveredHit.HitId, crashHit.HitId, oldHitID)
 
-	// 客户端已取消查账入口；即使已登录并持有其他玩家 HitID，也不能触发查询。
-	for _, probe := range []struct {
-		client *accessClient
-		hitID  string
-	}{
-		{recovered, healthyHit.HitId},
-		{peer, crashHit.HitId},
-	} {
-		response := accessRequest(t, probe.client, demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: probe.hitID})
-		if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
-			t.Fatalf("旧客户端查账协议未被拒绝: %v", response)
-		}
-	}
 	accessWaitCommitted(t, ctx, db, recoveredHit.HitId, healthyHit.HitId)
-	t.Log("客户端旧查账编号被拒绝，验收程序集中核对本次操作")
 
 	for index, hits := range [][]*demopb.Hit{{crashHit, recoveredHit}, {healthyHit}} {
 		var amount int64

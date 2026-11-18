@@ -81,18 +81,6 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		NewMessage: func() proto.Message { return &LeaveRequest{} },
 	},
 	{
-		ID:         uint32(MsgId_C2S_OPERATION),
-		Direction:  catalog.ClientToServer,
-		Kind:       catalog.Request,
-		NewMessage: func() proto.Message { return &OperationRequest{} },
-	},
-	{
-		ID:         uint32(MsgId_S2C_OPERATION),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &OperationResponse{} },
-	},
-	{
 		ID:         uint32(MsgId_S2C_SNAPSHOT_PUSH),
 		Direction:  catalog.ServerToClient,
 		Kind:       catalog.Push,
@@ -145,18 +133,6 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		Direction:  catalog.ClientToServer,
 		Kind:       catalog.Request,
 		NewMessage: func() proto.Message { return &LandlordLeaveRequest{} },
-	},
-	{
-		ID:         uint32(MsgId_C2S_LANDLORD_OPERATION),
-		Direction:  catalog.ClientToServer,
-		Kind:       catalog.Request,
-		NewMessage: func() proto.Message { return &LandlordOperationRequest{} },
-	},
-	{
-		ID:         uint32(MsgId_S2C_LANDLORD_OPERATION),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LandlordOperationResponse{} },
 	},
 	{
 		ID:         uint32(MsgId_S2C_LANDLORD_SEAT_PUSH),

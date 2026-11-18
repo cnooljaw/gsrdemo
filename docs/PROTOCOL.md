@@ -26,9 +26,9 @@
 | 接口 | 请求 ID → 响应 ID | 请求字段 | 成功响应与边界 |
 | --- | --- | --- | --- |
 | PasswordAuth | 1003 → 1004 | `username string`、`password string` | `user_id uint64`、`access_token string`、`expires_at_ms int64`；只完成认证，不建立登录 |
-| Login | 1001 → 1002 | `access_token string`（字段 3） | `user_id uint64`；验证 Token、绑定 Online 后成功，同连接只成功登录一次 |
+| Login | 1001 → 1002 | `access_token string` | `user_id uint64`；验证 Token、绑定 Online 后成功，同连接只成功登录一次 |
 
-用户名为 1～64 字节，仅允许 `A-Z`、`a-z`、`0-9`、`_-.`，密码为 1～128 字节。Token 是 43 字符的 Base64URL 字符串；有有效 Token 时可直接 Login，无需再次提交密码。Login 的字段 1/2 及名称 username/password 已 reserved，不接受旧密码登录。
+用户名为 1～64 字节，仅允许 `A-Z`、`a-z`、`0-9`、`_-.`，密码为 1～128 字节。Token 是 43 字符的 Base64URL 字符串；有有效 Token 时可直接 Login，无需再次提交密码。
 
 未响应的认证或 Login 失败时，错误策略先封闭后续客户端业务，Dispatcher 经 Gate SendAndClose 尝试写出唯一 ErrorResponse 后有界关闭；接纳不保证送达。未登录新连接在密码认证或 Token 校验阶段失败，不会修改其他连接的在线绑定；Bind 后的失败边界见[失败、替换与断线](DESIGN.md#33-失败替换与断线)。普通断线不撤销 Token，Token 过期也不自动中断已登录连接。
 
@@ -103,15 +103,13 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 客户端以 Enter/Snapshot 的 revision 建立基线，对同桌事件按序应用，忽略已包含的旧事件，发现缺口请求 Snapshot；同一事件序号对每名在线玩家均有对应消息，发牌和结算的内容按本人生成。缓冲过多事件、场景不一致或等待预计更新超时也可恢复场景；最后一条事件丢失不能单靠序号发现。TS 演示客户端按事件驱动，恢复时最多保留 128 条在途事件。计时由牌桌服务器判定：发牌后等待 3 秒、首次或重新领出前等待 0.5 秒，客户端须等 Turn 推送或快照显示 `can_act=true` 才提交操作；托管玩家仍不能手动操作。客户端以服务器时间点与 `server_ms` 的差值及本地单调经过时间估计恢复等待，不依赖本机日历时间。`turn` 仍只用于操作校验，不充当事件序号。
 
-### 1.5 错误与保留编号
+### 1.5 错误
 
 | 项目 | 当前约定 |
 | --- | --- |
 | 通用错误 | S2C 9001 `ErrorResponse{code, message}`，关联原 request_id；不是正常业务响应 |
 | 客户端错误类别 | 1=INVALID_REQUEST、2=UNSUPPORTED_MESSAGE、3=INTERNAL；使用框架安全文案，不直接暴露内部 Domain Code 或 SQL 诊断 |
 | 错误的执行含义 | 收到错误或连接中断不能一概解释为操作未执行；明确的 target_unavailable 业务拒绝另见地鼠表 |
-| 1051 / 1052 | 旧地鼠 Operation 类型仍生成，access 不注册请求 Handler |
-| 1151 / 1152 | 旧斗地主 Operation 类型仍生成，access 不注册请求 Handler |
 
 ## 2. 节点间 RPC 调用
 

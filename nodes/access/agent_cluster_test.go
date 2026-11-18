@@ -155,30 +155,6 @@ func TestAccessOnlineFailureDoesNotOpenGame(t *testing.T) {
 	}
 }
 
-// TestAccessRejectsLegacyOperationRequests 保护两个停用查账编号在真实 C/S 入口明确返回 unsupported，不能被已登录状态重新开放。
-func TestAccessRejectsLegacyOperationRequests(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		id      demopb.MsgId
-		request proto.Message
-	}{
-		{"mole", demopb.MsgId_C2S_OPERATION, &demopb.OperationRequest{HitId: "old-hit"}},
-		{"landlord", demopb.MsgId_C2S_LANDLORD_OPERATION, &demopb.LandlordOperationRequest{OperationId: "old-round"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			address, _, _ := startAccessBusiness(t)
-			client := dialAccess(t, address)
-			accessLoginResponse(t, client, "alice", "password", &demopb.LoginResponse{})
-			accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &demopb.EnterResponse{})
-			response := accessRequest(t, client, test.id, test.request)
-			var failure commonv1.ErrorResponse
-			if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || proto.Unmarshal(response.Payload, &failure) != nil || failure.Code != commonv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE {
-				t.Fatalf("停用请求未明确拒绝: %v %v", response, &failure)
-			}
-		})
-	}
-}
-
 // TestAccessOnlyKnownTargetRefusalCanContinue 保护只有明确的目标失效才返回可继续响应，超时、繁忙和错误类别不被当成未扣款。
 func TestAccessOnlyKnownTargetRefusalCanContinue(t *testing.T) {
 	gateAddress, _, hits := startAccessBusiness(t)

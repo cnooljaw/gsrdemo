@@ -71,16 +71,6 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
-  C2S_OPERATION = 1051 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.OperationRequest"
-    direction: DIRECTION_CLIENT_TO_SERVER
-    kind: KIND_REQUEST
-  }];
-  S2C_OPERATION = 1052 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.OperationResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
-  }];
   S2C_SNAPSHOT_PUSH = 1061 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.SnapshotPush"
     direction: DIRECTION_SERVER_TO_CLIENT
@@ -125,16 +115,6 @@ enum MsgId {
     payload_type: ".demo.v1.LandlordLeaveRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
-  }];
-  C2S_LANDLORD_OPERATION = 1151 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordOperationRequest"
-    direction: DIRECTION_CLIENT_TO_SERVER
-    kind: KIND_REQUEST
-  }];
-  S2C_LANDLORD_OPERATION = 1152 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordOperationResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
   }];
   S2C_LANDLORD_SEAT_PUSH = 1191 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordSeatPush"
@@ -193,8 +173,6 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
-
-
 }
 
 message ActionAck {}
@@ -210,9 +188,7 @@ message PasswordAuthResponse {
   int64 expires_at_ms = 3;
 }
 message LoginRequest {
-  reserved 1, 2;
-  reserved "username", "password";
-  string access_token = 3;
+  string access_token = 1;
 }
 message LoginResponse {
   uint64 user_id = 1;
@@ -238,15 +214,6 @@ message SnapshotResponse {
   Snapshot snapshot = 1;
 }
 message LeaveRequest {}
-message OperationRequest {
-  string hit_id = 1;
-}
-message OperationResponse {
-  bool found = 1;
-  string hit_id = 2;
-  string status = 3;
-  string reason = 4;
-}
 message SnapshotPush {
   Snapshot snapshot = 1;
 }
@@ -259,8 +226,7 @@ message Balance {
   int64 balance = 1;
   ConfirmedSilver confirmed = 2;
   int64 available = 3;
-  reserved 4;
-  uint64 revision = 5;
+  uint64 revision = 4;
 }
 // 确认金额与数据库版本一起出现；即时命中可以不携带此消息。
 message ConfirmedSilver {
@@ -295,7 +261,6 @@ message Snapshot {
   repeated Hit hits = 6;
 }
 
-
 // 斗地主使用独立消息，不改变地鼠客户端协议；空出牌列表表示不出。
 message LandlordEnterRequest {}
 message LandlordReadyRequest {}
@@ -303,13 +268,6 @@ message LandlordTrusteeRequest { bool enabled = 1; }
 message LandlordPlayRequest { uint64 turn = 1; repeated int64 cards = 2; }
 message LandlordSnapshotRequest {}
 message LandlordLeaveRequest {}
-message LandlordOperationRequest { string operation_id = 1; }
-message LandlordOperationResponse {
- bool found = 1;
- string operation_id = 2;
- string status = 3;
- string reason = 4;
-}
 message LandlordEnterResponse { LandlordSnapshot snapshot = 1; }
 message LandlordSnapshotResponse { LandlordSnapshot snapshot = 1; }
 message LandlordCallRequest {uint64 turn=1; bool yes=2;}
