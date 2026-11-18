@@ -2,9 +2,9 @@ import { create, toBinary } from "@bufbuild/protobuf";
 import { DemoClient } from "./client.js";
 import {
   LandlordEnterRequestSchema, LandlordReadyRequestSchema, LandlordPlayRequestSchema,
-  LandlordSnapshotRequestSchema, LandlordLeaveRequestSchema, LandlordEnterResponseSchema, LandlordReadyResponseSchema, LandlordPlayResponseSchema,
-  LandlordSnapshotResponseSchema, LandlordLeaveResponseSchema, LandlordCallRequestSchema, LandlordCallResponseSchema, LandlordRobRequestSchema, LandlordRobResponseSchema,
-  MsgId,
+  LandlordSnapshotRequestSchema, LandlordLeaveRequestSchema, LandlordEnterResponseSchema,
+  LandlordSnapshotResponseSchema, LandlordCallRequestSchema, LandlordRobRequestSchema,
+  ActionAckSchema, MsgId,
 } from "./gen/demo/v1/game_pb.js";
 
 type Printer = (event: string, value: unknown) => void;
@@ -45,7 +45,7 @@ export async function runLandlord(client: DemoClient, print: Printer): Promise<v
       lastReadyTurn = turn;
       try {
         await client.request(MsgId.C2S_LANDLORD_READY,
-          toBinary(LandlordReadyRequestSchema, create(LandlordReadyRequestSchema)), MsgId.S2C_LANDLORD_READY, LandlordReadyResponseSchema);
+          toBinary(LandlordReadyRequestSchema, create(LandlordReadyRequestSchema)), MsgId.S2C_ACTION_ACK, ActionAckSchema);
       } catch (error) {
         await recover();
         const current = client.landlord;
@@ -62,11 +62,11 @@ export async function runLandlord(client: DemoClient, print: Printer): Promise<v
         if (snapshot.phase === "calling") {
           await client.request(MsgId.C2S_LANDLORD_CALL,
             toBinary(LandlordCallRequestSchema, create(LandlordCallRequestSchema, { turn: snapshot.turn, yes: true })),
-            MsgId.S2C_LANDLORD_CALL, LandlordCallResponseSchema);
+            MsgId.S2C_ACTION_ACK, ActionAckSchema);
         } else {
           await client.request(MsgId.C2S_LANDLORD_ROB,
             toBinary(LandlordRobRequestSchema, create(LandlordRobRequestSchema, { turn: snapshot.turn, yes: true })),
-            MsgId.S2C_LANDLORD_ROB, LandlordRobResponseSchema);
+            MsgId.S2C_ACTION_ACK, ActionAckSchema);
         }
       } catch {
         await recover(); // 结果未知时只恢复场景，不重发原动作。
@@ -82,7 +82,7 @@ export async function runLandlord(client: DemoClient, print: Printer): Promise<v
       try {
         await client.request(MsgId.C2S_LANDLORD_PLAY,
           toBinary(LandlordPlayRequestSchema, create(LandlordPlayRequestSchema, { turn: snapshot.turn, cards })),
-          MsgId.S2C_LANDLORD_PLAY, LandlordPlayResponseSchema);
+          MsgId.S2C_ACTION_ACK, ActionAckSchema);
       } catch {
         await recover();
       }
@@ -94,7 +94,7 @@ export async function runLandlord(client: DemoClient, print: Printer): Promise<v
     }
   }
   await client.request(MsgId.C2S_LANDLORD_LEAVE,
-    toBinary(LandlordLeaveRequestSchema, create(LandlordLeaveRequestSchema)), MsgId.S2C_LANDLORD_LEAVE, LandlordLeaveResponseSchema);
+    toBinary(LandlordLeaveRequestSchema, create(LandlordLeaveRequestSchema)), MsgId.S2C_ACTION_ACK, ActionAckSchema);
   client.leaveLandlord();
   print("landlord_leave", {});
 }

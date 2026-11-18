@@ -135,12 +135,11 @@ func (mole *comMole) onLeave(self gsr.CommandContext, reply protocol.Context, _ 
 	if err != nil {
 		return err
 	}
-	left, ok := value.(bool)
-	if !ok || !left {
+	if value != true {
 		return errInvalidBackendReply
 	}
 	mole.groupID = ""
-	return reply.Response(uint32(demopb.MsgId_S2C_LEAVE), &demopb.LeaveResponse{Left: left})
+	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
 }
 
 func (mole *comMole) handleSnapshotPush(_ gsr.CommandContext, loginID string, payload map[string]any) error {

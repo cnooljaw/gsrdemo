@@ -9,6 +9,12 @@ import (
 
 var MessageCatalogDemoV1Game = []catalog.Entry{
 	{
+		ID:         uint32(MsgId_S2C_ACTION_ACK),
+		Direction:  catalog.ServerToClient,
+		Kind:       catalog.Response,
+		NewMessage: func() proto.Message { return &ActionAck{} },
+	},
+	{
 		ID:         uint32(MsgId_C2S_LOGIN),
 		Direction:  catalog.ClientToServer,
 		Kind:       catalog.Request,
@@ -75,12 +81,6 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		NewMessage: func() proto.Message { return &LeaveRequest{} },
 	},
 	{
-		ID:         uint32(MsgId_S2C_LEAVE),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LeaveResponse{} },
-	},
-	{
 		ID:         uint32(MsgId_C2S_OPERATION),
 		Direction:  catalog.ClientToServer,
 		Kind:       catalog.Request,
@@ -123,22 +123,10 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		NewMessage: func() proto.Message { return &LandlordReadyRequest{} },
 	},
 	{
-		ID:         uint32(MsgId_S2C_LANDLORD_READY),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LandlordReadyResponse{} },
-	},
-	{
 		ID:         uint32(MsgId_C2S_LANDLORD_PLAY),
 		Direction:  catalog.ClientToServer,
 		Kind:       catalog.Request,
 		NewMessage: func() proto.Message { return &LandlordPlayRequest{} },
-	},
-	{
-		ID:         uint32(MsgId_S2C_LANDLORD_PLAY),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LandlordPlayResponse{} },
 	},
 	{
 		ID:         uint32(MsgId_C2S_LANDLORD_SNAPSHOT),
@@ -157,12 +145,6 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		Direction:  catalog.ClientToServer,
 		Kind:       catalog.Request,
 		NewMessage: func() proto.Message { return &LandlordLeaveRequest{} },
-	},
-	{
-		ID:         uint32(MsgId_S2C_LANDLORD_LEAVE),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LandlordLeaveResponse{} },
 	},
 	{
 		ID:         uint32(MsgId_C2S_LANDLORD_OPERATION),
@@ -225,12 +207,6 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		NewMessage: func() proto.Message { return &LandlordTrusteeRequest{} },
 	},
 	{
-		ID:         uint32(MsgId_S2C_LANDLORD_TRUSTEE),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LandlordTrusteeResponse{} },
-	},
-	{
 		ID:         uint32(MsgId_S2C_LANDLORD_TURN_PUSH),
 		Direction:  catalog.ServerToClient,
 		Kind:       catalog.Push,
@@ -243,21 +219,9 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		NewMessage: func() proto.Message { return &LandlordCallRequest{} },
 	},
 	{
-		ID:         uint32(MsgId_S2C_LANDLORD_CALL),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LandlordCallResponse{} },
-	},
-	{
 		ID:         uint32(MsgId_C2S_LANDLORD_ROB),
 		Direction:  catalog.ClientToServer,
 		Kind:       catalog.Request,
 		NewMessage: func() proto.Message { return &LandlordRobRequest{} },
-	},
-	{
-		ID:         uint32(MsgId_S2C_LANDLORD_ROB),
-		Direction:  catalog.ServerToClient,
-		Kind:       catalog.Response,
-		NewMessage: func() proto.Message { return &LandlordRobResponse{} },
 	},
 }

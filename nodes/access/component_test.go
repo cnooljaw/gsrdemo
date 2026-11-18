@@ -71,8 +71,7 @@ func TestMoleLeaveRequiresConfirmation(t *testing.T) {
 				t.Fatalf("离开确认错误: entered=%v err=%v want=%v", mole.Entered(), err, test.want)
 			}
 			if test.want == nil {
-				var leave demopb.LeaveResponse
-				if response.MsgId != uint32(demopb.MsgId_S2C_LEAVE) || proto.Unmarshal(response.Payload, &leave) != nil || !leave.Left {
+				if response.MsgId != uint32(demopb.MsgId_S2C_ACTION_ACK) || response.RequestId != 1 || len(response.Payload) != 0 {
 					t.Fatalf("未返回离开确认: %v", response)
 				}
 			} else if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
@@ -85,11 +84,12 @@ func TestMoleLeaveRequiresConfirmation(t *testing.T) {
 // TestGameSnapshotRepliesMatchCurrentRoute 保护主动快照拒绝其他组/桌的回包，匹配路由时正常返回。
 func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 	for _, request := range []struct {
-		name string
-		id   demopb.MsgId
+		name     string
+		id       demopb.MsgId
+		response demopb.MsgId
 	}{
-		{"mole snapshot", demopb.MsgId_C2S_SNAPSHOT},
-		{"landlord snapshot", demopb.MsgId_C2S_LANDLORD_SNAPSHOT},
+		{"mole snapshot", demopb.MsgId_C2S_SNAPSHOT, demopb.MsgId_S2C_SNAPSHOT},
+		{"landlord snapshot", demopb.MsgId_C2S_LANDLORD_SNAPSHOT, demopb.MsgId_S2C_LANDLORD_SNAPSHOT},
 	} {
 		t.Run(request.name, func(t *testing.T) {
 			for _, route := range []string{"other-room", "current-room"} {
@@ -125,7 +125,7 @@ func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 						if !errors.Is(err, errInvalidBackendReply) || response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 							t.Fatalf("其他房间快照未被拒绝: %v %v", response, err)
 						}
-					} else if err != nil || response.MsgId == uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+					} else if err != nil || response.MsgId != uint32(request.response) || response.RequestId != 1 {
 						t.Fatalf("当前房间快照未正常返回: %v %v", response, err)
 					}
 					if mole.groupID != "current-room" || landlord.room != "current-room" {
@@ -139,7 +139,7 @@ func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 
 // TestLandlordActionsRequireConfirmation 保护桌内操作只有明确成功才能返回成功响应。
 func TestLandlordActionsRequireConfirmation(t *testing.T) {
-	for _, id := range []demopb.MsgId{demopb.MsgId_C2S_LANDLORD_READY, demopb.MsgId_C2S_LANDLORD_PLAY, demopb.MsgId_C2S_LANDLORD_CALL, demopb.MsgId_C2S_LANDLORD_ROB, demopb.MsgId_C2S_LANDLORD_TRUSTEE} {
+	for _, id := range []demopb.MsgId{demopb.MsgId_C2S_LANDLORD_READY, demopb.MsgId_C2S_LANDLORD_PLAY, demopb.MsgId_C2S_LANDLORD_CALL, demopb.MsgId_C2S_LANDLORD_ROB, demopb.MsgId_C2S_LANDLORD_TRUSTEE, demopb.MsgId_C2S_LANDLORD_LEAVE} {
 		for _, value := range []any{true, false, "invalid"} {
 			landlord := newComLandlord(componentDependencies{
 				Identity: func() agentIdentity { return agentIdentity{UserID: 7, LoginID: "current"} },
@@ -153,7 +153,7 @@ func TestLandlordActionsRequireConfirmation(t *testing.T) {
 			landlord.room = "current-room"
 			response, err := componentRequest(t, landlord, id)
 			if value == true {
-				if err != nil || response.MsgId == uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+				if err != nil || response.MsgId != uint32(demopb.MsgId_S2C_ACTION_ACK) || response.RequestId != 1 || len(response.Payload) != 0 {
 					t.Fatalf("已确认动作没有成功响应: %v %v", response, err)
 				}
 			} else if !errors.Is(err, errInvalidBackendReply) {

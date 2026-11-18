@@ -35,14 +35,8 @@ func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, re
 	switch id {
 	case demopb.MsgId_C2S_LANDLORD_ENTER:
 		response = &demopb.LandlordEnterResponse{}
-	case demopb.MsgId_C2S_LANDLORD_READY:
-		response = &demopb.LandlordReadyResponse{}
-	case demopb.MsgId_C2S_LANDLORD_PLAY:
-		response = &demopb.LandlordPlayResponse{}
-	case demopb.MsgId_C2S_LANDLORD_CALL:
-		response = &demopb.LandlordCallResponse{}
-	case demopb.MsgId_C2S_LANDLORD_ROB:
-		response = &demopb.LandlordRobResponse{}
+	case demopb.MsgId_C2S_LANDLORD_READY, demopb.MsgId_C2S_LANDLORD_PLAY, demopb.MsgId_C2S_LANDLORD_CALL, demopb.MsgId_C2S_LANDLORD_ROB:
+		response = &demopb.ActionAck{}
 	case demopb.MsgId_C2S_LANDLORD_SNAPSHOT:
 		response = &demopb.LandlordSnapshotResponse{}
 	default:
@@ -321,7 +315,7 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 		}
 		for _, client := range clients {
 			if !scenario.restartLandlord {
-				accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_LEAVE, &demopb.LandlordLeaveRequest{}, &demopb.LandlordLeaveResponse{})
+				accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_LEAVE, &demopb.LandlordLeaveRequest{}, &demopb.ActionAck{})
 			}
 			_ = client.Close()
 		}

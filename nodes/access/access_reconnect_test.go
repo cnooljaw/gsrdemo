@@ -28,7 +28,14 @@ func TestAccessTwoNodesReconnectLiveMySQL(t *testing.T) {
 func accessProcessResponse(t *testing.T, client *accessClient, id demopb.MsgId, request, response proto.Message) {
 	t.Helper()
 	envelope := accessRequest(t, client, id, request)
-	if envelope.MsgId != uint32(id+1) {
+	expected := id + 1
+	if _, ok := response.(*demopb.ActionAck); ok {
+		expected = demopb.MsgId_S2C_ACTION_ACK
+		if len(envelope.Payload) != 0 {
+			t.Fatalf("request %v returned non-empty ActionAck: %v", id, envelope)
+		}
+	}
+	if envelope.MsgId != uint32(expected) {
 		t.Fatalf("request %v returned %v", id, envelope)
 	}
 	if err := proto.Unmarshal(envelope.Payload, response); err != nil {
@@ -248,11 +255,8 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 	if count != 1 || version != 5 || amount != initial-hit.Debit+hit.Credit {
 		t.Fatalf("跨接入重复扣款或丢账: count=%d amount=%d version=%d hit=%v", count, amount, version, hit)
 	}
-	var leave demopb.LeaveResponse
-	accessProcessResponse(t, reconnected, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-	if !leave.Left {
-		t.Fatal("重连后无法正常离开")
-	}
+
+	accessProcessResponse(t, reconnected, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Logf("同账号 access-01 → access-02 → access-01：旧连接关闭、迟到解绑被拒、新接入收到推送；验收核对原 HitID 仅一笔入账，余额 %d、版本 %d", amount, version)
 	return hit.HitId
 }
@@ -362,11 +366,8 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 		}
 	}
 	for _, client := range []*accessClient{recovered, peer} {
-		var leave demopb.LeaveResponse
-		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-		if !leave.Left {
-			t.Fatal("骤停后存活接入无法正常离开")
-		}
+
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	}
 	t.Log("SIGKILL access-01：已有内存命中继续入账，access-02 原连接继续命中/入账；受影响账号重新登录后在原组和座位再次命中并入账，验收核对旧 HitID 无重复扣款")
 }

@@ -60,11 +60,8 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", hit.HitId).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("Online 不可用时丢账或重复: count=%d err=%v", count, err)
 	}
-	var leave demopb.LeaveResponse
-	accessProcessResponse(t, bound, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-	if !leave.Left {
-		t.Fatal("Online 不可用时已有玩家无法离开")
-	}
+
+	accessProcessResponse(t, bound, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Logf("SIGKILL Online：新登录被拒且连接关闭；已有玩家沿原连接收到新推送、命中并入账，余额 %d，版本 %d → %d", amount, previousVersion, version)
 
 	// Online 不持久化目录；只恢复本测试节点，再由客户端重新登录建立新身份。
@@ -102,10 +99,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 			t.Fatalf("Online 重启后丢账或重复: count=%d err=%v", count, err)
 		}
 	}
-	accessProcessResponse(t, recovered, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-	if !leave.Left {
-		t.Fatal("Online 重启后无法离开")
-	}
+	accessProcessResponse(t, recovered, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Logf("Online 重启清空目录，显式重登重建绑定，旧身份解绑无效；重新进入后命中并唯一入账，余额 %d，版本 %d → %d", recoveredAmount, version, recoveredVersion)
 }
 

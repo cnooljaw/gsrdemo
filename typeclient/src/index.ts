@@ -6,7 +6,7 @@ import { DemoClient } from "./client.js";
 import { runLandlord } from "./landlord.js";
 import {
   EnterRequestSchema, EnterResponseSchema, HitRequestSchema, HitResponseSchema,
-  LeaveRequestSchema, LeaveResponseSchema, LoginRequestSchema, LoginResponseSchema,
+  ActionAckSchema, LeaveRequestSchema, LoginRequestSchema, LoginResponseSchema,
   PasswordAuthRequestSchema, PasswordAuthResponseSchema,
   MsgId, SnapshotRequestSchema, SnapshotResponseSchema,
 } from "./gen/demo/v1/game_pb.js";
@@ -119,8 +119,8 @@ async function run(): Promise<void> {
       hitIndex++;
       targetDeadline = Date.now() + Math.max(15_000, config.timeout);
     }
-    const leave = await client.request(MsgId.C2S_LEAVE, toBinary(LeaveRequestSchema, create(LeaveRequestSchema)), MsgId.S2C_LEAVE, LeaveResponseSchema);
-    print("leave", leave);
+    await client.request(MsgId.C2S_LEAVE, toBinary(LeaveRequestSchema, create(LeaveRequestSchema)), MsgId.S2C_ACTION_ACK, ActionAckSchema);
+    print("leave", {});
   } finally {
     client.close();
   }

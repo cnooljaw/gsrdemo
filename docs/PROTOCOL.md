@@ -19,7 +19,7 @@
 | 消息交错 | 推送与其他请求响应可能交错；按当前路由、事件序号和余额修订号处理，不用到达顺序推断业务先后 |
 | 超时 | 超时不表示未执行；客户端不自动重发命中或出牌，不换操作 ID 掩盖未知结果 |
 
-以下表格按实际业务顺序排列。请求/响应类型遵循 `.proto` 中的独立消息定义，空请求也有自己的类型。
+以下表格按业务顺序排列。每个操作保留自己的请求编号和类型。只需确认成功的操作统一返回 `1005 ActionAck`（空消息），使用原 `request_id`。失败沿用 `ErrorResponse`。牌桌状态由组播事件或快照更新。
 
 ### 1.2 认证与登录
 
@@ -41,7 +41,7 @@
 | Enter | 1011 → 1012 | 空 | `snapshot Snapshot`、`silver Balance`，建立组路由和余额基线 |
 | Hit | 1021 → 1022 | `action_id string`、`spawn_seq uint64`、`hole int64`（0～8） | `hit Hit`、可选 `silver Balance`；明确目标失效时只带 `rejection="target_unavailable"` |
 | Snapshot | 1031 → 1032 | 空 | `snapshot Snapshot`，当前组和本人命中记录 |
-| Leave | 1041 → 1042 | 空 | `left bool`，固定 true；确认离开后清除接入路由，已接纳账务继续处理 |
+| Leave | 1041 → 1005 | 空 | `ActionAck`；接入已清除组路由，已接纳账务继续处理 |
 | SnapshotPush | 服务端 → 1061 | 无请求 | `snapshot Snapshot`，当前组快照 |
 | BalancePush | 服务端 → 1062 | 无请求 | `silver Balance`，绝对余额校正，不是再次奖励 |
 
@@ -65,13 +65,13 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 | 接口 | 请求 ID → 响应 ID | 请求字段 | 当前成功响应 |
 | --- | --- | --- | --- |
 | Enter | 1101 → 1102 | 空 | `snapshot`；随机入桌或重登回原桌 |
-| Ready | 1111 → 1112 | 空 | 空成功响应；准备、发牌通过事件通知 |
-| Call | 1171 → 1172 | `turn uint64`、`yes bool` | 空成功响应；叫/不叫结果广播全桌 |
-| Rob | 1181 → 1182 | `turn uint64`、`yes bool` | 空成功响应；抢/不抢结果广播全桌 |
-| Play | 1121 → 1122 | `turn uint64`、`cards int64[]` | 空成功响应；空 cards 表示不出，出牌事件广播全桌 |
-| Trustee | 1201 → 1202 | `enabled bool` | 空成功响应；本人开启或取消托管，状态由事件广播 |
+| Ready | 1111 → 1005 | 空 | `ActionAck`；准备、发牌通过事件通知 |
+| Call | 1171 → 1005 | `turn uint64`、`yes bool` | `ActionAck`；叫/不叫结果广播全桌 |
+| Rob | 1181 → 1005 | `turn uint64`、`yes bool` | `ActionAck`；抢/不抢结果广播全桌 |
+| Play | 1121 → 1005 | `turn uint64`、`cards int64[]` | `ActionAck`；空 cards 表示不出，出牌事件广播全桌 |
+| Trustee | 1201 → 1005 | `enabled bool` | `ActionAck`；本人开启或取消托管，状态由事件广播 |
 | Snapshot | 1131 → 1132 | 空 | `snapshot`，当前阶段与本人手牌 |
-| Leave | 1141 → 1142 | 空 | 空 `LandlordLeaveResponse`；当前 Handler 不填其中预留的 snapshot 字段，成功表示牌桌已接纳离开，目录回收可稍后完成 |
+| Leave | 1141 → 1005 | 空 | `ActionAck`；牌桌已接纳离开且接入已清除桌路由，目录可稍后回收 |
 
 事件均带 `room_name` 和牌桌内递增的 `revision`，普通事件包括操作本人；具体字段以 [game.proto](../nodes/access/proto/demo/v1/game.proto) 为准。
 
@@ -191,7 +191,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | true；空列表表示不出 |
 | `RoomName / 9` Trustee | Call | `U, L, enabled bool` | true；本人托管开关；牌桌广播结果 |
 | `RoomName / 4` Snapshot | Call | `U, L` | 本人桌快照 |
-| `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回空 C/S LeaveResponse；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
+| `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回 C/S `ActionAck`；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
 | `landlord / 5` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
 快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Snapshot 回包的 `room_name` 与本次请求目标一致，Ready、Call、Rob、Play、Trustee 只接受 true 成功确认，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
@@ -396,7 +396,7 @@ MoleService/accounting.flush 本地 Send 原批次给 Submission
 1111 Ready → Call RoomName/2 → Call settlement-read/4 准入 → 广播准备/发牌
 1171 Call / 1181 Rob / 1121 Play → 桌 / 6、7、3（携带当前 Turn）
   → 桌更新状态、Send 事件给三名玩家
-  → 未结束时返回空成功响应；最后一手继续执行以下结算后再返回
+  → 未结束时返回 1005 ActionAck；最后一手继续执行以下结算后再返回
   → 本桌确定胜负，固定一个 OperationID 与三人金额
   → 保存 Redis 待请求，Call settlement-write/7
   → 池成员完成 MySQL 原子判定，直接返回回执或错误

@@ -54,11 +54,8 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		}
 		if !restartMole {
 			// 主动退出不取消已接纳账务；Settlement 仍停止，重新进入必须沿用待确认内存余额。
-			var leave demopb.LeaveResponse
-			accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-			if !leave.Left {
-				t.Fatal("结算中断时无法主动离开")
-			}
+
+			accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 			outside := accessRequest(t, client, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{})
 			if outside.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 				t.Fatalf("离开后仍可读取组快照: %v", outside)
@@ -141,11 +138,8 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settlement_operations WHERE operation_id = ?", hit.HitId).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("恢复后丢账或重复入账: count=%d err=%v", count, err)
 		}
-		var leave demopb.LeaveResponse
-		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-		if !leave.Left {
-			t.Fatal("结算恢复后无法离开")
-		}
+
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 		t.Logf("结算恢复（%s）：原 HitID 仅入账一次，余额 %d，版本 %d → %d", scenario, amount, previousVersion, version)
 	}
 }

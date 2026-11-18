@@ -8,6 +8,14 @@ option go_package = "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1;demopb
 // 客户端业务编号独立于内部 Cluster CommandID。
 enum MsgId {
   MSG_ID_UNSPECIFIED = 0;
+
+  // 只确认执行成功的操作共用一个响应，业务状态由各游戏事件更新。
+  S2C_ACTION_ACK = 1005 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.ActionAck"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+
   C2S_LOGIN = 1001 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LoginRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
@@ -63,11 +71,6 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
-  S2C_LEAVE = 1042 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LeaveResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
-  }];
   C2S_OPERATION = 1051 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.OperationRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
@@ -103,20 +106,10 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
-  S2C_LANDLORD_READY = 1112 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordReadyResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
-  }];
   C2S_LANDLORD_PLAY = 1121 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordPlayRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
-  }];
-  S2C_LANDLORD_PLAY = 1122 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordPlayResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
   }];
   C2S_LANDLORD_SNAPSHOT = 1131 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordSnapshotRequest"
@@ -132,11 +125,6 @@ enum MsgId {
     payload_type: ".demo.v1.LandlordLeaveRequest"
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
-  }];
-  S2C_LANDLORD_LEAVE = 1142 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordLeaveResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
   }];
   C2S_LANDLORD_OPERATION = 1151 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordOperationRequest"
@@ -188,11 +176,6 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
-  S2C_LANDLORD_TRUSTEE = 1202 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordTrusteeResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
-  }];
   S2C_LANDLORD_TURN_PUSH = 1198 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordTurnPush"
     direction: DIRECTION_SERVER_TO_CLIENT
@@ -204,11 +187,6 @@ enum MsgId {
     kind: KIND_REQUEST
   }];
 
-  S2C_LANDLORD_CALL = 1172 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordCallResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
-  }];
 
   C2S_LANDLORD_ROB = 1181 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.LandlordRobRequest"
@@ -216,13 +194,10 @@ enum MsgId {
     kind: KIND_REQUEST
   }];
 
-  S2C_LANDLORD_ROB = 1182 [(gsr.protocol.v1.message_route) = {
-    payload_type: ".demo.v1.LandlordRobResponse"
-    direction: DIRECTION_SERVER_TO_CLIENT
-    kind: KIND_RESPONSE
-  }];
 
 }
+
+message ActionAck {}
 
 // 认证只签发凭据，不建立游戏登录；密码不复用到 Token 登录协议。
 message PasswordAuthRequest {
@@ -263,9 +238,6 @@ message SnapshotResponse {
   Snapshot snapshot = 1;
 }
 message LeaveRequest {}
-message LeaveResponse {
-  bool left = 1;
-}
 message OperationRequest {
   string hit_id = 1;
 }
@@ -328,7 +300,6 @@ message Snapshot {
 message LandlordEnterRequest {}
 message LandlordReadyRequest {}
 message LandlordTrusteeRequest { bool enabled = 1; }
-message LandlordTrusteeResponse {}
 message LandlordPlayRequest { uint64 turn = 1; repeated int64 cards = 2; }
 message LandlordSnapshotRequest {}
 message LandlordLeaveRequest {}
@@ -340,12 +311,7 @@ message LandlordOperationResponse {
  string reason = 4;
 }
 message LandlordEnterResponse { LandlordSnapshot snapshot = 1; }
-message LandlordReadyResponse {}
-message LandlordPlayResponse {}
 message LandlordSnapshotResponse { LandlordSnapshot snapshot = 1; }
-message LandlordLeaveResponse { LandlordSnapshot snapshot = 1; }
-message LandlordCallResponse {}
-message LandlordRobResponse {}
 message LandlordCallRequest {uint64 turn=1; bool yes=2;}
 message LandlordRobRequest {uint64 turn=1; bool yes=2;}
 message LandlordPlayer {

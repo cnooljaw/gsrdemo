@@ -78,12 +78,12 @@ func (landlord *comLandlord) onEnter(self gsr.CommandContext, reply protocol.Con
 		if snapshot.RoomName != room {
 			return errInvalidBackendReply
 		}
-		return landlordResponse(reply, demopb.MsgId_S2C_LANDLORD_ENTER, snapshot)
+		return reply.Response(uint32(demopb.MsgId_S2C_LANDLORD_ENTER), &demopb.LandlordEnterResponse{Snapshot: snapshot})
 	}
 	return runtime.ErrServiceNotFound
 }
 
-func (landlord *comLandlord) callRoom(self gsr.CommandContext, reply protocol.Context, command runtime.CommandID, responseID demopb.MsgId, args ...any) error {
+func (landlord *comLandlord) callRoom(self gsr.CommandContext, reply protocol.Context, command runtime.CommandID, args ...any) error {
 	identity := landlord.deps.Identity()
 	if err := identity.RequireLogin(); err != nil {
 		return err
@@ -104,28 +104,16 @@ func (landlord *comLandlord) callRoom(self gsr.CommandContext, reply protocol.Co
 		if cluster.ServiceName(snapshot.RoomName) != landlord.room {
 			return errInvalidBackendReply
 		}
-		return landlordResponse(reply, responseID, snapshot)
+		return reply.Response(uint32(demopb.MsgId_S2C_LANDLORD_SNAPSHOT), &demopb.LandlordSnapshotResponse{Snapshot: snapshot})
 	}
 	if value != true {
 		return errInvalidBackendReply
 	}
-	switch responseID {
-	case demopb.MsgId_S2C_LANDLORD_READY:
-		return reply.Response(uint32(responseID), &demopb.LandlordReadyResponse{})
-	case demopb.MsgId_S2C_LANDLORD_CALL:
-		return reply.Response(uint32(responseID), &demopb.LandlordCallResponse{})
-	case demopb.MsgId_S2C_LANDLORD_ROB:
-		return reply.Response(uint32(responseID), &demopb.LandlordRobResponse{})
-	case demopb.MsgId_S2C_LANDLORD_PLAY:
-		return reply.Response(uint32(responseID), &demopb.LandlordPlayResponse{})
-	case demopb.MsgId_S2C_LANDLORD_TRUSTEE:
-		return reply.Response(uint32(responseID), &demopb.LandlordTrusteeResponse{})
-	}
-	return errInvalidBackendReply
+	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
 }
 
 func (landlord *comLandlord) onReady(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordReadyRequest) error {
-	return landlord.callRoom(self, reply, landlordattack.RoomReadyCommand, demopb.MsgId_S2C_LANDLORD_READY)
+	return landlord.callRoom(self, reply, landlordattack.RoomReadyCommand)
 }
 
 func (landlord *comLandlord) onPlay(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordPlayRequest) error {
@@ -133,15 +121,15 @@ func (landlord *comLandlord) onPlay(self gsr.CommandContext, reply protocol.Cont
 	for i, c := range request.Cards {
 		cards[i] = c
 	}
-	return landlord.callRoom(self, reply, landlordattack.RoomPlayCommand, demopb.MsgId_S2C_LANDLORD_PLAY, request.Turn, cards)
+	return landlord.callRoom(self, reply, landlordattack.RoomPlayCommand, request.Turn, cards)
 }
 
 func (landlord *comLandlord) onTrustee(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordTrusteeRequest) error {
-	return landlord.callRoom(self, reply, landlordattack.RoomTrusteeCommand, demopb.MsgId_S2C_LANDLORD_TRUSTEE, request.Enabled)
+	return landlord.callRoom(self, reply, landlordattack.RoomTrusteeCommand, request.Enabled)
 }
 
 func (landlord *comLandlord) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordSnapshotRequest) error {
-	return landlord.callRoom(self, reply, landlordattack.RoomSnapshotCommand, demopb.MsgId_S2C_LANDLORD_SNAPSHOT)
+	return landlord.callRoom(self, reply, landlordattack.RoomSnapshotCommand)
 }
 
 func (landlord *comLandlord) onLeave(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordLeaveRequest) error {
@@ -160,7 +148,7 @@ func (landlord *comLandlord) onLeave(self gsr.CommandContext, reply protocol.Con
 		return errInvalidBackendReply
 	}
 	landlord.room = ""
-	return reply.Response(uint32(demopb.MsgId_S2C_LANDLORD_LEAVE), &demopb.LandlordLeaveResponse{})
+	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
 }
 
 func landlordSnapshot(value any) (*demopb.LandlordSnapshot, error) {
@@ -174,22 +162,12 @@ func landlordSnapshot(value any) (*demopb.LandlordSnapshot, error) {
 	return snapshot, nil
 }
 
-func landlordResponse(reply protocol.Context, id demopb.MsgId, snapshot *demopb.LandlordSnapshot) error {
-	switch id {
-	case demopb.MsgId_S2C_LANDLORD_ENTER:
-		return reply.Response(uint32(id), &demopb.LandlordEnterResponse{Snapshot: snapshot})
-	case demopb.MsgId_S2C_LANDLORD_SNAPSHOT:
-		return reply.Response(uint32(id), &demopb.LandlordSnapshotResponse{Snapshot: snapshot})
-	}
-	return errInvalidBackendReply
-}
-
 func (landlord *comLandlord) onCall(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordCallRequest) error {
-	return landlord.callRoom(self, reply, landlordattack.RoomBidCommand, demopb.MsgId_S2C_LANDLORD_CALL, request.Turn, request.Yes)
+	return landlord.callRoom(self, reply, landlordattack.RoomBidCommand, request.Turn, request.Yes)
 }
 
 func (landlord *comLandlord) onRob(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordRobRequest) error {
-	return landlord.callRoom(self, reply, landlordattack.RoomRobCommand, demopb.MsgId_S2C_LANDLORD_ROB, request.Turn, request.Yes)
+	return landlord.callRoom(self, reply, landlordattack.RoomRobCommand, request.Turn, request.Yes)
 }
 
 // ProtocolHandlers 返回本游戏的客户端协议入口。

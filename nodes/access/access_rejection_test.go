@@ -109,11 +109,8 @@ func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddr
 		t.Fatal("被拒绝命中不应计入奖池统计")
 	}
 	verifyAccessMemoryRejectionIsLocal(t, ctx, gateAddress, client, snapshot.AttackName, peer, db, operationIDs)
-	var leave demopb.LeaveResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-	if !leave.Left {
-		t.Fatal("余额校正后无法离开")
-	}
+
+	accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Log("其他业务通过 Settlement 扣至零后，Mole 仍即时接受缓存命中；最终拒绝为 insufficient_silver，客户端余额校正为零，钱包未再次变更、奖池未累计")
 }
 
@@ -197,10 +194,7 @@ func verifyAccessMemoryRejectionIsLocal(t *testing.T, ctx context.Context, gateA
 		Scan(&count); err != nil || count != 0 {
 		t.Fatalf("内存拒绝不应提交账务: count=%d err=%v", count, err)
 	}
-	var leave demopb.LeaveResponse
-	accessProcessResponse(t, healthy, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &leave)
-	if !leave.Left {
-		t.Fatal("同组玩家入账后无法离开")
-	}
+
+	accessProcessResponse(t, healthy, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Log("余额校正为零后再次敲击被拒，未提交新账务；同组玩家命中完全相同的目标实例并完成入账")
 }
