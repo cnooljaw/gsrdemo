@@ -110,7 +110,7 @@ func verifyAccessSettlementRejection(t *testing.T, ctx context.Context, gateAddr
 	}
 	verifyAccessMemoryRejectionIsLocal(t, ctx, gateAddress, client, snapshot.AttackName, peer, db, operationIDs)
 
-	accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+	accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Log("其他业务通过 Settlement 扣至零后，Mole 仍即时接受缓存命中；最终拒绝为 insufficient_silver，客户端余额校正为零，钱包未再次变更、奖池未累计")
 }
 
@@ -153,7 +153,7 @@ func verifyAccessMemoryRejectionIsLocal(t *testing.T, ctx context.Context, gateA
 		t.Fatalf("余额归零后仍接纳命中: %v", failure)
 	}
 	var refused demopb.SnapshotResponse
-	accessProcessResponse(t, empty, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &refused)
+	accessProcessResponse(t, empty, demopb.MsgId_C2S_SNAPSHOT, demopb.MsgId_S2C_SNAPSHOT, &demopb.SnapshotRequest{}, &refused)
 	var refusedHit *demopb.Hit
 	for _, candidate := range refused.GetSnapshot().GetHits() {
 		if candidate.ActionId == "after-zero-correction" {
@@ -174,7 +174,7 @@ func verifyAccessMemoryRejectionIsLocal(t *testing.T, ctx context.Context, gateA
 		}
 	}
 	var hit demopb.HitResponse
-	accessProcessResponse(t, healthy, demopb.MsgId_C2S_HIT, &demopb.HitRequest{
+	accessProcessResponse(t, healthy, demopb.MsgId_C2S_HIT, demopb.MsgId_S2C_HIT, &demopb.HitRequest{
 		ActionId: "same-target-after-peer-refusal", SpawnSeq: target.SpawnSeq, Hole: target.Hole,
 	}, &hit)
 	if hit.GetHit().GetHitId() == "" || hit.Hit.Status != "accepted" ||
@@ -195,6 +195,6 @@ func verifyAccessMemoryRejectionIsLocal(t *testing.T, ctx context.Context, gateA
 		t.Fatalf("内存拒绝不应提交账务: count=%d err=%v", count, err)
 	}
 
-	accessProcessResponse(t, healthy, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+	accessProcessResponse(t, healthy, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Log("余额校正为零后再次敲击被拒，未提交新账务；同组玩家命中完全相同的目标实例并完成入账")
 }

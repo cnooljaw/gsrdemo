@@ -12,7 +12,7 @@ import (
 func accessAuthenticate(t *testing.T, client *accessClient, username, password string) *demopb.PasswordAuthResponse {
 	t.Helper()
 	var result demopb.PasswordAuthResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_PASSWORD_AUTH, &demopb.PasswordAuthRequest{Username: username, Password: password}, &result)
+	accessProcessResponse(t, client, demopb.MsgId_C2S_PASSWORD_AUTH, demopb.MsgId_S2C_PASSWORD_AUTH, &demopb.PasswordAuthRequest{Username: username, Password: password}, &result)
 	return &result
 }
 func accessLogin(t *testing.T, client *accessClient, username, password string) *commonv1.Envelope {
@@ -52,7 +52,7 @@ func TestAccessAuthenticationIsNotLogin(t *testing.T) {
 	if response := accessRequest(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}); response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 		t.Fatal("认证后未登录即可进入游戏")
 	}
-	accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN, &demopb.LoginRequest{AccessToken: auth.AccessToken}, &demopb.LoginResponse{})
+	accessProcessResponse(t, client, demopb.MsgId_C2S_LOGIN, demopb.MsgId_S2C_LOGIN, &demopb.LoginRequest{AccessToken: auth.AccessToken}, &demopb.LoginResponse{})
 	if current := accessFixtureRPC(t, backend, 99); current == nil {
 		t.Fatal("Token 登录未绑定")
 	}
@@ -80,7 +80,7 @@ func TestAccessAuthFailureClosesOnlyFailedConnection(t *testing.T) {
 			t.Fatal("失败连接影响旧登录")
 		}
 	}
-	accessProcessResponse(t, healthy, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &demopb.EnterResponse{})
+	accessProcessResponse(t, healthy, demopb.MsgId_C2S_ENTER, demopb.MsgId_S2C_ENTER, &demopb.EnterRequest{}, &demopb.EnterResponse{})
 }
 
 // TestAccessUnknownBindCleansCandidate 保护 Bind 已替换但结果未知时关闭失败连接、清理候选身份，后续显式登录可重建目录。

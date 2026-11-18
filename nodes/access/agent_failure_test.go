@@ -347,7 +347,7 @@ func TestAccessRejectedEnterKeepsConnection(t *testing.T) {
 			if response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 				t.Fatal("明确拒绝未返回错误", response)
 			}
-			accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_ENTER, &demopb.LandlordEnterRequest{}, &demopb.LandlordEnterResponse{})
+			accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_ENTER, demopb.MsgId_S2C_LANDLORD_ENTER, &demopb.LandlordEnterRequest{}, &demopb.LandlordEnterResponse{})
 		})
 	}
 }

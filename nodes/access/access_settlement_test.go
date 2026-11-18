@@ -55,13 +55,13 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 		if !restartMole {
 			// 主动退出不取消已接纳账务；Settlement 仍停止，重新进入必须沿用待确认内存余额。
 
-			accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+			accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 			outside := accessRequest(t, client, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{})
 			if outside.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
 				t.Fatalf("离开后仍可读取组快照: %v", outside)
 			}
 			var enter demopb.EnterResponse
-			accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &enter)
+			accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, demopb.MsgId_S2C_ENTER, &demopb.EnterRequest{}, &enter)
 			balance := enter.Silver
 			if enter.GetSnapshot().GetAttackName() == "" || balance == nil || balance.Confirmed == nil || memory.Silver == nil ||
 				balance.Balance != before-hit.Debit+hit.Credit || balance.Available != before-hit.Debit ||
@@ -139,7 +139,7 @@ func verifyAccessSettlementRecovery(t *testing.T, ctx context.Context, gateAddre
 			t.Fatalf("恢复后丢账或重复入账: count=%d err=%v", count, err)
 		}
 
-		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 		t.Logf("结算恢复（%s）：原 HitID 仅入账一次，余额 %d，版本 %d → %d", scenario, amount, previousVersion, version)
 	}
 }
@@ -149,7 +149,7 @@ func verifyAccessHitReplay(t *testing.T, client *accessClient, hit *demopb.Hit) 
 	t.Helper()
 	request := &demopb.HitRequest{ActionId: hit.ActionId, SpawnSeq: hit.SpawnSeq, Hole: hit.Hole}
 	var original demopb.HitResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_HIT, request, &original)
+	accessProcessResponse(t, client, demopb.MsgId_C2S_HIT, demopb.MsgId_S2C_HIT, request, &original)
 	if !proto.Equal(original.Hit, hit) || original.Silver == nil || original.Rejection != "" {
 		t.Fatalf("原请求重提改变了 HitID/奖励: %v", &original)
 	}
@@ -162,7 +162,7 @@ func verifyAccessHitReplay(t *testing.T, client *accessClient, hit *demopb.Hit) 
 			t.Fatalf("同一 ActionID 改目标必须拒绝: %v", response)
 		}
 		var replay demopb.HitResponse
-		accessProcessResponse(t, client, demopb.MsgId_C2S_HIT, request, &replay)
+		accessProcessResponse(t, client, demopb.MsgId_C2S_HIT, demopb.MsgId_S2C_HIT, request, &replay)
 		if !proto.Equal(&original, &replay) {
 			t.Fatalf("重复或冲突改变了原命中/余额: before=%v after=%v", &original, &replay)
 		}

@@ -43,7 +43,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 		t.Fatal("Online 不可用后游戏未继续推送")
 	}
 	var fresh demopb.SnapshotResponse
-	accessProcessResponse(t, bound, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
+	accessProcessResponse(t, bound, demopb.MsgId_C2S_SNAPSHOT, demopb.MsgId_S2C_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
 	hit := accessHitTarget(t, bound, fresh.Snapshot, "while-online-unavailable")
 	*operationIDs = append(*operationIDs, hit.HitId)
 	accessWaitCommitted(t, ctx, db, hit.HitId)
@@ -61,7 +61,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 		t.Fatalf("Online 不可用时丢账或重复: count=%d err=%v", count, err)
 	}
 
-	accessProcessResponse(t, bound, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+	accessProcessResponse(t, bound, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Logf("SIGKILL Online：新登录被拒且连接关闭；已有玩家沿原连接收到新推送、命中并入账，余额 %d，版本 %d → %d", amount, previousVersion, version)
 
 	// Online 不持久化目录；只恢复本测试节点，再由客户端重新登录建立新身份。
@@ -99,7 +99,7 @@ func verifyAccessOnlineUnavailable(t *testing.T, ctx context.Context, online acc
 			t.Fatalf("Online 重启后丢账或重复: count=%d err=%v", count, err)
 		}
 	}
-	accessProcessResponse(t, recovered, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+	accessProcessResponse(t, recovered, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Logf("Online 重启清空目录，显式重登重建绑定，旧身份解绑无效；重新进入后命中并唯一入账，余额 %d，版本 %d → %d", recoveredAmount, version, recoveredVersion)
 }
 

@@ -25,18 +25,14 @@ func TestAccessTwoNodesReconnectLiveMySQL(t *testing.T) {
 	runAccessClientsLiveMySQL(t, 3, 2, "mole")
 }
 
-func accessProcessResponse(t *testing.T, client *accessClient, id demopb.MsgId, request, response proto.Message) {
+func accessProcessResponse(t *testing.T, client *accessClient, id, expected demopb.MsgId, request, response proto.Message) {
 	t.Helper()
 	envelope := accessRequest(t, client, id, request)
-	expected := id + 1
-	if _, ok := response.(*demopb.ActionAck); ok {
-		expected = demopb.MsgId_S2C_ACTION_ACK
-		if len(envelope.Payload) != 0 {
-			t.Fatalf("request %v returned non-empty ActionAck: %v", id, envelope)
-		}
-	}
 	if envelope.MsgId != uint32(expected) {
-		t.Fatalf("request %v returned %v", id, envelope)
+		t.Fatalf("request %v: want %v, got %v", id, expected, envelope)
+	}
+	if expected == demopb.MsgId_S2C_ACTION_ACK && len(envelope.Payload) != 0 {
+		t.Fatalf("request %v returned non-empty ActionAck: %v", id, envelope)
 	}
 	if err := proto.Unmarshal(envelope.Payload, response); err != nil {
 		t.Fatal(err)
@@ -72,7 +68,7 @@ func accessLoginAndEnter(t *testing.T, address string, player *accessDemoPlayer)
 		t.Fatalf("跨接入身份变化: got=%d want=%d", login.UserId, player.id)
 	}
 	var enter demopb.EnterResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}, &enter)
+	accessProcessResponse(t, client, demopb.MsgId_C2S_ENTER, demopb.MsgId_S2C_ENTER, &demopb.EnterRequest{}, &enter)
 	if enter.GetSnapshot().GetAttackName() == "" || enter.Silver == nil {
 		t.Fatalf("重连缺少快照或初始余额: %v", &enter)
 	}
@@ -256,7 +252,7 @@ func verifyAccessReconnect(t *testing.T, ctx context.Context, routes map[string]
 		t.Fatalf("跨接入重复扣款或丢账: count=%d amount=%d version=%d hit=%v", count, amount, version, hit)
 	}
 
-	accessProcessResponse(t, reconnected, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+	accessProcessResponse(t, reconnected, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	t.Logf("同账号 access-01 → access-02 → access-01：旧连接关闭、迟到解绑被拒、新接入收到推送；验收核对原 HitID 仅一笔入账，余额 %d、版本 %d", amount, version)
 	return hit.HitId
 }
@@ -293,7 +289,7 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 
 	// 存活接入上的玩家不重新登录，继续按原连接命中并完成真实入账。
 	var fresh demopb.SnapshotResponse
-	accessProcessResponse(t, peer, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
+	accessProcessResponse(t, peer, demopb.MsgId_C2S_SNAPSHOT, demopb.MsgId_S2C_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
 	healthyHit := accessHitTarget(t, peer, fresh.Snapshot, "after-other-access-crash")
 	*operationIDs = append(*operationIDs, healthyHit.HitId)
 	accessWaitCommitted(t, ctx, db, healthyHit.HitId)
@@ -322,7 +318,7 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 	accessWaitCommitted(t, ctx, db, crashHit.HitId, oldHitID)
 
 	// 恢复账号在原 Mole 组真正再敲一锤，验证新 LoginID 已可操作。
-	accessProcessResponse(t, recovered, demopb.MsgId_C2S_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
+	accessProcessResponse(t, recovered, demopb.MsgId_C2S_SNAPSHOT, demopb.MsgId_S2C_SNAPSHOT, &demopb.SnapshotRequest{}, &fresh)
 	recoveredHit := accessHitTarget(t, recovered, fresh.Snapshot, "after-access-reconnect")
 	*operationIDs = append(*operationIDs, recoveredHit.HitId)
 	accessWaitCommitted(t, ctx, db, recoveredHit.HitId, crashHit.HitId, oldHitID)
@@ -353,7 +349,7 @@ func verifyAccessProcessCrash(t *testing.T, ctx context.Context, routes map[stri
 	}
 	for _, client := range []*accessClient{recovered, peer} {
 
-		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, &demopb.LeaveRequest{}, &demopb.ActionAck{})
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LeaveRequest{}, &demopb.ActionAck{})
 	}
 	t.Log("SIGKILL access-01：已有内存命中继续入账，access-02 原连接继续命中/入账；受影响账号重新登录后在原组和座位再次命中并入账，验收核对旧 HitID 无重复扣款")
 }

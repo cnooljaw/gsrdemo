@@ -31,18 +31,22 @@ type landlordSavedResult struct {
 
 func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, request proto.Message) *demopb.LandlordSnapshot {
 	t.Helper()
+	var expected demopb.MsgId
 	var response proto.Message
 	switch id {
 	case demopb.MsgId_C2S_LANDLORD_ENTER:
+		expected = demopb.MsgId_S2C_LANDLORD_ENTER
 		response = &demopb.LandlordEnterResponse{}
 	case demopb.MsgId_C2S_LANDLORD_READY, demopb.MsgId_C2S_LANDLORD_PLAY, demopb.MsgId_C2S_LANDLORD_CALL, demopb.MsgId_C2S_LANDLORD_ROB:
+		expected = demopb.MsgId_S2C_ACTION_ACK
 		response = &demopb.ActionAck{}
 	case demopb.MsgId_C2S_LANDLORD_SNAPSHOT:
+		expected = demopb.MsgId_S2C_LANDLORD_SNAPSHOT
 		response = &demopb.LandlordSnapshotResponse{}
 	default:
 		t.Fatal("unsupported landlord response")
 	}
-	accessProcessResponse(t, client, id, request, response)
+	accessProcessResponse(t, client, id, expected, request, response)
 	var view *demopb.LandlordSnapshot
 	if action, ok := response.(interface {
 		GetSnapshot() *demopb.LandlordSnapshot
@@ -50,7 +54,7 @@ func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, re
 		view = action.GetSnapshot()
 	} else {
 		var snapshot demopb.LandlordSnapshotResponse
-		accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, demopb.MsgId_S2C_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
 		view = snapshot.GetSnapshot()
 	}
 	if view == nil {
@@ -63,7 +67,7 @@ func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, re
 		}
 		time.Sleep(50 * time.Millisecond)
 		var snapshot demopb.LandlordSnapshotResponse
-		accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, demopb.MsgId_S2C_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
 		view = snapshot.GetSnapshot()
 		if view == nil {
 			t.Fatal("missing landlord snapshot")
@@ -315,7 +319,7 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 		}
 		for _, client := range clients {
 			if !scenario.restartLandlord {
-				accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_LEAVE, &demopb.LandlordLeaveRequest{}, &demopb.ActionAck{})
+				accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_LEAVE, demopb.MsgId_S2C_ACTION_ACK, &demopb.LandlordLeaveRequest{}, &demopb.ActionAck{})
 			}
 			_ = client.Close()
 		}

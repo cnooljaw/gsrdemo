@@ -216,14 +216,15 @@ unset demo_password
 
 RPC 契约生成与客户端协议生成是两个入口，生成后仍需验证实际 Handler 与业务调用链。
 
-单/双接入的独立节点进程、三客户端、真实 MySQL 和临时 Redis 的自动闭环验收（先完成依赖安装、建表、本机配置和构建；需 redis-server 和 redis-cli）。此验收执行外部节点二进制，使用 `-count=1` 确保本次实际启动进程：
+单/双接入的进程验收使用三个客户端、真实 MySQL 和临时 Redis。先安装依赖、建表并准备本机配置，确保 `redis-server` 和 `redis-cli` 可用。每次验收前构建节点和客户端，确保它们使用同一版协议。`-count=1` 确保实际启动进程。
 
 ```shell
+./scripts/dev.sh build
 GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
-  -run '^TestAccess(ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult|CLITokenFileAuthentication)$' -v -timeout=1m
+  -run '^TestAccess(ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult|CLITokenFileAuthentication)$' -v -timeout=3m
 ```
 
-用例创建并清理自己的随机测试账号和钱包，不使用 `demo1～3`；只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正与旧客户端查账入口拒绝，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、终态后不重复查账、三人唯一结算、结算服中断重试及已保存结果的地主节点重启恢复。地鼠验收程序在客户端结束后按本次操作 ID 集中核对 SQL 账务与钱包，不经玩家协议轮询。测试覆盖入口与恢复边界见 [设计文档](docs/DESIGN.md#9-验证依据与设计取舍)。
+用例创建并清理自己的随机测试账号和钱包，只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、三人唯一结算、结算服中断重试及已保存结果的地主节点重启恢复。地鼠验收程序在客户端结束后按本次操作 ID 集中核对 SQL 账务与钱包。测试覆盖入口与恢复边界见 [设计文档](docs/DESIGN.md#9-验证依据与设计取舍)。
 
 ## 源码与文档
 
