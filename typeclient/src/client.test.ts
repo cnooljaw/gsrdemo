@@ -3,7 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { DemoClient } from "./client.js";
 import { EnvelopeSchema } from "./gen/gsr/common/v1/common_pb.js";
-import { LandlordSeatPushSchema, LandlordPlayPushSchema, LandlordTurnPushSchema, LandlordSnapshotSchema, BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
+import { LandlordSeatPushSchema, LandlordBidPushSchema, LandlordPlayPushSchema, LandlordTurnPushSchema, LandlordSnapshotSchema, BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
 
 // 仅替代传输，业务请求/推送仍经过实际 Envelope 编解码和 DemoClient 分发。
 class FakeSocket extends EventTarget {
@@ -130,6 +130,21 @@ test("斗地主恢复场景后接续较新事件", async () => {
     assert.deepEqual(client.landlord?.players.map(player => player.userId), [1n, 2n, 3n]);
     send(6n, 9n);
     assert.deepEqual(client.landlord?.players.map(player => player.userId), [1n, 2n, 3n]);
+  } finally { client.close(); }
+});
+
+// 保护三轮无人叫地主回到等待时，事件更新与服务器快照一样清零重发次数。
+test("斗地主流局后等待状态清零重发次数", async () => {
+  const client = await DemoClient.connect("ws://fixture", 1000);
+  try {
+    client.setLandlord(create(LandlordSnapshotSchema, { roomName: "table", phase: "calling", revision: 4n, redeals: 2n, hand: [3n], players: [{ userId: 1n, seat: 0n, ready: true, remaining: 17n }] }));
+    FakeSocket.last.envelope(MsgId.S2C_LANDLORD_BID_PUSH, 0, toBinary(LandlordBidPushSchema,
+      create(LandlordBidPushSchema, { roomName: "table", revision: 5n, userId: 1n, phase: "waiting", landlordSeat: -1n, candidateSeat: -1n })));
+    assert.equal(client.landlord?.phase, "waiting");
+    assert.equal(client.landlord?.redeals, 0n);
+    assert.deepEqual(client.landlord?.hand, []);
+    assert.equal(client.landlord?.players[0]?.ready, false);
+    assert.equal(client.landlord?.players[0]?.remaining, 0n);
   } finally { client.close(); }
 });
 

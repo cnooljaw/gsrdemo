@@ -86,6 +86,7 @@ export function applyLandlordEvent(view: LandlordSnapshot, event: LandlordEvent)
       view.bottom = [...event.value.bottom];
       if (view.phase === "waiting") {
         view.hand = [];
+        view.redeals = 0n;
         for (const item of view.players) { item.ready = false; item.remaining = 0n; }
       }
       break;
