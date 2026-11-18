@@ -224,7 +224,9 @@ func TestReadyFailureKeepsTableAndRetryDealsOnce(t *testing.T) {
 	if _, err := landlordTestRPC(t, routes, "landlord", room, landlordattack.RoomReadyCommand, uint64(3), "login"); !errors.Is(err, runtime.ErrMailboxFull) {
 		t.Fatalf("未注入封桌消息满邮箱错误: %v", err)
 	}
-	after := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login")
+	after := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login").(map[string]any)
+	delete(before, "server_ms")
+	delete(after, "server_ms")
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("失败的 Ready 改变了准备、轮次或手牌")
 	}
@@ -243,9 +245,96 @@ func TestReadyFailureKeepsTableAndRetryDealsOnce(t *testing.T) {
 	if _, err := landlordTestRPC(t, routes, "landlord", room, landlordattack.RoomReadyCommand, uint64(3), "login"); !errors.Is(err, errLandlordBusy) {
 		t.Fatalf("发牌后仍接受重复 Ready: %v", err)
 	}
-	current := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login")
+	current := landlordTestValue(t, routes, "landlord", room, landlordattack.RoomSnapshotCommand, uint64(3), "login").(map[string]any)
+	delete(dealt, "server_ms")
+	delete(current, "server_ms")
 	if !reflect.DeepEqual(dealt, current) || landlordTestValue(t, routes, "landlord", room, 99) != int64(2) {
 		t.Fatal("重复 Ready 改变了已发的牌、轮次或重复封桌")
+	}
+}
+
+// TestTrusteeControlAndIdentity 保护本人可开启/取消托管，旧登录和托管中的手动出牌不能改变本轮。
+func TestTrusteeControlAndIdentity(t *testing.T) {
+	game := testLandlordGame(t)
+	game.Players[0].Hand = []int64{3, 4}
+	service := newAttackService(game.Name, landlordJournal{}, nil, "settlement")
+	service.game = *game
+	routes := map[cluster.NodeID]string{}
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordReadyProbe{attackService: service}})
+	if landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomTrusteeCommand, uint64(1), "login", true) != true {
+		t.Fatal("未确认托管")
+	}
+	view := landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
+	if view["players"].([]any)[0].(map[string]any)["trustee"] != true || view["server_ms"].(int64) == 0 {
+		t.Fatal("场景未包含托管和服务器时间")
+	}
+	if _, err := landlordTestRPC(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand, uint64(1), "login", game.Turn, []any{int64(3)}); !errors.Is(err, errLandlordTurn) {
+		t.Fatalf("托管中仍接受手动出牌: %v", err)
+	}
+	if _, err := landlordTestRPC(t, routes, "landlord", game.Name, landlordattack.RoomTrusteeCommand, uint64(1), "old-login", false); !errors.Is(err, errLandlordStale) {
+		t.Fatalf("旧登录能够取消托管: %v", err)
+	}
+	if landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomTrusteeCommand, uint64(1), "login", false) != true {
+		t.Fatal("未确认取消托管")
+	}
+	if landlordTestValue(t, routes, "landlord", game.Name, landlordattack.RoomPlayCommand, uint64(1), "login", game.Turn, []any{int64(3)}) != true {
+		t.Fatal("取消托管后不能正常出牌")
+	}
+}
+
+// landlordTrusteeRecorder 记录三个连接收到的真实 Cluster 托管和出牌事件。
+type landlordTrusteeRecorder struct{ events chan<- map[string]any }
+
+var _ gsr.Service = (*landlordTrusteeRecorder)(nil)
+
+func (*landlordTrusteeRecorder) OnStart(context.Context, gsr.ServiceContext) error { return nil }
+func (*landlordTrusteeRecorder) OnStop(context.Context) error                      { return nil }
+func (recorder *landlordTrusteeRecorder) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == accessagent.LandlordTrusteePushCommand || cmd == accessagent.LandlordPlayPushCommand {
+		event := args[1].(map[string]any)
+		event["command"] = uint64(cmd)
+		recorder.events <- event
+	}
+	return nil, nil
+}
+
+// TestPlayTimeoutBroadcastsTrusteeThenAction 保护真实 Pulse 先通知全桌进入托管，再通知同一自动出牌。
+func TestPlayTimeoutBroadcastsTrusteeThenAction(t *testing.T) {
+	game := testLandlordGame(t)
+	game.Players[0].Hand = []int64{3, 4}
+	for i := range game.Players {
+		game.Players[i].AccessNode, game.Players[i].AgentName = "access", "agent"
+	}
+	game.Deadline = time.Now().Add(-time.Second)
+	service := newAttackService(game.Name, landlordJournal{}, nil, "settlement")
+	service.game = *game
+	events := make(chan map[string]any, 6)
+	routes := map[cluster.NodeID]string{}
+	startLandlordTestNode(t, routes, "access", map[string]gsr.Service{"agent": &landlordTrusteeRecorder{events: events}})
+	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{game.Name: &landlordSettlementProbe{service}, landlordrpc.ServiceName: directoryForLandlordTables(service)})
+	var previous uint64
+	for i := range 6 {
+		select {
+		case event := <-events:
+			want := uint64(accessagent.LandlordTrusteePushCommand)
+			if i >= 3 {
+				want = uint64(accessagent.LandlordPlayPushCommand)
+			}
+			if event["command"] != want || event["user_id"] != uint64(1) {
+				t.Fatalf("自动动作事件顺序或身份错误: %v", event)
+			}
+			revision := event["revision"].(uint64)
+			if i == 0 || i == 3 {
+				if revision <= previous {
+					t.Fatal("事件序号没有递增")
+				}
+				previous = revision
+			} else if revision != previous {
+				t.Fatal("同桌广播序号不一致")
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("托管事件没有到达全部玩家")
+		}
 	}
 }
 
@@ -583,7 +672,15 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 	if view := landlordTestValue(t, routes, "landlord", other, landlordattack.RoomSnapshotCommand, uint64(4), "login").(map[string]any); view["phase"] != "waiting" {
 		t.Fatal("其他桌状态异常")
 	}
-	// 等实际 10 秒叫地主超时；不修改 owner 内部字段，也不注入生产测试命令。
+	// 等发牌动画由服务器结束，再等实际 10 秒叫地主超时。
+	startLimit := time.Now().Add(5 * time.Second)
+	for first["deadline_ms"].(int64) == 0 {
+		if time.Now().After(startLimit) {
+			t.Fatal("发牌后服务器没有开放叫牌")
+		}
+		time.Sleep(25 * time.Millisecond)
+		first = landlordTestValue(t, routes, "landlord", name, landlordattack.RoomSnapshotCommand, uint64(1), "new-login").(map[string]any)
+	}
 	wait := time.Until(time.UnixMilli(first["deadline_ms"].(int64)).Add(500 * time.Millisecond))
 	if wait > 0 {
 		<-time.After(wait)

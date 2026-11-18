@@ -26,6 +26,8 @@ const (
 	landlordBidPushCommand           runtime.CommandID = 114
 	landlordPlayPushCommand          runtime.CommandID = 115
 	landlordSettlementPushCommand    runtime.CommandID = 116
+	landlordTrusteePushCommand       runtime.CommandID = 117
+	landlordTurnPushCommand          runtime.CommandID = 118
 )
 
 // agent 独占当前连接身份和路由，不持有权威游戏状态或钱包。

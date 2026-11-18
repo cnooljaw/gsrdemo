@@ -118,6 +118,8 @@ func (landlord *comLandlord) callRoom(self gsr.CommandContext, reply protocol.Co
 		return reply.Response(uint32(responseID), &demopb.LandlordRobResponse{})
 	case demopb.MsgId_S2C_LANDLORD_PLAY:
 		return reply.Response(uint32(responseID), &demopb.LandlordPlayResponse{})
+	case demopb.MsgId_S2C_LANDLORD_TRUSTEE:
+		return reply.Response(uint32(responseID), &demopb.LandlordTrusteeResponse{})
 	}
 	return errInvalidBackendReply
 }
@@ -132,6 +134,10 @@ func (landlord *comLandlord) onPlay(self gsr.CommandContext, reply protocol.Cont
 		cards[i] = c
 	}
 	return landlord.callRoom(self, reply, landlordattack.RoomPlayCommand, demopb.MsgId_S2C_LANDLORD_PLAY, request.Turn, cards)
+}
+
+func (landlord *comLandlord) onTrustee(self gsr.CommandContext, reply protocol.Context, request *demopb.LandlordTrusteeRequest) error {
+	return landlord.callRoom(self, reply, landlordattack.RoomTrusteeCommand, demopb.MsgId_S2C_LANDLORD_TRUSTEE, request.Enabled)
 }
 
 func (landlord *comLandlord) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.LandlordSnapshotRequest) error {
@@ -196,6 +202,7 @@ func (landlord *comLandlord) ProtocolHandlers() map[uint32]any {
 		uint32(demopb.MsgId_C2S_LANDLORD_PLAY):     landlord.onPlay,
 		uint32(demopb.MsgId_C2S_LANDLORD_SNAPSHOT): landlord.onSnapshot,
 		uint32(demopb.MsgId_C2S_LANDLORD_LEAVE):    landlord.onLeave,
+		uint32(demopb.MsgId_C2S_LANDLORD_TRUSTEE):  landlord.onTrustee,
 	}
 }
 
@@ -208,6 +215,8 @@ func (landlord *comLandlord) CommandHandlers() map[runtime.CommandID]any {
 		landlordBidPushCommand:        landlord.handleBidPush,
 		landlordPlayPushCommand:       landlord.handlePlayPush,
 		landlordSettlementPushCommand: landlord.handleSettlementPush,
+		landlordTrusteePushCommand:    landlord.handleTrusteePush,
+		landlordTurnPushCommand:       landlord.handleTurnPush,
 	}
 }
 

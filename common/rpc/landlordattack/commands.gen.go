@@ -12,4 +12,5 @@ const (
 	RoomBidCommand      = 6
 	RoomRobCommand      = 7
 	RoomTickCommand     = 8
+	RoomTrusteeCommand  = 9
 )

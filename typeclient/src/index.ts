@@ -73,7 +73,7 @@ async function run(): Promise<void> {
       MsgId.S2C_LOGIN, LoginResponseSchema);
     print("login", login);
     if (config.game === "landlord") {
-      await runLandlord(client, print, config.timeout);
+      await runLandlord(client, print);
       return;
     }
     const entry = await client.request(MsgId.C2S_ENTER, toBinary(EnterRequestSchema, create(EnterRequestSchema)), MsgId.S2C_ENTER, EnterResponseSchema);

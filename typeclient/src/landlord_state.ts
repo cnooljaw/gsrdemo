@@ -1,7 +1,7 @@
 import { create } from "@bufbuild/protobuf";
 import {
   LandlordPlayerSchema, type LandlordSnapshot, type LandlordSeatPush, type LandlordReadyPush,
-  type LandlordDealPush, type LandlordBidPush, type LandlordPlayPush, type LandlordSettlementPush,
+  type LandlordDealPush, type LandlordBidPush, type LandlordPlayPush, type LandlordSettlementPush, type LandlordTrusteePush, type LandlordTurnPush,
 } from "./gen/demo/v1/game_pb.js";
 
 export type LandlordEvent =
@@ -10,7 +10,9 @@ export type LandlordEvent =
   | { kind: "deal"; value: LandlordDealPush }
   | { kind: "bid"; value: LandlordBidPush }
   | { kind: "play"; value: LandlordPlayPush }
-  | { kind: "settlement"; value: LandlordSettlementPush };
+  | { kind: "settlement"; value: LandlordSettlementPush }
+  | { kind: "trustee"; value: LandlordTrusteePush }
+  | { kind: "turn"; value: LandlordTurnPush };
 
 // 只应用已按牌桌和序号排序的事件；手牌只存在于本人场景中。
 export function applyLandlordEvent(view: LandlordSnapshot, event: LandlordEvent): void {
@@ -48,10 +50,14 @@ export function applyLandlordEvent(view: LandlordSnapshot, event: LandlordEvent)
       view.turn = event.value.turn;
       view.turnSeat = event.value.turnSeat;
       view.deadlineMs = event.value.deadlineMs;
+      view.serverMs = event.value.serverMs;
+      view.startMs = event.value.startMs;
+      view.canAct = false;
       for (const player of view.players) {
         player.remaining = 17n;
         player.callChoice = 0n;
         player.robChoice = 0n;
+        player.trustee = false;
       }
       break;
     case "bid": {
@@ -71,6 +77,9 @@ export function applyLandlordEvent(view: LandlordSnapshot, event: LandlordEvent)
       view.turn = event.value.turn;
       view.turnSeat = event.value.turnSeat;
       view.deadlineMs = event.value.deadlineMs;
+      view.serverMs = event.value.serverMs;
+      view.startMs = event.value.startMs;
+      view.canAct = event.value.canAct;
       view.candidateSeat = event.value.candidateSeat;
       view.landlordSeat = event.value.landlordSeat;
       view.multiplier = event.value.multiplier;
@@ -97,6 +106,9 @@ export function applyLandlordEvent(view: LandlordSnapshot, event: LandlordEvent)
       view.turn = event.value.turn;
       view.turnSeat = event.value.turnSeat;
       view.deadlineMs = event.value.deadlineMs;
+      view.serverMs = event.value.serverMs;
+      view.startMs = event.value.startMs;
+      view.canAct = event.value.canAct;
       view.lastCards = [...event.value.lastCards];
       view.lastSeat = event.value.lastSeat;
       view.winnerSeat = event.value.winnerSeat;
@@ -106,6 +118,24 @@ export function applyLandlordEvent(view: LandlordSnapshot, event: LandlordEvent)
     case "settlement":
       view.settlement = event.value.settlement;
       break;
+    case "trustee": {
+      const player = view.players.find(item => item.userId === event.value.userId);
+      if (player) player.trustee = event.value.trustee;
+      view.deadlineMs = event.value.deadlineMs;
+      view.serverMs = event.value.serverMs;
+      view.startMs = event.value.startMs;
+      break;
+    }
+    case "turn": {
+      view.phase = event.value.phase;
+      view.turn = event.value.turn;
+      view.turnSeat = event.value.turnSeat;
+      view.deadlineMs = event.value.deadlineMs;
+      view.serverMs = event.value.serverMs;
+      view.startMs = 0n;
+      view.canAct = true;
+      break;
+    }
   }
   view.revision = value.revision;
 }

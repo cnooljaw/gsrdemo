@@ -1,7 +1,7 @@
 import { create, fromBinary, toBinary, type DescMessage, type MessageShape } from "@bufbuild/protobuf";
 import { EnvelopeSchema, ErrorResponseSchema, MsgId as CommonMsgId, type Envelope } from "./gen/gsr/common/v1/common_pb.js";
 import { type LandlordSnapshot, BalancePushSchema, BalanceSchema, MsgId, SnapshotPushSchema, type Balance, type Snapshot,
-  LandlordSeatPushSchema, LandlordReadyPushSchema, LandlordDealPushSchema, LandlordBidPushSchema, LandlordPlayPushSchema, LandlordSettlementPushSchema,
+  LandlordSeatPushSchema, LandlordReadyPushSchema, LandlordDealPushSchema, LandlordBidPushSchema, LandlordPlayPushSchema, LandlordSettlementPushSchema, LandlordTrusteePushSchema, LandlordTurnPushSchema,
 } from "./gen/demo/v1/game_pb.js";
 import { applyLandlordEvent, type LandlordEvent } from "./landlord_state.js";
 import { authenticatedFrame, completeClientHandshake, createClientHandshake, type ClientAuthenticator } from "./secure_auth.js";
@@ -25,6 +25,7 @@ export class DemoClient {
   private landlordOverflow = false;
   private landlordDiscardedThrough = 0n;
   private landlordWake?: () => void;
+  private landlordClock = 0;
   silver?: Balance;
   onPush: (kind: string, value: unknown) => void = () => {};
 
@@ -137,6 +138,7 @@ export class DemoClient {
     if (this.landlord?.roomName === snapshot.roomName && this.landlord.revision > snapshot.revision) return;
     if (this.landlord && this.landlord.roomName !== snapshot.roomName) this.landlordDiscardedThrough = 0n;
     this.landlord = snapshot;
+    this.landlordClock = performance.now();
     this.landlordOverflow = snapshot.revision < this.landlordDiscardedThrough;
     this.landlordEvents = this.landlordEvents.filter(event => event.value.roomName === snapshot.roomName && event.value.revision > snapshot.revision);
     this.drainLandlordEvents();
@@ -148,6 +150,17 @@ export class DemoClient {
     this.landlordEvents = [];
     this.landlordOverflow = false;
     this.landlordDiscardedThrough = 0n;
+    this.landlordClock = 0;
+  }
+
+  // 服务端的截止时间与采样时间相减，只用单调时钟推算经过时间，不依赖客户端墙上时钟。
+  landlordRecoveryWait(): number {
+    const view = this.landlord;
+    if (!view || view.phase === "finished" || view.serverMs === 0n) return 25_000;
+    const target = view.canAct ? view.deadlineMs : view.startMs;
+    if (target === 0n) return 25_000;
+    const remaining = Number(target - view.serverMs) - (performance.now() - this.landlordClock);
+    return Math.max(1000, Math.min(25_000, remaining + 1000));
   }
 
   get landlordNeedsSync(): boolean {
@@ -195,6 +208,9 @@ export class DemoClient {
         this.landlordDiscardedThrough = event!.value.revision;
         return;
       }
+      if (event!.kind === "deal" || event!.kind === "bid" || event!.kind === "play" || event!.kind === "trustee" || event!.kind === "turn") {
+        this.landlordClock = performance.now();
+      }
       this.onPush(`landlord_event_${event!.kind}`, event!.value);
     }
   }
@@ -225,6 +241,10 @@ export class DemoClient {
       this.receiveLandlordEvent({ kind: "play", value: fromBinary(LandlordPlayPushSchema, envelope.payload) });
     } else if (envelope.msgId === MsgId.S2C_LANDLORD_SETTLEMENT_PUSH) {
       this.receiveLandlordEvent({ kind: "settlement", value: fromBinary(LandlordSettlementPushSchema, envelope.payload) });
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_TRUSTEE_PUSH) {
+      this.receiveLandlordEvent({ kind: "trustee", value: fromBinary(LandlordTrusteePushSchema, envelope.payload) });
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_TURN_PUSH) {
+      this.receiveLandlordEvent({ kind: "turn", value: fromBinary(LandlordTurnPushSchema, envelope.payload) });
     } else if (envelope.msgId === MsgId.S2C_SNAPSHOT_PUSH) {
       const message = fromBinary(SnapshotPushSchema, envelope.payload);
       if (message.snapshot && this.snapshot?.attackName === message.snapshot.attackName) {

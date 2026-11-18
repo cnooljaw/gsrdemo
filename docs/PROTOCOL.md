@@ -69,6 +69,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 | Call | 1171 → 1172 | `turn uint64`、`yes bool` | 空成功响应；叫/不叫结果广播全桌 |
 | Rob | 1181 → 1182 | `turn uint64`、`yes bool` | 空成功响应；抢/不抢结果广播全桌 |
 | Play | 1121 → 1122 | `turn uint64`、`cards int64[]` | 空成功响应；空 cards 表示不出，出牌事件广播全桌 |
+| Trustee | 1201 → 1202 | `enabled bool` | 空成功响应；本人开启或取消托管，状态由事件广播 |
 | Snapshot | 1131 → 1132 | 空 | `snapshot`，当前阶段与本人手牌 |
 | Leave | 1141 → 1142 | 空 | 空 `LandlordLeaveResponse`；当前 Handler 不填其中预留的 snapshot 字段，成功表示牌桌已接纳离开，目录回收可稍后完成 |
 
@@ -78,17 +79,19 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 | --- | --- | --- |
 | Seat | 1191 | `user_id, seat, joined, ready`；坐下、准备取消或回收座位 |
 | Ready | 1192 | `user_id, seat, ready`；玩家准备 |
-| Deal | 1193 | `hand, turn, turn_seat, deadline_ms, redeals`；每人只收到自己的手牌 |
-| Bid | 1194 | `user_id, rob, yes, phase, turn, turn_seat, deadline_ms, candidate_seat, landlord_seat, multiplier, bottom, redealt`；叫抢及确定地主 |
-| Play | 1195 | `user_id, cards, remaining, phase, turn, turn_seat, deadline_ms, last_cards, last_seat, winner_seat, multiplier`；空 cards 为不出 |
+| Deal | 1193 | `hand, turn, turn_seat, start_ms, deadline_ms, server_ms, redeals`；每人只收到自己的手牌，等待服务器开放叫地主 |
+| Bid | 1194 | `user_id, rob, yes, phase, turn, turn_seat, start_ms, can_act, deadline_ms, server_ms, candidate_seat, landlord_seat, multiplier, bottom, redealt`；叫抢及确定地主 |
+| Play | 1195 | `user_id, cards, remaining, phase, turn, turn_seat, start_ms, can_act, deadline_ms, server_ms, last_cards, last_seat, winner_seat, multiplier`；空 cards 为不出 |
 | Settlement | 1196 | `settlement`；每人只收到自己的实际扣返和确认余额 |
+| Trustee | 1197 | `user_id, trustee, start_ms, deadline_ms, server_ms`；托管状态和当前时间信息 |
+| Turn | 1198 | `phase, turn, turn_seat, deadline_ms, server_ms`；动画等待结束，服务器开放当前轮次 |
 
 | 快照字段组 | 字段与类型 | 含义 |
 | --- | --- | --- |
 | 标识与阶段 | `room_name string`、`phase string` | phase 为 waiting/calling/robbing/playing/finished |
 | 座位 | `seat/turn_seat/last_seat/landlord_seat/candidate_seat/winner_seat int64` | 座位从 0 开始；未确定的地主/候选/胜方为 -1，last_seat 无值时也为 -1 |
-| 轮次与时间 | `turn uint64`、`deadline_ms int64`、`redeals int64`、`revision uint64` | turn 用于操作校验；revision 是当前事件序号，进入或恢复用作基线；无计时阶段 deadline_ms=0 |
-| 玩家 | `players[]`：`user_id uint64`、`seat/remaining/call_choice/rob_choice int64`、`ready bool` | 不暴露他人手牌；choice 为 0 未决定、-1 否、1 是 |
+| 轮次与时间 | `turn uint64`、`deadline_ms/start_ms/server_ms int64`、`can_act bool`、`redeals int64`、`revision uint64` | turn 用于操作校验，revision 为事件基线；动画等待时 can_act=false、start_ms 为预计开放时间；开放后 deadline_ms 为人工截止或托管自动执行时间；无对应时间点时为 0 |
+| 玩家 | `players[]`：`user_id uint64`、`seat/remaining/call_choice/rob_choice int64`、`ready/trustee bool` | 不暴露他人手牌；choice 为 0 未决定、-1 否、1 是 |
 | 牌面 | `hand/bottom/last_cards int64[]` | hand 仅本人手牌；bottom 确定地主后公开；last_cards 为上一手牌 |
 | 倍率 | `multiplier int64` | 全桌统一倍率 |
 | 结算 | 可选 `settlement LandlordSettlement` | 无本局结算操作时不携带 |
@@ -98,7 +101,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 进行中 Leave 只断开推送并保留牌位，超时动作继续。出牌事件先通知动作；局末结算确认后单独发送 Settlement，主动 Snapshot 仍可能读到 pending，其默认零余额不代表已确认余额。成功响应表示牌桌已执行动作，不表示广播一定送达；失败、断线或超时可能结果未知，不盲目重复出牌。
 
-客户端以 Enter/Snapshot 的 revision 建立基线，对同桌事件按序应用，忽略已包含的旧事件，发现缺口请求 Snapshot；同一事件序号对每名在线玩家均有对应消息，发牌和结算的内容按本人生成。缓冲过多事件、场景不一致或等待预计更新超时也可恢复场景；最后一条事件丢失不能单靠序号发现。TS 演示客户端按事件驱动，恢复时最多保留 128 条在途事件。`turn` 仍只用于操作校验，不充当事件序号。
+客户端以 Enter/Snapshot 的 revision 建立基线，对同桌事件按序应用，忽略已包含的旧事件，发现缺口请求 Snapshot；同一事件序号对每名在线玩家均有对应消息，发牌和结算的内容按本人生成。缓冲过多事件、场景不一致或等待预计更新超时也可恢复场景；最后一条事件丢失不能单靠序号发现。TS 演示客户端按事件驱动，恢复时最多保留 128 条在途事件。计时由牌桌服务器判定：发牌后等待 3 秒、首次或重新领出前等待 0.5 秒，客户端须等 Turn 推送或快照显示 `can_act=true` 才提交操作；托管玩家仍不能手动操作。客户端以服务器时间点与 `server_ms` 的差值及本地单调经过时间估计恢复等待，不依赖本机日历时间。`turn` 仍只用于操作校验，不充当事件序号。
 
 ### 1.5 错误与保留编号
 
@@ -186,11 +189,12 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | `RoomName / 6` Call | Call | `U, L, turn uint64, yes bool` | true；叫/不叫 |
 | `RoomName / 7` Rob | Call | `U, L, turn uint64, yes bool` | true；抢/不抢 |
 | `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | true；空列表表示不出 |
+| `RoomName / 9` Trustee | Call | `U, L, enabled bool` | true；本人托管开关；牌桌广播结果 |
 | `RoomName / 4` Snapshot | Call | `U, L` | 本人桌快照 |
 | `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回空 C/S LeaveResponse；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
 | `landlord / 5` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
-快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Snapshot 回包的 `room_name` 与本次请求目标一致，Ready、Call、Rob、Play 只接受 true 成功确认，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
+快照 map 与 C/S LandlordSnapshot 字段对应；access 核对 Join、Snapshot 回包的 `room_name` 与本次请求目标一致，Ready、Call、Rob、Play、Trustee 只接受 true 成功确认，不匹配按[非法回包流程](DESIGN.md#33-失败替换与断线)处理。Join 超时可能已加入，不能换桌重试；只有明确桌不存在/关闭等失败才走 Discard。目录的 CheckRoute/Seal/Release，以及桌 Tick，属于节点内协作，不是客户端或普通跨节点业务入口。
 
 Join 失败仍可能伴随旧成员回收的更新推送；该推送不代表本次进入成功，Call 继续返回原错误。成功 Join 广播入座事件，回收通知规则见[设计](DESIGN.md#63-重试清理与恢复)。
 
@@ -271,6 +275,8 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | landlord / 114 BidPush | `L, event map` | 转发叫抢事件 | 1194 |
 | landlord / 115 PlayPush | `L, event map` | 转发出牌事件 | 1195 |
 | landlord / 116 SettlementPush | `L, event map` | 转发本人的结算回执 | 1196 |
+| landlord / 117 TrusteePush | `L, event map` | 转发托管状态和操作时间 | 1197 |
+| landlord / 118 TurnPush | `L, event map` | 转发动画结束后的轮次开放 | 1198 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。

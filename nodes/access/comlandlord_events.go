@@ -22,7 +22,7 @@ func (landlord *comLandlord) pushEvent(login string, payload map[string]any, id 
 		return nil
 	}
 	switch message.(type) {
-	case *demopb.LandlordSeatPush, *demopb.LandlordReadyPush, *demopb.LandlordBidPush, *demopb.LandlordPlayPush:
+	case *demopb.LandlordSeatPush, *demopb.LandlordReadyPush, *demopb.LandlordBidPush, *demopb.LandlordPlayPush, *demopb.LandlordTrusteePush:
 		if userID, ok := payload["user_id"].(uint64); !ok || userID == 0 {
 			return errInvalidBackendReply
 		}
@@ -34,6 +34,10 @@ func (landlord *comLandlord) pushEvent(login string, payload map[string]any, id 
 		settlement, ok := payload["settlement"].(map[string]any)
 		operationID, validID := settlement["operation_id"].(string)
 		if !ok || settlement["status"] != "committed" || !validID || operationID == "" {
+			return errInvalidBackendReply
+		}
+	case *demopb.LandlordTurnPush:
+		if turn, ok := payload["turn"].(uint64); !ok || turn == 0 {
 			return errInvalidBackendReply
 		}
 	}
@@ -65,4 +69,12 @@ func (landlord *comLandlord) handlePlayPush(_ gsr.CommandContext, login string, 
 
 func (landlord *comLandlord) handleSettlementPush(_ gsr.CommandContext, login string, payload map[string]any) error {
 	return landlord.pushEvent(login, payload, demopb.MsgId_S2C_LANDLORD_SETTLEMENT_PUSH, &demopb.LandlordSettlementPush{})
+}
+
+func (landlord *comLandlord) handleTrusteePush(_ gsr.CommandContext, login string, payload map[string]any) error {
+	return landlord.pushEvent(login, payload, demopb.MsgId_S2C_LANDLORD_TRUSTEE_PUSH, &demopb.LandlordTrusteePush{})
+}
+
+func (landlord *comLandlord) handleTurnPush(_ gsr.CommandContext, login string, payload map[string]any) error {
+	return landlord.pushEvent(login, payload, demopb.MsgId_S2C_LANDLORD_TURN_PUSH, &demopb.LandlordTurnPush{})
 }

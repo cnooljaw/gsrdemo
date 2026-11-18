@@ -24,6 +24,7 @@ const (
 	roomBidCommand      runtime.CommandID = 6
 	roomRobCommand      runtime.CommandID = 7
 	roomTickCommand     runtime.CommandID = 8
+	roomTrusteeCommand  runtime.CommandID = 9
 )
 
 const releaseRetryDelay = time.Second
@@ -57,6 +58,7 @@ func newAttackService(name string, journal landlordJournal, pending *landlordOpe
 		roomSnapshotCommand: service.handleSnapshot,
 		roomLeaveCommand:    service.handleLeave,
 		roomTickCommand:     service.handleTick,
+		roomTrusteeCommand:  service.handleTrustee,
 	})
 	return service
 }
@@ -87,7 +89,7 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	before := service.game
 	var cards []int64
 	now := time.Now()
-	if before.Phase == "playing" && !now.Before(before.Deadline) {
+	if before.Phase == "playing" && before.WaitUntil.IsZero() && before.Players[before.Seat].Trustee && !now.Before(before.nextDeadline()) {
 		cards = before.defaultPlay()
 	}
 	changed, err := service.game.timeout(now)
@@ -96,7 +98,11 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 	}
 	if changed {
 		userID := before.Players[before.Seat].UserID
-		if before.Phase == "playing" {
+		if !before.WaitUntil.IsZero() {
+			service.pushTurn(self)
+		} else if before.Phase == "playing" && !before.Players[before.Seat].Trustee {
+			service.pushTrustee(self, userID, true)
+		} else if before.Phase == "playing" {
 			service.pushPlay(self, userID, cards)
 		} else {
 			service.pushBid(self, before, userID, false)
@@ -321,10 +327,14 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 }
 
 func (service *attackService) bid(self gsr.CommandContext, uid uint64, login string, turn uint64, yes bool) (bool, error) {
-	if _, err := service.game.member(uid, login); err != nil {
+	seat, err := service.game.member(uid, login)
+	if err != nil {
 		return false, err
 	}
-	if !time.Now().Before(service.game.Deadline) {
+	if service.game.Players[seat].Trustee {
+		return false, errLandlordTurn
+	}
+	if !service.game.WaitUntil.IsZero() || !time.Now().Before(service.game.Deadline) {
 		return false, errLandlordTurn
 	}
 	before := service.game
@@ -350,8 +360,12 @@ func (service *attackService) handleRobLandlord(self gsr.CommandContext, uid uin
 }
 
 func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, login string, turn uint64, values []any) (bool, error) {
-	if _, err := service.game.member(uid, login); err != nil {
+	seat, err := service.game.member(uid, login)
+	if err != nil {
 		return false, err
+	}
+	if service.game.Players[seat].Trustee {
+		return false, errLandlordTurn
 	}
 	cards := make([]int64, len(values))
 	if len(values) > 20 {
@@ -365,7 +379,7 @@ func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, lo
 		cards[i] = card
 	}
 	now := time.Now()
-	if !now.Before(service.game.Deadline) {
+	if !service.game.WaitUntil.IsZero() || !now.Before(service.game.Deadline) {
 		return false, errLandlordTurn
 	}
 	if err := service.game.play(uid, turn, cards, now); err != nil {
@@ -374,6 +388,22 @@ func (service *attackService) handlePlay(self gsr.CommandContext, uid uint64, lo
 	service.pushPlay(self, uid, cards)
 	service.settlement.prepareOperation(service.game)
 	service.retrySettlement(self)
+	return true, nil
+}
+
+// handleTrustee 由本人显式切换托管；状态和到期动作仍由牌桌串行管理。
+func (service *attackService) handleTrustee(self gsr.CommandContext, uid uint64, login string, enabled bool) (bool, error) {
+	seat, err := service.game.member(uid, login)
+	if err != nil {
+		return false, err
+	}
+	if service.game.Phase != "calling" && service.game.Phase != "robbing" && service.game.Phase != "playing" {
+		return false, errLandlordBusy
+	}
+	if service.game.Players[seat].Trustee != enabled {
+		service.game.setTrustee(seat, enabled, time.Now())
+		service.pushTrustee(self, uid, enabled)
+	}
 	return true, nil
 }
 
@@ -387,6 +417,7 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, uid uint64, l
 func (service *attackService) snapshotFor(uid uint64) map[string]any {
 	view := service.game.view(uid)
 	view["revision"] = service.revision
+	view["server_ms"] = time.Now().UnixMilli()
 	if settlement := service.settlement.snapshotFor(uid); settlement != nil {
 		view["settlement"] = settlement
 	}

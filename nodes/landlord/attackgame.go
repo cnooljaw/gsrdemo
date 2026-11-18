@@ -6,8 +6,11 @@ import (
 	"time"
 )
 
-const turnPeriod = 15 * time.Second
+const turnPeriod = 20 * time.Second
 const bidPeriod = 10 * time.Second
+const trusteePlayDelay = 500 * time.Millisecond
+const dealDelay = 3 * time.Second
+const newRoundDelay = 500 * time.Millisecond
 const baseSilver int64 = 10
 
 // 一副牌最多 14 次炸弹/王炸，叫抢最多 3 次；为倍率与金额建立有限上界。
@@ -17,6 +20,7 @@ type landlordPlayer struct {
 	UserID                                     uint64
 	LoginID, AccessNode, AgentName, Membership string
 	Ready                                      bool
+	Trustee                                    bool
 	Hand                                       []int64
 }
 
@@ -31,6 +35,8 @@ type attackGame struct {
 	Multiplier                           int64
 	Turn                                 uint64
 	Deadline                             time.Time
+	AutoAt                               time.Time
+	WaitUntil                            time.Time
 }
 
 func newAttackGame(name string) attackGame {
@@ -41,6 +47,7 @@ func newAttackGame(name string) attackGame {
 func (game *attackGame) deal(deck []int64, first int, now time.Time) {
 	for i := range game.Players {
 		game.Players[i].Hand = slices.Clone(deck[i*17 : (i+1)*17])
+		game.Players[i].Trustee = false
 		sortHand(game.Players[i].Hand)
 	}
 	game.Bottom = slices.Clone(deck[51:])
@@ -48,7 +55,8 @@ func (game *attackGame) deal(deck []int64, first int, now time.Time) {
 	game.Calls, game.Robs = [3]int64{}, [3]int64{}
 	game.Landlord, game.Caller, game.Candidate, game.LastSeat, game.Winner = -1, -1, -1, -1, -1
 	game.Multiplier, game.Passes = 1, 0
-	game.Phase, game.Seat, game.Deadline = "calling", first, now.Add(bidPeriod)
+	game.Phase, game.Seat = "calling", first
+	game.waitTurn(now, dealDelay)
 	game.Turn++
 }
 
@@ -130,15 +138,80 @@ func (game *attackGame) empty() bool {
 	return true
 }
 
+// startTurn 由本桌服务器时间决定操作截止和托管执行时间。
+func (game *attackGame) startTurn(now time.Time) {
+	game.WaitUntil = time.Time{}
+	period := bidPeriod
+	if game.Phase == "playing" {
+		period = turnPeriod
+	}
+	game.Deadline = now.Add(period)
+	game.AutoAt = time.Time{}
+	if game.Players[game.Seat].Trustee {
+		game.AutoAt = now
+		if game.Phase == "playing" {
+			game.AutoAt = now.Add(trusteePlayDelay)
+		}
+	}
+}
+
+// waitTurn 在发牌和新一轮动画期间禁止操作，直到服务器 Tick 正式开放轮次。
+func (game *attackGame) waitTurn(now time.Time, delay time.Duration) {
+	game.WaitUntil = now.Add(delay)
+	game.Deadline, game.AutoAt = time.Time{}, time.Time{}
+}
+
+// setTrustee 只修改本座位托管状态；取消时恢复尚未过期的原截止时间。
+func (game *attackGame) setTrustee(seat int, enabled bool, now time.Time) {
+	game.Players[seat].Trustee = enabled
+	if seat != game.Seat || !game.WaitUntil.IsZero() || (game.Phase != "calling" && game.Phase != "robbing" && game.Phase != "playing") {
+		return
+	}
+	if enabled {
+		game.AutoAt = now
+		if game.Phase == "playing" {
+			game.AutoAt = now.Add(trusteePlayDelay)
+		}
+	} else {
+		game.AutoAt = time.Time{}
+		if !now.Before(game.Deadline) {
+			game.startTurn(now)
+		}
+	}
+}
+
+// nextDeadline 是当前人工或托管操作的服务器截止时间。
+func (game *attackGame) nextDeadline() time.Time {
+	if !game.AutoAt.IsZero() {
+		return game.AutoAt
+	}
+	return game.Deadline
+}
+
+func (game *attackGame) canAct() bool {
+	return game.WaitUntil.IsZero() && (game.Phase == "calling" || game.Phase == "robbing" || game.Phase == "playing")
+}
+
 // timeout 只推进已到期的游戏规则；外部通知与结算由 Service 编排。
 func (game *attackGame) timeout(now time.Time) (bool, error) {
-	if now.Before(game.Deadline) {
+	if !game.WaitUntil.IsZero() {
+		if now.Before(game.WaitUntil) {
+			return false, nil
+		}
+		game.startTurn(now)
+		return true, nil
+	}
+	if now.Before(game.nextDeadline()) {
 		return false, nil
 	}
 	switch game.Phase {
 	case "calling", "robbing":
 		return true, game.applyBid(game.Players[game.Seat].UserID, game.Turn, false, now)
 	case "playing":
+		if !game.Players[game.Seat].Trustee {
+			game.setTrustee(game.Seat, true, now)
+			return true, nil
+		}
 		return true, game.play(game.Players[game.Seat].UserID, game.Turn, game.defaultPlay(), now)
 	}
 	return false, nil
@@ -182,6 +255,8 @@ func (game *attackGame) bid(uid, turn uint64, yes bool, now time.Time) (bool, er
 				game.Redeals = 0
 				game.Bottom = nil
 				game.Deadline = time.Time{}
+				game.AutoAt = time.Time{}
+				game.WaitUntil = time.Time{}
 				for i := range game.Players {
 					game.Players[i].Ready = false
 					game.Players[i].Hand = nil
@@ -189,7 +264,7 @@ func (game *attackGame) bid(uid, turn uint64, yes bool, now time.Time) (bool, er
 				return false, nil
 			}
 			game.Seat = (seat + 1) % 3
-			game.Deadline = now.Add(bidPeriod)
+			game.startTurn(now)
 			return false, nil
 		}
 		game.Calls[seat] = 1
@@ -217,14 +292,15 @@ func (game *attackGame) bid(uid, turn uint64, yes bool, now time.Time) (bool, er
 			continue
 		}
 		game.Seat = next
-		game.Deadline = now.Add(bidPeriod)
+		game.startTurn(now)
 		return false, nil
 	}
 	game.Landlord = game.Candidate
 	player := &game.Players[game.Landlord]
 	player.Hand = append(player.Hand, game.Bottom...)
 	sortHand(player.Hand)
-	game.Seat, game.Phase, game.Deadline = game.Landlord, "playing", now.Add(turnPeriod)
+	game.Seat, game.Phase = game.Landlord, "playing"
+	game.waitTurn(now, newRoundDelay)
 	return false, nil
 }
 
@@ -260,19 +336,27 @@ func (game *attackGame) play(userID, turn uint64, cards []int64, now time.Time) 
 		game.Last, game.LastSeat, game.Passes = slices.Clone(cards), game.Seat, 0
 		if len(remaining) == 0 {
 			game.Phase, game.Winner = "finished", game.Seat
+			game.Deadline, game.AutoAt = time.Time{}, time.Time{}
+			game.WaitUntil = time.Time{}
 			game.Turn++
 			return nil
 		}
 	}
+	newRound := false
 	if len(cards) == 0 {
 		game.Passes++
 		if game.Passes == 2 {
 			game.Last, game.LastSeat, game.Passes = nil, -1, 0
+			newRound = true
 		}
 	}
 	game.Seat = (game.Seat + 1) % 3
 	game.Turn++
-	game.Deadline = now.Add(turnPeriod)
+	if newRound {
+		game.waitTurn(now, newRoundDelay)
+	} else {
+		game.startTurn(now)
+	}
 	return nil
 }
 
@@ -299,7 +383,7 @@ func (game *attackGame) view(userID uint64) map[string]any {
 		if p.UserID == 0 {
 			continue
 		}
-		players = append(players, map[string]any{"user_id": p.UserID, "seat": int64(i), "ready": p.Ready, "remaining": int64(len(p.Hand)), "call_choice": game.Calls[i], "rob_choice": game.Robs[i]})
+		players = append(players, map[string]any{"user_id": p.UserID, "seat": int64(i), "ready": p.Ready, "trustee": p.Trustee, "remaining": int64(len(p.Hand)), "call_choice": game.Calls[i], "rob_choice": game.Robs[i]})
 		if p.UserID == userID {
 			seat = int64(i)
 			hand = cardList(p.Hand)
@@ -310,10 +394,14 @@ func (game *attackGame) view(userID uint64) map[string]any {
 		bottom = cardList(game.Bottom)
 	}
 	deadline := int64(0)
-	if !game.Deadline.IsZero() {
-		deadline = game.Deadline.UnixMilli()
+	if !game.nextDeadline().IsZero() {
+		deadline = game.nextDeadline().UnixMilli()
+	}
+	start := int64(0)
+	if !game.WaitUntil.IsZero() {
+		start = game.WaitUntil.UnixMilli()
 	}
 	return map[string]any{"room_name": game.Name, "phase": game.Phase, "seat": seat, "players": players, "hand": hand,
 		"bottom": bottom, "last_cards": cardList(game.Last), "last_seat": int64(game.LastSeat), "turn_seat": int64(game.Seat),
-		"turn": game.Turn, "deadline_ms": deadline, "landlord_seat": int64(game.Landlord), "candidate_seat": int64(game.Candidate), "multiplier": game.Multiplier, "redeals": int64(game.Redeals), "winner_seat": int64(game.Winner)}
+		"turn": game.Turn, "deadline_ms": deadline, "start_ms": start, "can_act": game.canAct(), "landlord_seat": int64(game.Landlord), "candidate_seat": int64(game.Candidate), "multiplier": game.Multiplier, "redeals": int64(game.Redeals), "winner_seat": int64(game.Winner)}
 }

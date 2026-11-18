@@ -185,7 +185,12 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 	}
 	loginDB, loginDSN := accessLiveDatabase(t, "login", "gsrdemo_login")
 	settlementDB, settlementDSN := accessLiveDatabase(t, "settlement", "gsrdemo_settlement")
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	budget := 45 * time.Second
+	if game == "landlord" {
+		// 多局恢复测试包含每次发牌和重新领出的服务器动画等待。
+		budget = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	players := make([]accessDemoPlayer, playerCount)
 	operationIDs := []string{}

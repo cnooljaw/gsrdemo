@@ -49,20 +49,33 @@ func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, re
 		t.Fatal("unsupported landlord response")
 	}
 	accessProcessResponse(t, client, id, request, response)
+	var view *demopb.LandlordSnapshot
 	if action, ok := response.(interface {
 		GetSnapshot() *demopb.LandlordSnapshot
 	}); ok {
-		if action.GetSnapshot() == nil {
-			t.Fatal("missing landlord snapshot")
-		}
-		return action.GetSnapshot()
+		view = action.GetSnapshot()
+	} else {
+		var snapshot demopb.LandlordSnapshotResponse
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
+		view = snapshot.GetSnapshot()
 	}
-	var snapshot demopb.LandlordSnapshotResponse
-	accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
-	if snapshot.GetSnapshot() == nil {
+	if view == nil {
 		t.Fatal("missing landlord snapshot")
 	}
-	return snapshot.GetSnapshot()
+	deadline := time.Now().Add(5 * time.Second)
+	for (view.GetPhase() == "calling" || view.GetPhase() == "robbing" || view.GetPhase() == "playing") && !view.GetCanAct() {
+		if time.Now().After(deadline) {
+			t.Fatal("landlord animation did not finish")
+		}
+		time.Sleep(50 * time.Millisecond)
+		var snapshot demopb.LandlordSnapshotResponse
+		accessProcessResponse(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{}, &snapshot)
+		view = snapshot.GetSnapshot()
+		if view == nil {
+			t.Fatal("missing landlord snapshot")
+		}
+	}
+	return view
 }
 
 func landlordRedis(t *testing.T, ctx context.Context, address string, args ...string) []byte {

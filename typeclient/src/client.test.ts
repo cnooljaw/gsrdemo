@@ -3,7 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { DemoClient } from "./client.js";
 import { EnvelopeSchema } from "./gen/gsr/common/v1/common_pb.js";
-import { LandlordSeatPushSchema, LandlordPlayPushSchema, LandlordSnapshotSchema, BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
+import { LandlordSeatPushSchema, LandlordPlayPushSchema, LandlordTurnPushSchema, LandlordSnapshotSchema, BalanceSchema, BalancePushSchema, LoginResponseSchema, MsgId, SnapshotSchema } from "./gen/demo/v1/game_pb.js";
 
 // 仅替代传输，业务请求/推送仍经过实际 Envelope 编解码和 DemoClient 分发。
 class FakeSocket extends EventTarget {
@@ -130,5 +130,37 @@ test("斗地主恢复场景后接续较新事件", async () => {
     assert.deepEqual(client.landlord?.players.map(player => player.userId), [1n, 2n, 3n]);
     send(6n, 9n);
     assert.deepEqual(client.landlord?.players.map(player => player.userId), [1n, 2n, 3n]);
+  } finally { client.close(); }
+});
+
+// 保护等待恢复的预算由服务端时间差计算，不受本机日历时钟偏差影响。
+test("斗地主恢复等待使用服务端时间", async () => {
+  const client = await DemoClient.connect("ws://fixture", 1000);
+  try {
+    client.setLandlord(create(LandlordSnapshotSchema, { roomName: "table", phase: "playing", revision: 1n, canAct: true, serverMs: 1_000_000n, deadlineMs: 1_020_000n }));
+    const original = Date.now;
+    let first: number, second: number;
+    try {
+      Date.now = () => 1;
+      first = client.landlordRecoveryWait();
+      Date.now = () => 9_000_000_000;
+      second = client.landlordRecoveryWait();
+    } finally { Date.now = original; }
+    assert.ok(first > 20_000 && first <= 21_000);
+    assert.ok(Math.abs(first - second) < 100);
+  } finally { client.close(); }
+});
+
+// 保护动画期间的场景保持不可操作，只由服务器轮次事件开放。
+test("斗地主轮次由服务器事件开放", async () => {
+  const client = await DemoClient.connect("ws://fixture", 1000);
+  try {
+    client.setLandlord(create(LandlordSnapshotSchema, { roomName: "table", phase: "calling", revision: 1n, canAct: false, startMs: 4_000n, serverMs: 1_000n }));
+    assert.ok(client.landlordRecoveryWait() > 3_500);
+    FakeSocket.last.envelope(MsgId.S2C_LANDLORD_TURN_PUSH, 0, toBinary(LandlordTurnPushSchema,
+      create(LandlordTurnPushSchema, { roomName: "table", revision: 2n, phase: "calling", turn: 1n, turnSeat: 0n, serverMs: 4_000n, deadlineMs: 14_000n })));
+    assert.equal(client.landlord?.canAct, true);
+    assert.equal(client.landlord?.startMs, 0n);
+    assert.ok(client.landlordRecoveryWait() > 10_500);
   } finally { client.close(); }
 });

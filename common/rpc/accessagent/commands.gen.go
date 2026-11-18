@@ -13,4 +13,6 @@ const (
 	LandlordBidPushCommand           = 114
 	LandlordPlayPushCommand          = 115
 	LandlordSettlementPushCommand    = 116
+	LandlordTrusteePushCommand       = 117
+	LandlordTurnPushCommand          = 118
 )

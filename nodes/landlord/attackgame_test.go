@@ -23,6 +23,9 @@ func testLandlordGame(t *testing.T) *attackGame {
 			t.Fatal(err)
 		}
 	}
+	if changed, err := g.timeout(g.WaitUntil); !changed || err != nil {
+		t.Fatal("未开放出牌轮次", err)
+	}
 	g.Turn = 1 // 本文件只验证出牌规则；叫抢的单调轮次由专门用例保护。
 	return &g
 }
@@ -141,6 +144,9 @@ func testBidding(t *testing.T) (*attackGame, []int64) {
 		game.Players[i] = landlordPlayer{UserID: uint64(i + 1), LoginID: "login", Ready: true}
 	}
 	game.deal(deck, 0, time.Now())
+	if changed, err := game.timeout(game.WaitUntil); !changed || err != nil {
+		t.Fatal("未开放叫地主轮次", err)
+	}
 	return &game, deck
 }
 

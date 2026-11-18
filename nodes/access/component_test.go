@@ -139,7 +139,7 @@ func TestGameSnapshotRepliesMatchCurrentRoute(t *testing.T) {
 
 // TestLandlordActionsRequireConfirmation 保护桌内操作只有明确成功才能返回成功响应。
 func TestLandlordActionsRequireConfirmation(t *testing.T) {
-	for _, id := range []demopb.MsgId{demopb.MsgId_C2S_LANDLORD_READY, demopb.MsgId_C2S_LANDLORD_PLAY, demopb.MsgId_C2S_LANDLORD_CALL, demopb.MsgId_C2S_LANDLORD_ROB} {
+	for _, id := range []demopb.MsgId{demopb.MsgId_C2S_LANDLORD_READY, demopb.MsgId_C2S_LANDLORD_PLAY, demopb.MsgId_C2S_LANDLORD_CALL, demopb.MsgId_C2S_LANDLORD_ROB, demopb.MsgId_C2S_LANDLORD_TRUSTEE} {
 		for _, value := range []any{true, false, "invalid"} {
 			landlord := newComLandlord(componentDependencies{
 				Identity: func() agentIdentity { return agentIdentity{UserID: 7, LoginID: "current"} },
