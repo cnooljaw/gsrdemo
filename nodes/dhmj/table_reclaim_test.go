@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -72,6 +73,14 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 		t.Fatal(err)
 	}
 	attack.game.end = &end
+	attack.game.flowers[0] = []byte{0x41, 0x42}
+	attack.game.melds[0] = []meld{{action: concealedKong, source: 0, tiles: []byte{5, 5, 5, 5}}}
+	seatZeroTiles := map[string]any{
+		"flowers": []any{int64(0x41), int64(0x42)},
+		"melds": []any{map[string]any{
+			"kind": "concealed_kong", "source_seat": int64(0), "tiles": []any{int64(5), int64(5), int64(5), int64(5)},
+		}},
+	}
 	attack.settlement = &roundSettlement{operation: op, receipt: &receipt, cleared: true}
 	f := &reclaimFixture{directory: d, table: oldTable, attack: attack, settled: make(chan struct{})}
 	oldName := oldTable.name
@@ -98,6 +107,11 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 				silver, _ := snapshot["settlement"].(map[string]any)
 				if snapshot["table_name"] != oldName || silver["status"] != "committed" || silver["user_id"] != uid {
 					return fmt.Errorf("重登未返回原桌的本人结算：%v", snapshot)
+				}
+				// 第一座离开后，其副露和花牌仍是本局的公开牌面。
+				areas, _ := snapshot["seat_tiles"].([]any)
+				if len(areas) != seatCount || !reflect.DeepEqual(areas[0], seatZeroTiles) {
+					return fmt.Errorf("重登未恢复四个座位的公开牌面：%v", areas)
 				}
 				if _, err := self.Call(ctx, id, leaveCommand, uid, "old"); !errors.Is(err, errStaleLogin) {
 					return fmt.Errorf("旧登录未被拒绝：%v", err)

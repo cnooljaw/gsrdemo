@@ -264,12 +264,19 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 		reply["deadline_ms"] = view.Deadline.UnixMilli()
 	}
 	discards, handCounts, trustees := make([]any, seatCount), make([]any, seatCount), make([]any, seatCount)
+	seatTiles := make([]any, seatCount)
 	for seat := range seatCount {
 		discards[seat] = wireTiles(view.Out[seat])
 		handCounts[seat] = int64(view.HandCounts[seat])
 		trustees[seat] = view.Trustees[seat]
+		melds := make([]any, 0, len(view.Melds[seat]))
+		for _, meld := range view.Melds[seat] {
+			melds = append(melds, meld.wire())
+		}
+		seatTiles[seat] = map[string]any{"melds": melds, "flowers": wireTiles(view.Flowers[seat])}
 	}
 	reply["discards"], reply["hand_counts"], reply["trustees"] = discards, handCounts, trustees
+	reply["seat_tiles"] = seatTiles
 	reply["window_tile"] = int64(view.WindowTile)
 	offers := make([]any, 0)
 	for action := eatRight; action <= claimHu; action++ {
@@ -281,6 +288,23 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 	reply["self_action"], reply["can_self_win"] = view.SelfAction, view.CanSelfWin
 	reply["concealed_kongs"], reply["added_kongs"] = wireTiles(view.ConcealedKongs), wireTiles(view.AddedKongs)
 	return reply, nil
+}
+
+func (m meld) wire() map[string]any {
+	var kind string
+	switch m.action {
+	case eatRight, eatMiddle, eatLeft:
+		kind = "eat"
+	case pong:
+		kind = "pong"
+	case directKong:
+		kind = "direct_kong"
+	case concealedKong:
+		kind = "concealed_kong"
+	case addedKong:
+		kind = "added_kong"
+	}
+	return map[string]any{"kind": kind, "source_seat": int64(m.source), "tiles": wireTiles(m.tiles)}
 }
 
 func wireTiles(tiles []byte) []any {

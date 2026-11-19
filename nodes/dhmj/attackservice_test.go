@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -10,6 +11,27 @@ import (
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
 )
+
+// TestTableSnapshotClonesSeatTiles 保护跨 Service 快照的花牌、副露及副露中的牌不引用牌桌状态。
+func TestTableSnapshotClonesSeatTiles(t *testing.T) {
+	table := &attackService{}
+	table.game.hands[1] = []byte{0x12}
+	table.game.flowers[0] = []byte{0x41}
+	table.game.melds[0] = []meld{{action: concealedKong, source: 0, tiles: []byte{5, 5, 5, 5}}}
+	view, err := table.handleSnapshot(nil, 1)
+	if err != nil || !slices.Equal(view.Hand, []byte{0x12}) ||
+		!slices.Equal(view.Flowers[0], []byte{0x41}) || len(view.Melds[0]) != 1 ||
+		!slices.Equal(view.Melds[0][0].tiles, []byte{5, 5, 5, 5}) {
+		t.Fatalf("快照未返回本人的暗手和其他座位的公开牌：%+v %v", view, err)
+	}
+	view.Flowers[0][0] = 0
+	view.Melds[0][0].tiles[0] = 0
+	view.Melds[0][0].action = pong
+	got := table.game.melds[0][0]
+	if table.game.flowers[0][0] != 0x41 || got.tiles[0] != 5 || got.action != concealedKong {
+		t.Fatal("修改快照改变了牌桌里的花牌或副露")
+	}
+}
 
 const testObserveCommand runtime.CommandID = 1
 

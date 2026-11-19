@@ -574,6 +574,7 @@ message DhmjSnapshot {
   int64 server_ms = 18;
   int64 deadline_ms = 19;
   DhmjSettlement settlement = 20;
+  repeated DhmjSeatTiles seat_tiles = 21;
 }
 
 message DhmjPlayer {
@@ -584,6 +585,18 @@ message DhmjPlayer {
 
 message DhmjDiscards {
   repeated int64 tiles = 1;
+}
+
+// 按座位顺序恢复公开的副露和花牌。
+message DhmjSeatTiles {
+  repeated DhmjMeld melds = 1;
+  repeated int64 flowers = 2;
+}
+
+message DhmjMeld {
+  string kind = 1;
+  int64 source_seat = 2;
+  repeated int64 tiles = 3;
 }
 
 message DhmjSettlement {

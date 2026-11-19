@@ -82,6 +82,8 @@ type tableView struct {
 	Hand                       []byte
 	HandCounts                 [seatCount]int
 	Out                        [seatCount][]byte
+	Flowers                    [seatCount][]byte
+	Melds                      [seatCount][]meld
 	Trustees                   [seatCount]bool
 	Active                     int
 	Turn                       uint64
@@ -109,6 +111,12 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	for i := range seatCount {
 		view.HandCounts[i] = len(game.hands[i])
 		view.Out[i] = slices.Clone(game.out[i])
+		view.Flowers[i] = slices.Clone(game.flowers[i])
+		view.Melds[i] = slices.Clone(game.melds[i])
+		for j := range view.Melds[i] {
+			meld := &view.Melds[i][j]
+			meld.tiles = slices.Clone(meld.tiles)
+		}
 	}
 	if !view.Finished {
 		view.Deadline = game.dueAt()

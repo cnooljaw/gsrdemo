@@ -389,6 +389,7 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 | --- | --- |
 | 等待、进行中及结束 | `table_name string, seat int64, phase string, players list`。`players` 元素含 `user_id uint64, seat int64, ready bool` |
 | 开局后公开状态 | `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`。`discards/hand_counts/trustees` 分别按座位返回弃牌列表、暗手数量和托管标志。无对应窗口或截止时为 0 |
+| 开局后公开副露与花牌 | `seat_tiles list` 按 0～3 号座位排列，每项含 `flowers list`、`melds list`。副露项含 `kind string, source_seat int64, tiles list`，种类为 `eat`、`pong`、`direct_kong`、`concealed_kong`、`added_kong`。暗杠牌值公开，来源为本人座位；补杠保留原碰的来源。牌值为 int64 |
 | 开局后本人状态 | `hand` 为本人暗手。`offers` 为本人尚未提交的窗口可选动作编号，有选项时也可过。`self_action/can_self_win bool` 表示本人可选自操作及能否自摸。`concealed_kongs/added_kongs` 为暗杠、补杠候选牌值。牌值和动作编号均为 int64 |
 | 终局结算 | 可选 `settlement` map。已生成请求时返回 `operation_id/status string`。committed 时包含本人 `user_id uint64, fee/paid/received/balance int64, version uint64`。`paid` 与 `received` 只统计本局实际付款，手续费单列 |
 
