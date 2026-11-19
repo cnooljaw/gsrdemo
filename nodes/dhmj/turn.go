@@ -25,6 +25,7 @@ func (g *round) startPlay(now time.Time) {
 func (g *round) allowDiscard(now time.Time) {
 	g.turn++
 	g.deadline = now.Add(discardPeriod)
+	g.scheduleTrustee(now)
 }
 
 func (g *round) drawTurn(now time.Time) {
@@ -33,21 +34,33 @@ func (g *round) drawTurn(now time.Time) {
 
 func (g *round) discard(seat int, turn uint64, tile byte, now time.Time) bool {
 	if !validSeat(seat) || seat != g.active || turn == 0 || turn != g.turn || g.end != nil ||
-		g.window != nil || !now.Before(g.deadline) || len(g.hands[seat])%3 != 2 || tile >= 0x41 {
+		g.window != nil || g.trustees[seat] || !now.Before(g.deadline) || len(g.hands[seat])%3 != 2 || tile >= 0x41 {
 		return false
 	}
 	index := slices.Index(g.hands[seat], tile)
 	if index < 0 {
 		return false
 	}
-	g.hands[seat] = slices.Delete(g.hands[seat], index, index+1)
-	g.selfPending, g.lastDraw = false, 0
-	g.out[seat] = append(g.out[seat], tile)
-	g.openResponse(newDiscardWindow(g.hands, seat, tile), now)
+	g.discardTimeouts[seat] = 0
+	g.applyDiscard(seat, index, now)
 	return true
 }
 
+func (g *round) applyDiscard(seat, index int, now time.Time) {
+	tile := g.hands[seat][index]
+	g.hands[seat] = slices.Delete(g.hands[seat], index, index+1)
+	g.selfPending, g.lastDraw, g.afterClaim = false, 0, unanswered
+	g.trusteeAt = time.Time{}
+	g.out[seat] = append(g.out[seat], tile)
+	g.openResponse(newDiscardWindow(g.hands, seat, tile), now)
+}
+
 func (g *round) openResponse(w discardWindow, now time.Time) {
+	for seat, trustee := range g.trustees {
+		if trustee {
+			w.submit(seat, pass)
+		}
+	}
 	g.windowID++
 	g.window = &w
 	g.deadline = now.Add(responsePeriod)
@@ -55,9 +68,10 @@ func (g *round) openResponse(w discardWindow, now time.Time) {
 }
 
 func (g *round) respond(seat int, windowID uint64, action responseAction, now time.Time) bool {
-	if g.window == nil || g.windowID != windowID || !now.Before(g.deadline) || !g.window.submit(seat, action) {
+	if !validSeat(seat) || g.trustees[seat] || g.window == nil || g.windowID != windowID || !now.Before(g.deadline) || !g.window.submit(seat, action) {
 		return false
 	}
+	g.discardTimeouts[seat] = 0
 	g.resolveResponse(now)
 	return true
 }
@@ -150,6 +164,7 @@ func (g *round) takeDiscard(w discardWindow, chosen response, now time.Time) {
 		g.drawForTurn(now, true, w.source)
 		return
 	}
+	g.afterClaim, g.claimedTile = chosen.action, w.tile
 	if len(flowers) != 0 {
 		// 原版吃碰后补起手花，会重新检查胡和自杠动作。
 		hand := g.hands[seat]

@@ -6,6 +6,7 @@ import (
 )
 
 func (g *round) drawForTurn(now time.Time, kong bool, provider int) {
+	g.afterClaim = unanswered
 	drawn := g.drawActive()
 	if drawn.playable == 0 {
 		return
@@ -23,6 +24,7 @@ func (g *round) openDrawnTurn(now time.Time, tile byte, kong bool, provider int)
 	g.selfPending = g.hasSelfAction()
 	if g.selfPending {
 		g.deadline = now.Add(responsePeriod)
+		g.scheduleTrustee(now)
 	}
 }
 
@@ -40,7 +42,7 @@ func (g *round) hasSelfAction() bool {
 }
 
 func (g *round) canChooseSelf(seat int, turn uint64, now time.Time) bool {
-	return g.end == nil && g.window == nil && g.selfPending && seat == g.active &&
+	return g.end == nil && g.window == nil && g.selfPending && seat == g.active && !g.trustees[seat] &&
 		turn == g.turn && now.Before(g.deadline)
 }
 
@@ -74,7 +76,7 @@ func (g *round) passSelf(seat int, turn uint64, now time.Time) bool {
 }
 
 func (g *round) expireSelf(now time.Time) bool {
-	if g.end != nil || g.window != nil || !g.selfPending || now.Before(g.deadline) {
+	if g.end != nil || g.window != nil || !g.selfPending || now.Before(g.dueAt()) {
 		return false
 	}
 	g.closeSelfWindow(now)
