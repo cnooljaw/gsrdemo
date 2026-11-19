@@ -66,6 +66,9 @@ func newAttackService(wall []byte, dealer int, roundWind byte) (*attackService, 
 func (service *attackService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
 	service.game.startPlay(time.Now())
 	_, err := self.CreateService(ctx, &pulseService{target: self.Self(), command: tableTickCommand, period: pulsePeriod})
+	if err == nil {
+		service.sendEvents(self)
+	}
 	return err
 }
 
@@ -106,7 +109,7 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	game := &service.game
 	view := tableView{
 		Hand: slices.Clone(game.hands[seat]), Trustees: game.trustees,
-		Active: game.active, Turn: game.turn, Revision: game.lastDiscard.revision, Finished: game.end != nil,
+		Active: game.active, Turn: game.turn, Revision: game.revision, Finished: game.end != nil,
 		SelfAction: game.end == nil && game.window == nil && game.selfPending && seat == game.active && !game.trustees[seat],
 	}
 	for i := range seatCount {
@@ -155,49 +158,45 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 }
 
 func (service *attackService) handleDiscard(self gsr.CommandContext, seat int, turn uint64, tile byte) (bool, error) {
-	if !service.game.discard(seat, turn, tile, time.Now()) {
-		return false, errInvalidTableAction
+	return service.actionResult(self, service.game.discard(seat, turn, tile, time.Now()))
+}
+
+func (service *attackService) sendEvents(self gsr.ServiceContext) {
+	for _, event := range service.game.events {
+		if service.directory == 0 {
+			break
+		}
+		if err := self.Send(service.directory, tableEventCommand, service.name, event); err != nil {
+			_ = self.Logger().Error("定海麻将牌桌事件未接纳", "table_name", service.name, "revision", event.revision, "error", err.Error())
+		}
 	}
-	service.sendDiscard(self)
-	return true, nil
+	clear(service.game.events)
+	service.game.events = service.game.events[:0]
 }
 
-func (service *attackService) sendDiscard(self gsr.ServiceContext) {
-	if service.directory == 0 {
-		return
-	}
-	event := service.game.lastDiscard
-	if err := self.Send(service.directory, tableDiscardedCommand, service.name, event); err != nil {
-		_ = self.Logger().Error("定海麻将出牌事件未接纳", "table_name", service.name, "revision", event.revision, "error", err.Error())
-	}
+func (service *attackService) handleRespond(self gsr.CommandContext, seat int, windowID uint64, action responseAction) (bool, error) {
+	return service.actionResult(self, service.game.respond(seat, windowID, action, time.Now()))
 }
 
-func (service *attackService) handleRespond(_ gsr.CommandContext, seat int, windowID uint64, action responseAction) (bool, error) {
-	return actionResult(service.game.respond(seat, windowID, action, time.Now()))
+func (service *attackService) handleSelfWin(self gsr.CommandContext, seat int, turn uint64) (bool, error) {
+	return service.actionResult(self, service.game.selfWin(seat, turn, time.Now()))
 }
 
-func (service *attackService) handleSelfWin(_ gsr.CommandContext, seat int, turn uint64) (bool, error) {
-	return actionResult(service.game.selfWin(seat, turn, time.Now()))
+func (service *attackService) handleKong(self gsr.CommandContext, seat int, turn uint64, tile byte) (bool, error) {
+	return service.actionResult(self, service.game.declareKong(seat, turn, tile, time.Now()))
 }
 
-func (service *attackService) handleKong(_ gsr.CommandContext, seat int, turn uint64, tile byte) (bool, error) {
-	return actionResult(service.game.declareKong(seat, turn, tile, time.Now()))
+func (service *attackService) handlePassSelf(self gsr.CommandContext, seat int, turn uint64) (bool, error) {
+	return service.actionResult(self, service.game.passSelf(seat, turn, time.Now()))
 }
 
-func (service *attackService) handlePassSelf(_ gsr.CommandContext, seat int, turn uint64) (bool, error) {
-	return actionResult(service.game.passSelf(seat, turn, time.Now()))
-}
-
-func (service *attackService) handleTrustee(_ gsr.CommandContext, seat int, enabled bool) (bool, error) {
-	return actionResult(service.game.setTrustee(seat, enabled, time.Now()))
+func (service *attackService) handleTrustee(self gsr.CommandContext, seat int, enabled bool) (bool, error) {
+	return service.actionResult(self, service.game.setTrustee(seat, enabled, time.Now()))
 }
 
 func (service *attackService) handleTick(self gsr.CommandContext) error {
-	revision := service.game.lastDiscard.revision
 	service.game.tick(time.Now())
-	if service.game.lastDiscard.revision != revision {
-		service.sendDiscard(self)
-	}
+	service.sendEvents(self)
 	if service.game.end == nil || service.scoreFailed {
 		return nil
 	}
@@ -239,9 +238,10 @@ func (service *attackService) handleClose(self gsr.CommandContext) error {
 	return nil
 }
 
-func actionResult(ok bool) (bool, error) {
+func (service *attackService) actionResult(self gsr.ServiceContext, ok bool) (bool, error) {
 	if !ok {
 		return false, errInvalidTableAction
 	}
+	service.sendEvents(self)
 	return true, nil
 }

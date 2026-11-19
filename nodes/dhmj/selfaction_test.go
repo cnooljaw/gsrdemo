@@ -54,6 +54,10 @@ func TestConcealedKongAndSelfHu(t *testing.T) {
 		!slices.Equal(g.hands[1], []byte{0x34, 0x34}) {
 		t.Fatal("杠后自摸没有正确结局或改变了摊牌暗手")
 	}
+	if len(g.events) != 1 || g.events[0].kind != drawEvent || g.events[0].seat != 1 ||
+		g.events[0].tile != 0x34 || g.events[0].turn != g.turn {
+		t.Fatalf("暗杠后的补牌事件错误：%+v", g.events)
+	}
 }
 
 // TestDirectKongBloomKeepsProvider 保护直杠补出的自摸保留供杠人，实际付款仍按直杠开花计算。
@@ -67,6 +71,10 @@ func TestDirectKongBloomKeepsProvider(t *testing.T) {
 		t.Fatal("直杠开花未保留正确的供杠座位")
 	}
 	got, err := roundPayments(roomScore{tier: 5, base: 100}, *g.end)
+	if len(g.events) != 2 || g.events[0].kind != discardEvent || g.events[1].kind != drawEvent ||
+		g.events[1].seat != 1 || g.events[1].revision != g.events[0].revision+1 {
+		t.Fatalf("直杠补牌事件未接在弃牌之后：%+v", g.events)
+	}
 	if err != nil || !slices.Equal(got, []payment{{0, 1, 2500}}) {
 		t.Fatalf("直杠开花付款错误：%v, %v", got, err)
 	}

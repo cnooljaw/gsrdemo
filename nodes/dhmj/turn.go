@@ -14,13 +14,6 @@ type meld struct {
 	tiles  []byte
 }
 
-type discardEvent struct {
-	revision uint64
-	turn     uint64
-	seat     int
-	tile     byte
-}
-
 func (g *round) startPlay(now time.Time) {
 	if g.turn != 0 || g.end != nil {
 		return
@@ -59,7 +52,7 @@ func (g *round) applyDiscard(seat, index int, now time.Time) {
 	g.selfPending, g.lastDraw, g.afterClaim = false, 0, unanswered
 	g.trusteeAt = time.Time{}
 	g.out[seat] = append(g.out[seat], tile)
-	g.lastDiscard = discardEvent{revision: g.lastDiscard.revision + 1, turn: g.turn, seat: seat, tile: tile}
+	g.recordEvent(roundEvent{kind: discardEvent, turn: g.turn, seat: seat, tile: tile})
 	g.openResponse(newDiscardWindow(g.hands, seat, tile), now)
 }
 

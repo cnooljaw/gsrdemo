@@ -29,7 +29,8 @@ type round struct {
 	drawn           [seatCount]bool
 	winDetail       [seatCount]winPoints
 	turn            uint64
-	lastDiscard     discardEvent
+	revision        uint64
+	events          []roundEvent
 	windowID        uint64
 	window          *discardWindow
 	deadline        time.Time
@@ -131,6 +132,7 @@ func (g *round) replaceInitialFlowers(seat int) []flowerReplacement {
 		}
 		changes = g.replaceFlowers(seat, index, changes)
 	}
+	g.recordFlowers(seat, changes, false)
 	return changes
 }
 

@@ -208,7 +208,8 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		if value, err := call(dhmjrpc.DiscardCommand, uint64(1), "new-login", turn, tile); err != nil || value != true {
 			return fmt.Errorf("当前座位出牌未执行：%v %w", value, err)
 		}
-		event := map[string]any{"table_name": tableName, "revision": uint64(1), "seat": int64(0), "turn": turn, "tile": tile}
+		discardRevision := scene["revision"].(uint64) + 1
+		event := map[string]any{"table_name": tableName, "revision": discardRevision, "seat": int64(0), "turn": turn, "tile": tile}
 		for _, login := range []string{"new-login", "login", "login", "login"} {
 			select {
 			case args := <-pushes:
@@ -225,7 +226,7 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		}
 		snapshot := result.(map[string]any)
 		out := snapshot["discards"].([]any)[0].([]any)
-		if len(out) != 1 || out[0] != tile || snapshot["revision"] != uint64(1) {
+		if len(out) != 1 || out[0] != tile || snapshot["revision"].(uint64) < discardRevision {
 			return errors.New("其他座位未看到已执行的出牌")
 		}
 		verified = true

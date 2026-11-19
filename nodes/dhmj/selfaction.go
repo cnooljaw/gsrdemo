@@ -8,6 +8,7 @@ import (
 func (g *round) drawForTurn(now time.Time, kong bool, provider int) {
 	g.afterClaim = unanswered
 	drawn := g.drawActive()
+	g.recordFlowers(g.active, drawn.flowers, true)
 	if drawn.playable == 0 {
 		return
 	}
@@ -16,6 +17,7 @@ func (g *round) drawForTurn(now time.Time, kong bool, provider int) {
 		kong, provider = true, g.active
 	}
 	g.openDrawnTurn(now, drawn.playable, kong, provider)
+	g.recordEvent(roundEvent{kind: drawEvent, seat: g.active, turn: g.turn, tile: drawn.playable})
 }
 
 func (g *round) openDrawnTurn(now time.Time, tile byte, kong bool, provider int) {
