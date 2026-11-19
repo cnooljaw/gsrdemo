@@ -29,6 +29,7 @@ type round struct {
 	drawn           [seatCount]bool
 	winDetail       [seatCount]winPoints
 	turn            uint64
+	lastDiscard     discardEvent
 	windowID        uint64
 	window          *discardWindow
 	deadline        time.Time

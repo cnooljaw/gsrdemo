@@ -87,6 +87,7 @@ type tableView struct {
 	Trustees                   [seatCount]bool
 	Active                     int
 	Turn                       uint64
+	Revision                   uint64
 	WindowID                   uint64
 	WindowTile                 byte
 	Offer                      actionOptions
@@ -105,7 +106,7 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	game := &service.game
 	view := tableView{
 		Hand: slices.Clone(game.hands[seat]), Trustees: game.trustees,
-		Active: game.active, Turn: game.turn, Finished: game.end != nil,
+		Active: game.active, Turn: game.turn, Revision: game.lastDiscard.revision, Finished: game.end != nil,
 		SelfAction: game.end == nil && game.window == nil && game.selfPending && seat == game.active && !game.trustees[seat],
 	}
 	for i := range seatCount {
@@ -153,8 +154,22 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	return view, nil
 }
 
-func (service *attackService) handleDiscard(_ gsr.CommandContext, seat int, turn uint64, tile byte) (bool, error) {
-	return actionResult(service.game.discard(seat, turn, tile, time.Now()))
+func (service *attackService) handleDiscard(self gsr.CommandContext, seat int, turn uint64, tile byte) (bool, error) {
+	if !service.game.discard(seat, turn, tile, time.Now()) {
+		return false, errInvalidTableAction
+	}
+	service.sendDiscard(self)
+	return true, nil
+}
+
+func (service *attackService) sendDiscard(self gsr.ServiceContext) {
+	if service.directory == 0 {
+		return
+	}
+	event := service.game.lastDiscard
+	if err := self.Send(service.directory, tableDiscardedCommand, service.name, event); err != nil {
+		_ = self.Logger().Error("定海麻将出牌事件未接纳", "table_name", service.name, "revision", event.revision, "error", err.Error())
+	}
 }
 
 func (service *attackService) handleRespond(_ gsr.CommandContext, seat int, windowID uint64, action responseAction) (bool, error) {
@@ -178,7 +193,11 @@ func (service *attackService) handleTrustee(_ gsr.CommandContext, seat int, enab
 }
 
 func (service *attackService) handleTick(self gsr.CommandContext) error {
+	revision := service.game.lastDiscard.revision
 	service.game.tick(time.Now())
+	if service.game.lastDiscard.revision != revision {
+		service.sendDiscard(self)
+	}
 	if service.game.end == nil || service.scoreFailed {
 		return nil
 	}

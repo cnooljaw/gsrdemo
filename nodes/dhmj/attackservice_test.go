@@ -36,12 +36,15 @@ func TestTableSnapshotClonesSeatTiles(t *testing.T) {
 const testObserveCommand runtime.CommandID = 1
 
 type tableTestMain struct {
-	table *attackService
-	id    runtime.ServiceID
-	done  chan error
+	table       *attackService
+	id          runtime.ServiceID
+	done        chan error
+	discard     discardEvent
+	discardTurn uint64
 }
 
 func (m *tableTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	m.table.directory = self.Self()
 	id, err := self.CreateService(ctx, m.table)
 	if err != nil {
 		return err
@@ -56,6 +59,10 @@ func (m *tableTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) er
 	view := first.(tableView)
 	if len(view.Hand) != 14 || view.HandCounts[1] != 13 || view.Active != 0 || view.Turn == 0 {
 		return errors.New("庄家没有正确开局")
+	}
+	m.discardTurn = view.Turn
+	if view.SelfAction {
+		m.discardTurn++ // 托管放弃自选窗口后才进入出牌轮次。
 	}
 	view.Hand[0] = 0xff
 	second, err := self.Call(ctx, id, tableSnapshotCommand, 0)
@@ -74,7 +81,11 @@ func (m *tableTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) er
 
 func (m *tableTestMain) OnStop(context.Context) error { return nil }
 
-func (m *tableTestMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, _ ...any) (any, error) {
+func (m *tableTestMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == tableDiscardedCommand && self.Source() == m.id {
+		m.discard = args[1].(discardEvent)
+		return nil, nil
+	}
 	if cmd != testObserveCommand {
 		return nil, runtime.ErrUnknownCommand
 	}
@@ -85,11 +96,12 @@ func (m *tableTestMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, _
 		return nil, err
 	}
 	view := value.(tableView)
-	if len(view.Out[0]) == 0 {
+	if len(view.Out[0]) == 0 || m.discard.revision == 0 {
 		_, err := self.After(100*time.Millisecond, testObserveCommand)
 		return nil, err
 	}
-	if view.Out[0][0] != 0x37 || !view.Trustees[0] || len(view.Hand) != view.HandCounts[1] {
+	if view.Out[0][0] != 0x37 || !view.Trustees[0] || len(view.Hand) != view.HandCounts[1] ||
+		view.Revision != 1 || m.discard != (discardEvent{revision: 1, turn: m.discardTurn, seat: 0, tile: 0x37}) {
 		m.done <- errors.New("Pulse 未用托管推进，或快照含错误座位的手牌")
 	} else {
 		m.done <- nil

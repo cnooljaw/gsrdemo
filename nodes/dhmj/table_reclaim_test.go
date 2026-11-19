@@ -23,19 +23,6 @@ type reclaimFixture struct {
 	settled chan struct{}
 }
 
-type settlementPushSink struct {
-	directoryBackend
-	received chan []any
-}
-
-func (s settlementPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
-	if cmd != accessagent.DhmjSettlementPushCommand {
-		return nil, runtime.ErrUnknownCommand
-	}
-	s.received <- args
-	return nil, nil
-}
-
 func (f *reclaimFixture) OnStart(ctx context.Context, self gsr.ServiceContext) error {
 	if err := f.directory.OnStart(ctx, self); err != nil {
 		return err
@@ -61,7 +48,7 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 		1: "new", 2: "new", 3: "new", 4: "new",
 	}})
 	pushes := make(chan []any, seatCount)
-	startDirectoryFixture(t, routes, "access-01", "agent", settlementPushSink{received: pushes})
+	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{command: accessagent.DhmjSettlementPushCommand, received: pushes})
 	d := newDirectory(defaultRoomRules, settlementJournal{})
 	var oldTable *table
 	var users [seatCount]uint64

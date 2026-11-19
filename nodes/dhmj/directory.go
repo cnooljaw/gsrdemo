@@ -31,8 +31,9 @@ const (
 
 // 目录内部命令通过本地 ServiceID 校验来源。
 const (
-	tableSettledCommand runtime.CommandID = 11
-	sweepTablesCommand  runtime.CommandID = 12
+	tableSettledCommand   runtime.CommandID = 11
+	sweepTablesCommand    runtime.CommandID = 12
+	tableDiscardedCommand runtime.CommandID = 13
 )
 
 const (
@@ -87,6 +88,7 @@ func newDirectory(rules roomRules, journal settlementJournal) *directory {
 		selfWinCommand: d.handleSelfWin, kongCommand: d.handleKong,
 		passSelfCommand: d.handlePassSelf, trusteeCommand: d.handleTrustee,
 		tableSettledCommand: d.handleTableSettled, sweepTablesCommand: d.handleSweepTables,
+		tableDiscardedCommand: d.handleTableDiscarded,
 	})
 	return d
 }
@@ -264,6 +266,7 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 	}
 	reply["hand"] = wireTiles(view.Hand)
 	reply["active_seat"], reply["turn"], reply["window_id"] = int64(view.Active), view.Turn, view.WindowID
+	reply["revision"] = view.Revision
 	reply["server_ms"], reply["deadline_ms"] = time.Now().UnixMilli(), int64(0)
 	if !view.Deadline.IsZero() {
 		reply["deadline_ms"] = view.Deadline.UnixMilli()
@@ -345,6 +348,26 @@ func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login strin
 		return true, nil
 	}
 	return false, errStaleLogin
+}
+
+func (d *directory) handleTableDiscarded(self gsr.CommandContext, name string, event discardEvent) error {
+	table := d.tables[name]
+	if table == nil || table.service == 0 || table.service != self.Source() {
+		return runtime.ErrUnknownCommand
+	}
+	payload := map[string]any{
+		"table_name": name, "revision": event.revision,
+		"seat": int64(event.seat), "turn": event.turn, "tile": int64(event.tile),
+	}
+	for _, player := range table.players {
+		if !player.connected || player.access == "" || player.agent == "" {
+			continue
+		}
+		if err := self.Cluster().Send(player.access, player.agent, accessagent.DhmjDiscardPushCommand, player.login, payload); err != nil {
+			_ = self.Logger().Error("定海麻将出牌推送未接纳", "table_name", name, "revision", event.revision, "user_id", player.uid, "error", err.Error())
+		}
+	}
+	return nil
 }
 
 func (d *directory) handleTableSettled(self gsr.CommandContext, name, operationID string, receipt [seatCount]roundSilver) error {

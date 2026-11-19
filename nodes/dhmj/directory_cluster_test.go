@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	dhmjrpc "github.com/cnooljaw/gsrdemo/common/rpc/dhmj"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
@@ -105,9 +107,25 @@ func startDirectoryFixture(t *testing.T, routes map[cluster.NodeID]string, node 
 	}
 }
 
-// TestDirectoryClusterJoinReadyAndReconnect 保护真实 Cluster 调用下四人准备才开局，重连恢复本人暗手并撤销旧身份。
+type agentPushSink struct {
+	directoryBackend
+	command  runtime.CommandID
+	received chan []any
+}
+
+func (s agentPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd != s.command {
+		return nil, runtime.ErrUnknownCommand
+	}
+	s.received <- args
+	return nil, nil
+}
+
+// TestDirectoryClusterJoinReadyAndReconnect 保护四人凑桌、重连与合法出牌向同桌四人广播。
 func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 	routes := make(map[cluster.NodeID]string)
+	pushes := make(chan []any, 8)
+	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{command: accessagent.DhmjDiscardPushCommand, received: pushes})
 	startDirectoryFixture(t, routes, "online", onlinerpc.ServiceName, directoryBackend{logins: map[uint64]string{}})
 	startDirectoryFixture(t, routes, "settlement", settlementread.ServiceName, directoryBackend{})
 	startDirectoryFixture(t, routes, "dhmj", dhmjrpc.ServiceName, newDirectory(defaultRoomRules, settlementJournal{}))
@@ -190,12 +208,24 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		if value, err := call(dhmjrpc.DiscardCommand, uint64(1), "new-login", turn, tile); err != nil || value != true {
 			return fmt.Errorf("当前座位出牌未执行：%v %w", value, err)
 		}
+		event := map[string]any{"table_name": tableName, "revision": uint64(1), "seat": int64(0), "turn": turn, "tile": tile}
+		for _, login := range []string{"new-login", "login", "login", "login"} {
+			select {
+			case args := <-pushes:
+				if !reflect.DeepEqual(args, []any{login, event}) {
+					return fmt.Errorf("出牌推送没有使用当前路由与轮次：%v", args)
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		result, err = call(dhmjrpc.SnapshotCommand, uint64(2), "login")
 		if err != nil {
 			return err
 		}
-		out := result.(map[string]any)["discards"].([]any)[0].([]any)
-		if len(out) != 1 || out[0] != tile {
+		snapshot := result.(map[string]any)
+		out := snapshot["discards"].([]any)[0].([]any)
+		if len(out) != 1 || out[0] != tile || snapshot["revision"] != uint64(1) {
 			return errors.New("其他座位未看到已执行的出牌")
 		}
 		verified = true

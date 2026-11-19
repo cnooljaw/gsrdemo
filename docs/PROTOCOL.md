@@ -130,7 +130,7 @@ Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应
 
 Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将目录在结算确认后向各在线玩家发送本人回执。未收到推送时，可通过快照恢复结果。
 
-Access 已注册 `1392 DhmjDiscardPush`，`request_id` 为 0。字段为 `table_name string, revision/turn uint64, seat/tile int64`，`turn` 是本次出牌使用的轮次。快照协议也可携带 `revision`。麻将节点的出牌事件发送及快照序号接线见[后续工作](DESIGN.md#11-后续工作)。
+`1392 DhmjDiscardPush` 发给同桌在线玩家，`request_id` 为 0。字段为 `table_name string, revision/turn uint64, seat/tile int64`，`turn` 是本次出牌使用的轮次。开局后快照返回当前 `revision`，第一张牌打出前为 0。客户端可忽略快照已包含的事件，发现缺口时可重新请求快照。
 
 ### 1.6 错误
 
@@ -308,7 +308,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | landlord / 117 TrusteePush | `L, event map` | 转发托管状态和操作时间 | 1197 |
 | landlord / 118 TurnPush | `L, event map` | 转发动画结束后的轮次开放 | 1198 |
 | dhmj / 119 DhmjSettlementPush | `L, payload map`，含 `table_name string, settlement map` | 核对当前登录、牌桌和回执 UserID，再转发 committed 回执 | 1396 |
-| 麻将出牌接收端 / 120 DhmjDiscardPush | `L, payload map`，含 `table_name, revision, seat, turn, tile` | 核对当前登录和牌桌，校验出牌字段并转发 | 1392 |
+| dhmj / 120 DhmjDiscardPush | `L, payload map`，含 `table_name, revision, seat, turn, tile` | 核对当前登录和牌桌，校验出牌字段并转发 | 1392 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
@@ -383,12 +383,13 @@ Node 和 Service 均为 `dhmj`。目录持有座位、准备和登录路由，�
 
 Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 胡、7 过。两类轮次编号分别使用快照中的 `turn` 和 `window_id`。目录按当前登录查出牌桌和座位，调用者无需提供座位。
 
-目录与牌桌之间的终局回收消息仅在本节点使用。
+目录与牌桌之间的回收和事件消息仅在本节点使用。
 
 | 调用方 → 目标 | 命令 | 顺序参数 | 行为 |
 | --- | --- | --- | --- |
 | 牌桌 → 目录 | Send 11 | `tableName, operationID string, receipt [4]roundSilver` | 按发送者 ServiceID 核对牌桌，转发在线玩家的本人回执并开始计算离线座位的重登窗口 |
 | 目录 Pulse → 目录 | Send 12 | 无 | 回收到期离线座位，重试关闭已空牌桌 |
+| 牌桌 → 目录 | Send 13 | `tableName string, event discardEvent` | 目录核对来源服务并向同桌在线玩家转发出牌事件 |
 | 目录 → 牌桌 | Send 9 | 无 | 记录关闭意图，结算待记录清理完成后牌桌退出 |
 
 | 本人快照 | 字段 |
