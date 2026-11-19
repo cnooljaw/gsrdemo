@@ -15,23 +15,27 @@ var errInvalidDeal = errors.New("定海麻将开局参数无效")
 
 // round 持有单局牌墙和各座暗手，由牌桌串行推进。
 type round struct {
-	wall      []byte
-	nextTile  int
-	dealer    int
-	active    int
-	winds     [seatCount]byte
-	roundWind byte
-	hands     [seatCount][]byte
-	flowers   [seatCount][]byte
-	end       *roundEnd
-	out       [seatCount][]byte
-	melds     [seatCount][]meld
-	drawn     [seatCount]bool
-	winDetail [seatCount]winPoints
-	turn      uint64
-	windowID  uint64
-	window    *discardWindow
-	deadline  time.Time
+	wall         []byte
+	nextTile     int
+	dealer       int
+	active       int
+	winds        [seatCount]byte
+	roundWind    byte
+	hands        [seatCount][]byte
+	flowers      [seatCount][]byte
+	end          *roundEnd
+	out          [seatCount][]byte
+	melds        [seatCount][]meld
+	drawn        [seatCount]bool
+	winDetail    [seatCount]winPoints
+	turn         uint64
+	windowID     uint64
+	window       *discardWindow
+	deadline     time.Time
+	lastDraw     byte
+	selfPending  bool
+	kongBloom    bool
+	kongProvider int
 }
 
 type flowerReplacement struct {

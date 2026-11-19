@@ -28,9 +28,7 @@ func (g *round) allowDiscard(now time.Time) {
 }
 
 func (g *round) drawTurn(now time.Time) {
-	if g.drawActive().playable != 0 {
-		g.allowDiscard(now)
-	}
+	g.drawForTurn(now, false, g.active)
 }
 
 func (g *round) discard(seat int, turn uint64, tile byte, now time.Time) bool {
@@ -43,6 +41,7 @@ func (g *round) discard(seat int, turn uint64, tile byte, now time.Time) bool {
 		return false
 	}
 	g.hands[seat] = slices.Delete(g.hands[seat], index, index+1)
+	g.selfPending, g.lastDraw = false, 0
 	g.out[seat] = append(g.out[seat], tile)
 	g.openResponse(newDiscardWindow(g.hands, seat, tile), now)
 	return true
@@ -84,7 +83,9 @@ func (g *round) resolveResponse(now time.Time) {
 	w := *g.window
 	g.window = nil
 	g.deadline = time.Time{}
-	if len(actions) == 0 {
+	if len(actions) == 0 && w.robKong {
+		g.completeAddedKong(w, now)
+	} else if len(actions) == 0 {
 		g.advanceAfterPass(w, now)
 	} else if actions[0].action == claimHu {
 		g.finishDiscardHu(w, actions)
@@ -138,14 +139,21 @@ func (g *round) takeDiscard(w discardWindow, chosen response, now time.Time) {
 	slices.Sort(tiles)
 	g.melds[seat] = append(g.melds[seat], meld{chosen.action, w.source, tiles})
 	g.active = seat
+	var flowers []flowerReplacement
 	if !g.drawn[seat] {
-		g.replaceInitialFlowers(seat)
+		flowers = g.replaceInitialFlowers(seat)
 	}
 	if g.end != nil {
 		return
 	}
 	if chosen.action == directKong {
-		g.drawTurn(now)
+		g.drawForTurn(now, true, w.source)
+		return
+	}
+	if len(flowers) != 0 {
+		// 原版吃碰后补起手花，会重新检查胡和自杠动作。
+		hand := g.hands[seat]
+		g.openDrawnTurn(now, hand[len(hand)-1], false, seat)
 		return
 	}
 	g.allowDiscard(now)
@@ -163,25 +171,19 @@ func (g *round) claimCounts() (claims [seatCount][seatCount]int) {
 }
 
 func (g *round) finishDiscardHu(w discardWindow, actions []response) {
-	end := roundEnd{kind: discardHu, dealer: g.dealer, source: w.source, claims: g.claimCounts()}
+	end := roundEnd{kind: discardHu, dealer: g.dealer, source: w.source, robbedKong: w.robKong, claims: g.claimCounts()}
+	if w.robKong {
+		g.removeFromHand(w.source, w.tile)
+	}
 	for _, action := range actions {
 		seat := action.seat
-		var visible []byte
-		for _, m := range g.melds[seat] {
-			visible = append(visible, m.tiles...)
-		}
 		// 原版单胡先转到赢家，多胡仍保留出牌者为活动座位。
 		wind := g.winds[w.source]
 		if len(actions) == 1 {
 			wind = g.winds[seat]
 		}
-		points := scoreWin(g.hands[seat], visible, w.tile, winContext{
-			kind: discardHu, activeWind: wind, roundWind: g.roundWind,
-			flowers: g.flowers[seat], dealer: seat == g.dealer,
-			discarded: len(g.out[seat]) > 0, lastTile: g.remaining() == 0,
-		})
-		g.winDetail[seat] = points
-		end.winners = append(end.winners, hu{seat, points.total()})
+		point := g.recordWin(seat, g.hands[seat], w.tile, wind, discardHu, false, w.robKong)
+		end.winners = append(end.winners, hu{seat, point})
 	}
 	g.end = &end
 }

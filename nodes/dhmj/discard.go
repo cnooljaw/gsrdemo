@@ -14,6 +14,8 @@ const (
 	pong
 	claimHu
 	pass
+	concealedKong
+	addedKong
 )
 
 type actionOptions uint8
@@ -35,6 +37,7 @@ type response struct {
 type discardWindow struct {
 	source  int
 	tile    byte
+	robKong bool
 	offers  [seatCount]actionOptions
 	choices [seatCount]responseAction
 }
