@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 用途：构建、检查项目、生成协议/契约、前台启动节点或执行地鼠 owner、结算 Call 池及读写混合压测。
-# 用法：dev.sh build|check [access|login|online|mole|settlement|landlord]；dev.sh run <节点>；dev.sh load mole|settlement；dev.sh generate access|rpc。
+# 用法：dev.sh build|check [access|login|online|mole|settlement|landlord|dhmj]；dev.sh run <节点>；dev.sh load mole|settlement；dev.sh generate access|rpc。
 # run 优先读取 configs/<节点>-01.local.yaml，未配置时读取公开模板。
+# dhmj 当前仅有规则包，build 只编译包。
 # 不指定节点时，build/check 包含所有 Go module 和 TypeScript；指定时只处理 common 和该节点。
 # 执行范围：仅 gsrdemo；GOWORK=off，复用 .cache/go-build，构建输出到 bin/ 和 typeclient/dist/。
 # 依赖：Go；TypeScript 检查/构建和协议生成另需 Node/npm 与 typeclient/node_modules。
@@ -11,7 +12,7 @@ export GOCACHE="${GOCACHE:-$project_root/.cache/go-build}"
 export GOWORK=off
 
 usage() {
-    echo "用法：$0 build|check [access|login|online|mole|settlement|landlord] | run <节点> | load mole|settlement | generate access|rpc"
+    echo "用法：$0 build|check [access|login|online|mole|settlement|landlord|dhmj] | run <节点> | load mole|settlement | generate access|rpc"
 }
 
 action="${1:-}"
@@ -30,6 +31,7 @@ case "$action" in
 esac
 case "$node" in
     ""|access|login|online|mole|settlement|landlord) ;;
+    dhmj) [[ "$action" == "build" || "$action" == "check" ]] || { usage >&2; exit 2; } ;;
     rpc) [[ "$action" == "generate" ]] || { usage >&2; exit 2; } ;;
     *) usage >&2; exit 2 ;;
 esac
@@ -112,7 +114,7 @@ for module_directory in "${modules[@]}"; do
         if [[ "$action" == "check" ]]; then
             go test ./... -timeout=5m
             go vet ./...
-        elif [[ "$module_directory" == "$project_root"/nodes/* ]]; then
+        elif [[ "$module_directory" == "$project_root"/nodes/* && "$module_directory" != "$project_root/nodes/dhmj" ]]; then
             mkdir -p "$project_root/bin"
             go build -o "$project_root/bin/$(basename "$module_directory")" .
         else
