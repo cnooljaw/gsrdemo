@@ -16,6 +16,7 @@ import (
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
 	authrpc "github.com/cnooljaw/gsrdemo/common/rpc/auth"
+	dhmjrpc "github.com/cnooljaw/gsrdemo/common/rpc/dhmj"
 	landlordrpc "github.com/cnooljaw/gsrdemo/common/rpc/landlord"
 	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
 	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
@@ -165,6 +166,33 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 		if command == landlordattack.RoomSnapshotCommand && service.scenario == "landlord-snapshot-order" {
 			return map[string]any{"room_name": "room", "turn": uint64(1)}, nil
 		}
+	case dhmjrpc.ServiceName:
+		if len(args) < 2 {
+			return nil, runtime.ErrInvalidCommandArguments
+		}
+		if command == dhmjrpc.LeaveCommand {
+			service.hits <- []any{"leave-dhmj", args[0], args[1]}
+		}
+		if command == dhmjrpc.JoinCommand && len(args) == 4 && args[2] == "access-01" && args[3] != "" {
+			service.current = map[string]any{"user_id": args[0], "login_id": args[1]}
+		}
+		if service.current == nil || service.current["user_id"] != args[0] || service.current["login_id"] != args[1] {
+			return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.stale_login", "stale mahjong login")
+		}
+		switch command {
+		case dhmjrpc.JoinCommand, dhmjrpc.SnapshotCommand:
+			return map[string]any{
+				"table_name": "dhmj-1", "seat": int64(0), "phase": "playing",
+				"players":  []any{map[string]any{"seat": int64(0), "user_id": args[0], "ready": true}},
+				"hand":     []any{int64(1), int64(2)},
+				"discards": []any{[]any{}, []any{}, []any{}, []any{}},
+			}, nil
+		case dhmjrpc.ReadyCommand:
+			return true, nil
+		case dhmjrpc.LeaveCommand:
+			service.current = nil
+			return true, nil
+		}
 	case molerpc.ServiceName:
 		switch command {
 		case molerpc.MoleHitCommand:
@@ -222,7 +250,7 @@ type accessFixtureMain struct {
 var _ gsr.Service = (*accessFixtureMain)(nil)
 
 func (service *accessFixtureMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, molerpc.ServiceName, landlordrpc.ServiceName, "room"} {
+	for _, role := range []string{authrpc.ServiceName, tokenrpc.ServiceName, onlinerpc.ServiceName, moleentry.ServiceName, molerpc.ServiceName, landlordrpc.ServiceName, "room", dhmjrpc.ServiceName} {
 		id, err := self.CreateService(ctx, &accessBackendFixture{role: role, hits: service.hits, scenario: service.scenario, barrier: service.barrier})
 		if err != nil {
 			return err
@@ -283,7 +311,7 @@ func startAccessBusinessFixture(t *testing.T, scenario string, barrier *accessEn
 	case <-time.After(3 * time.Second):
 		t.Fatal("backend startup timed out")
 	}
-	routes := map[cluster.NodeID]string{"access-01": accessAddress, "login": backend, "online": backend, "mole": backend, "landlord": backend}
+	routes := map[cluster.NodeID]string{"access-01": accessAddress, "login": backend, "online": backend, "mole": backend, "landlord": backend, "dhmj": backend}
 	accessReady, accessDone := make(chan error, 1), make(chan error, 1)
 	accessCtx, stopAccess := context.WithCancel(context.Background())
 	accessLogs := t.TempDir()

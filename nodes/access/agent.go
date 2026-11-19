@@ -57,6 +57,7 @@ func newAgent(client gate.ClientSession, registry *protocol.Registry) *agent {
 	agent.games = []gameComponent{
 		newComMole(deps),
 		newComLandlord(deps),
+		newComDhmj(deps),
 	}
 	agent.mustBindHandlers(registry)
 	return agent

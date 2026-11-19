@@ -106,11 +106,11 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 | 3 | settlement：余额校验和持久记账 | `./scripts/dev.sh run settlement` | Cluster `127.0.0.1:19005` |
 | 4（地鼠） | mole：分组、目标和命中计算 | `./scripts/dev.sh run mole` | Cluster `127.0.0.1:19004` |
 | 4（斗地主） | landlord：随机凑桌、叫抢与出牌 | `./scripts/dev.sh run landlord` | Cluster `127.0.0.1:19007` |
-| 4（麻将节点联调） | dhmj：四人凑桌、回合与局末结算 | `./scripts/dev.sh run dhmj` | Cluster `127.0.0.1:19008` |
+| 4（定海麻将） | dhmj：四人凑桌、回合与局末结算 | `./scripts/dev.sh run dhmj` | Cluster `127.0.0.1:19008` |
 | 5 | access-01：客户端接入和业务路由 | `./scripts/dev.sh run access` | Cluster `127.0.0.1:19001`；WS `127.0.0.1:7888` |
 | 6（可选） | access-02：第二个接入实例 | `./bin/access -config configs/access-02.yaml` | Cluster `127.0.0.1:19006`；WS `127.0.0.1:7889` |
 
-演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。定海麻将当前通过节点 RPC 联调，房间分值与 Redis 待结算键见 `configs/dhmj-01.yaml`。
+演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。测试麻将进桌、准备、恢复和离桌时启动 dhmj 与 access，客户端消息见[麻将协议](docs/PROTOCOL.md#15-定海麻将进桌与恢复)。房间分值与 Redis 待结算键见 `configs/dhmj-01.yaml`。
 
 settlement 提供 `settlement-write` 与 `settlement-read` 两个 Call 服务池。各池由多个串行 Service 并行处理不同请求，调用方统一 Call 池名。通过 `write_workers/read_workers/mysql_connections/mailbox_capacity` 分别调整写成员数、读成员数、数据库连接数和每成员邮箱容量；默认值、游戏调用及超时处理见 [Settlement 设计](docs/DESIGN.md#7-settlement并行执行与权威账务)。mole、landlord 通过 `settlement_node` 选择结算节点，默认 `settlement`；access 不直接调用结算，无此配置。其他结算实例在 `nodes.yaml` 配置并由游戏节点显式选择，共用权威 MySQL，不自动切换。
 

@@ -200,4 +200,40 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		Kind:       catalog.Push,
 		NewMessage: func() proto.Message { return &LandlordTurnPush{} },
 	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_ENTER),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjEnterRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_S2C_DHMJ_ENTER),
+		Direction:  catalog.ServerToClient,
+		Kind:       catalog.Response,
+		NewMessage: func() proto.Message { return &DhmjEnterResponse{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_READY),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjReadyRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_SNAPSHOT),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjSnapshotRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_S2C_DHMJ_SNAPSHOT),
+		Direction:  catalog.ServerToClient,
+		Kind:       catalog.Response,
+		NewMessage: func() proto.Message { return &DhmjSnapshotResponse{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_LEAVE),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjLeaveRequest{} },
+	},
 }

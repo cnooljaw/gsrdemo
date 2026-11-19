@@ -1,0 +1,168 @@
+package main
+
+import (
+	"maps"
+
+	"github.com/cnooljaw/gsr"
+	"github.com/cnooljaw/gsr/protocol"
+	"github.com/cnooljaw/gsr/runtime"
+	dhmjrpc "github.com/cnooljaw/gsrdemo/common/rpc/dhmj"
+	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
+)
+
+const dhmjNode = "dhmj"
+
+// comDhmj 属于当前 Agent，目录继续持有实际座位和登录路由。
+type comDhmj struct {
+	deps        componentDependencies
+	table       string
+	cleanupJoin bool // Join 可能已执行，但没有取得可用快照。
+}
+
+var _ gameComponent = (*comDhmj)(nil)
+
+func newComDhmj(deps componentDependencies) *comDhmj {
+	return &comDhmj{deps: deps}
+}
+
+func (*comDhmj) Name() string { return dhmjNode }
+
+func (game *comDhmj) Entered() bool { return game.table != "" }
+
+func (game *comDhmj) ProtocolHandlers() map[uint32]any {
+	return map[uint32]any{
+		uint32(demopb.MsgId_C2S_DHMJ_ENTER):    game.onEnter,
+		uint32(demopb.MsgId_C2S_DHMJ_READY):    game.onReady,
+		uint32(demopb.MsgId_C2S_DHMJ_SNAPSHOT): game.onSnapshot,
+		uint32(demopb.MsgId_C2S_DHMJ_LEAVE):    game.onLeave,
+	}
+}
+
+func (*comDhmj) CommandHandlers() map[runtime.CommandID]any { return nil }
+
+func (game *comDhmj) onEnter(self gsr.CommandContext, reply protocol.Context, _ *demopb.DhmjEnterRequest) error {
+	if err := game.deps.AllowEnter(game.Name()); err != nil {
+		return err
+	}
+	identity := game.deps.Identity()
+	value, err := game.deps.Call(self, dhmjNode, dhmjrpc.ServiceName, dhmjrpc.JoinCommand,
+		identity.UserID, identity.LoginID, string(identity.AccessNode), string(identity.AgentName))
+	if err != nil {
+		if enterOutcomeUnknown(err) {
+			game.cleanupJoin = true
+		}
+		return enterFailure(err)
+	}
+	game.cleanupJoin = true
+	snapshot, err := dhmjSnapshot(value, identity.UserID)
+	if err != nil {
+		return err
+	}
+	game.table, game.cleanupJoin = snapshot.TableName, false
+	return reply.Response(uint32(demopb.MsgId_S2C_DHMJ_ENTER), &demopb.DhmjEnterResponse{Snapshot: snapshot})
+}
+
+func (game *comDhmj) onReady(self gsr.CommandContext, reply protocol.Context, _ *demopb.DhmjReadyRequest) error {
+	if err := game.callAction(self, dhmjrpc.ReadyCommand); err != nil {
+		return err
+	}
+	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
+}
+
+func (game *comDhmj) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.DhmjSnapshotRequest) error {
+	identity := game.deps.Identity()
+	value, err := game.callTable(self, identity, dhmjrpc.SnapshotCommand)
+	if err != nil {
+		return err
+	}
+	snapshot, err := dhmjSnapshot(value, identity.UserID)
+	if err != nil || snapshot.TableName != game.table {
+		return errInvalidBackendReply
+	}
+	return reply.Response(uint32(demopb.MsgId_S2C_DHMJ_SNAPSHOT), &demopb.DhmjSnapshotResponse{Snapshot: snapshot})
+}
+
+func (game *comDhmj) onLeave(self gsr.CommandContext, reply protocol.Context, _ *demopb.DhmjLeaveRequest) error {
+	if err := game.callAction(self, dhmjrpc.LeaveCommand); err != nil {
+		return err
+	}
+	game.table = ""
+	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
+}
+
+func (game *comDhmj) callAction(self gsr.CommandContext, cmd runtime.CommandID) error {
+	value, err := game.callTable(self, game.deps.Identity(), cmd)
+	if err != nil {
+		return err
+	}
+	if value != true {
+		return errInvalidBackendReply
+	}
+	return nil
+}
+
+func (game *comDhmj) callTable(self gsr.CommandContext, identity agentIdentity, cmd runtime.CommandID) (any, error) {
+	if err := identity.RequireLogin(); err != nil {
+		return nil, err
+	}
+	if !game.Entered() {
+		return nil, errEnterRequired
+	}
+	return game.deps.Call(self, dhmjNode, dhmjrpc.ServiceName, cmd, identity.UserID, identity.LoginID)
+}
+
+func (game *comDhmj) Disconnect(self gsr.ServiceContext) error {
+	if !game.Entered() && !game.cleanupJoin {
+		return nil
+	}
+	game.table, game.cleanupJoin = "", false
+	identity := game.deps.Identity()
+	_, err := game.deps.Call(self, dhmjNode, dhmjrpc.ServiceName, dhmjrpc.LeaveCommand, identity.UserID, identity.LoginID)
+	return err
+}
+
+func dhmjSnapshot(value any, userID uint64) (*demopb.DhmjSnapshot, error) {
+	fields, ok := value.(map[string]any)
+	seat, hasSeat := fields["seat"].(int64)
+	if !ok || !hasSeat || seat < 0 || seat >= 4 {
+		return nil, errInvalidBackendReply
+	}
+	// Cluster 使用每个座位一个牌列表，Protobuf 用消息包住每组牌。
+	if fields["phase"] == "playing" || fields["phase"] == "finished" {
+		lists, ok := fields["discards"].([]any)
+		if !ok || len(lists) != 4 {
+			return nil, errInvalidBackendReply
+		}
+		discards := make([]any, len(lists))
+		for seat, tiles := range lists {
+			list, ok := tiles.([]any)
+			if !ok {
+				return nil, errInvalidBackendReply
+			}
+			discards[seat] = map[string]any{"tiles": list}
+		}
+		fields = maps.Clone(fields)
+		fields["discards"] = discards
+	}
+	snapshot := &demopb.DhmjSnapshot{}
+	if err := clientMessage(fields, snapshot); err != nil {
+		return nil, err
+	}
+	switch snapshot.Phase {
+	case "waiting", "playing", "finished":
+	default:
+		return nil, errInvalidBackendReply
+	}
+	if snapshot.TableName == "" {
+		return nil, errInvalidBackendReply
+	}
+	if settlement := snapshot.Settlement; settlement != nil && settlement.UserId != 0 && settlement.UserId != userID {
+		return nil, errInvalidBackendReply
+	}
+	for _, player := range snapshot.Players {
+		if player.GetSeat() == seat && player.GetUserId() == userID {
+			return snapshot, nil
+		}
+	}
+	return nil, errInvalidBackendReply
+}

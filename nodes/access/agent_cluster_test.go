@@ -180,3 +180,46 @@ func TestAccessOnlyKnownTargetRefusalCanContinue(t *testing.T) {
 		}
 	}
 }
+
+// TestAccessDhmjReconnectAndLeave 保护真实 WebSocket 麻将接线、互斥，以及旧连接断开时按旧登录清理。
+func TestAccessDhmjReconnectAndLeave(t *testing.T) {
+	gateAddress, backend, calls := startAccessBusiness(t)
+	old := dialAccess(t, gateAddress)
+	if got := accessLogin(t, old, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	oldLogin := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, old, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+	if got := accessRequest(t, old, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}); got.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+		t.Fatalf("麻将入桌后仍能进入地鼠：%v", got)
+	}
+	current := dialAccess(t, gateAddress)
+	if got := accessLogin(t, current, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	response := accessRequest(t, current, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{})
+	var joined demopb.DhmjEnterResponse
+	if err := proto.Unmarshal(response.Payload, &joined); err != nil || response.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) ||
+		joined.GetSnapshot().GetTableName() != "dhmj-1" || len(joined.GetSnapshot().GetHand()) != 2 {
+		t.Fatalf("重登未恢复本人快照：%v %v", response, err)
+	}
+	select {
+	case call := <-calls:
+		if call[0] != "leave-dhmj" || call[1] != uint64(7) || call[2] != oldLogin {
+			t.Fatalf("清理未使用旧登录：%v", call)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("旧连接未离开麻将")
+	}
+	if got := accessRequest(t, current, demopb.MsgId_C2S_DHMJ_SNAPSHOT, &demopb.DhmjSnapshotRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_SNAPSHOT) {
+		t.Fatalf("旧连接清理影响了当前快照：%v", got)
+	}
+	if got := accessRequest(t, current, demopb.MsgId_C2S_DHMJ_LEAVE, &demopb.DhmjLeaveRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_ACTION_ACK) {
+		t.Fatal(got)
+	}
+	if got := accessRequest(t, current, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_ENTER) {
+		t.Fatalf("麻将离桌后互斥占位仍存在：%v", got)
+	}
+}

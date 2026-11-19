@@ -180,6 +180,38 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_PUSH
   }];
+
+  // 定海麻将进桌、准备、恢复和离桌。
+  C2S_DHMJ_ENTER = 1301 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjEnterRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_DHMJ_ENTER = 1302 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjEnterResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_DHMJ_READY = 1311 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjReadyRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_DHMJ_SNAPSHOT = 1321 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjSnapshotRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  S2C_DHMJ_SNAPSHOT = 1322 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjSnapshotResponse"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_RESPONSE
+  }];
+  C2S_DHMJ_LEAVE = 1331 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjLeaveRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
 }
 
 message ActionAck {}
@@ -445,4 +477,65 @@ message LandlordTurnPush {
   int64 turn_seat = 5;
   int64 deadline_ms = 6;
   int64 server_ms = 7;
+}
+
+
+message DhmjEnterRequest {}
+
+message DhmjEnterResponse {
+  DhmjSnapshot snapshot = 1;
+}
+
+message DhmjReadyRequest {}
+
+message DhmjSnapshotRequest {}
+
+message DhmjSnapshotResponse {
+  DhmjSnapshot snapshot = 1;
+}
+
+message DhmjLeaveRequest {}
+
+message DhmjSnapshot {
+  string table_name = 1;
+  int64 seat = 2;
+  string phase = 3;
+  repeated DhmjPlayer players = 4;
+  repeated int64 hand = 5;
+  repeated DhmjDiscards discards = 6;
+  repeated int64 hand_counts = 7;
+  repeated bool trustees = 8;
+  int64 active_seat = 9;
+  uint64 turn = 10;
+  uint64 window_id = 11;
+  int64 window_tile = 12;
+  repeated int64 offers = 13;
+  bool self_action = 14;
+  bool can_self_win = 15;
+  repeated int64 concealed_kongs = 16;
+  repeated int64 added_kongs = 17;
+  int64 server_ms = 18;
+  int64 deadline_ms = 19;
+  DhmjSettlement settlement = 20;
+}
+
+message DhmjPlayer {
+  uint64 user_id = 1;
+  int64 seat = 2;
+  bool ready = 3;
+}
+
+message DhmjDiscards {
+  repeated int64 tiles = 1;
+}
+
+message DhmjSettlement {
+  string operation_id = 1;
+  string status = 2;
+  uint64 user_id = 3;
+  int64 fee = 4;
+  int64 paid = 5;
+  int64 received = 6;
+  int64 balance = 7;
+  uint64 version = 8;
 }
