@@ -18,6 +18,7 @@ func (g *round) startPlay(now time.Time) {
 	if g.turn != 0 || g.end != nil {
 		return
 	}
+	g.recordDeal()
 	g.replaceInitialFlowers(g.dealer)
 	g.drawTurn(now)
 }

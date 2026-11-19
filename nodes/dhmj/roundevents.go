@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 )
@@ -11,7 +13,13 @@ const (
 	discardEvent roundEventKind = iota + 1
 	drawEvent
 	flowerEvent
+	dealEvent
 )
+
+type openingDeal struct {
+	dealer int
+	hands  [seatCount][]byte
+}
 
 // roundEvent 保存状态变化当时的数据，按同一序号流在回合推进后发送。
 type roundEvent struct {
@@ -21,6 +29,15 @@ type roundEvent struct {
 	tile            byte
 	flowers         []flowerReplacement
 	fromDraw        bool
+	deal            *openingDeal
+}
+
+func (g *round) recordDeal() {
+	deal := &openingDeal{dealer: g.dealer}
+	for seat, hand := range g.hands {
+		deal.hands[seat] = slices.Clone(hand)
+	}
+	g.recordEvent(roundEvent{kind: dealEvent, deal: deal})
 }
 
 func (g *round) recordEvent(event roundEvent) {
@@ -39,6 +56,10 @@ func (g *round) recordFlowers(seat int, flowers []flowerReplacement, fromDraw bo
 func (event roundEvent) wire(tableName string, recipient int) (runtime.CommandID, map[string]any) {
 	payload := map[string]any{"table_name": tableName, "revision": event.revision, "seat": int64(event.seat)}
 	switch event.kind {
+	case dealEvent:
+		payload["seat"], payload["dealer_seat"] = int64(recipient), int64(event.deal.dealer)
+		payload["hand"], payload["remaining"] = wireTiles(event.deal.hands[recipient]), int64(event.remaining)
+		return accessagent.DhmjDealPushCommand, payload
 	case discardEvent:
 		payload["turn"], payload["tile"] = event.turn, int64(event.tile)
 		return accessagent.DhmjDiscardPushCommand, payload

@@ -355,11 +355,21 @@ func (d *directory) handleTableEvent(self gsr.CommandContext, name string, event
 	if table == nil || table.service == 0 || table.service != self.Source() {
 		return runtime.ErrUnknownCommand
 	}
+	var playerIDs []any
+	if event.kind == dealEvent {
+		playerIDs = make([]any, seatCount)
+		for seat, player := range table.players {
+			playerIDs[seat] = player.uid
+		}
+	}
 	for seat, player := range table.players {
 		if !player.connected || player.access == "" || player.agent == "" {
 			continue
 		}
 		command, payload := event.wire(name, seat)
+		if playerIDs != nil {
+			payload["player_ids"] = playerIDs
+		}
 		if err := self.Cluster().Send(player.access, player.agent, command, player.login, payload); err != nil {
 			_ = self.Logger().Error("定海麻将牌桌推送未接纳", "table_name", name, "revision", event.revision, "user_id", player.uid, "error", err.Error())
 		}

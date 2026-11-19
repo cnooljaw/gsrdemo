@@ -141,7 +141,7 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 
 来自摸牌的补花链用 Flower 展示，用 Draw 将最终普通牌加入暗手一次。起手花替换按 Flower 更新本人暗手。
 
-Access 已注册 `1395 DhmjDealPush`，字段为 `table_name string, revision uint64, seat/dealer_seat/remaining int64, player_ids uint64[], hand int64[]`，`request_id` 为 0。`player_ids` 按 0～3 号座位排列，`seat` 表示接收者，`hand` 为本人 13 张起手牌。麻将节点的发送端见[后续工作](DESIGN.md#11-后续工作)。
+四人准备后发送 `1395 DhmjDealPush`，字段为 `table_name string, revision uint64, seat/dealer_seat/remaining int64, player_ids uint64[], hand int64[]`，`request_id` 为 0。`player_ids` 按 0～3 号座位排列，`seat` 表示接收者，`hand` 为本人 13 张起手牌。发牌是牌桌首条事件，先于补花和首摸。
 
 ### 1.6 错误
 
@@ -322,7 +322,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 120 DhmjDiscardPush | `L, payload map`，含 `table_name, revision, seat, turn, tile` | 核对当前登录和牌桌，校验出牌字段并转发 | 1392 |
 | dhmj / 121 DhmjDrawPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `tile` | 1393 |
 | dhmj / 122 DhmjFlowerPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `replacements` | 1394 |
-| 麻将发牌接收端 / 123 DhmjDealPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌、接收座位和名单中的本人身份，再转发本人起手牌 | 1395 |
+| dhmj / 123 DhmjDealPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌、接收座位和名单中的本人身份，再转发本人起手牌 | 1395 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
@@ -403,7 +403,7 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 | --- | --- | --- | --- |
 | 牌桌 → 目录 | Send 11 | `tableName, operationID string, receipt [4]roundSilver` | 按发送者 ServiceID 核对牌桌，转发在线玩家的本人回执并开始计算离线座位的重登窗口 |
 | 目录 Pulse → 目录 | Send 12 | 无 | 回收到期离线座位，重试关闭已空牌桌 |
-| 牌桌 → 目录 | Send 13 | `tableName string, event roundEvent` | 目录核对来源，转发出牌、摸牌或补花；暗牌只随本人消息发送 |
+| 牌桌 → 目录 | Send 13 | `tableName string, event roundEvent` | 目录核对来源，转发发牌、出牌、摸牌或补花；暗牌只随本人消息发送 |
 | 目录 → 牌桌 | Send 9 | 无 | 记录关闭意图，结算待记录清理完成后牌桌退出 |
 
 | 本人快照 | 字段 |

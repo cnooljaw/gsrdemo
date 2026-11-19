@@ -111,9 +111,14 @@ type agentPushSink struct {
 	directoryBackend
 	command  runtime.CommandID
 	received chan []any
+	deals    chan []any
 }
 
 func (s agentPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == accessagent.DhmjDealPushCommand && s.deals != nil {
+		s.deals <- args
+		return nil, nil
+	}
 	if cmd != s.command {
 		return nil, runtime.ErrUnknownCommand
 	}
@@ -121,11 +126,12 @@ func (s agentPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args 
 	return nil, nil
 }
 
-// TestDirectoryClusterJoinReadyAndReconnect 保护四人凑桌、重连与合法出牌向同桌四人广播。
+// TestDirectoryClusterJoinReadyAndReconnect 保护四人凑桌、按座位发牌、重连及同桌出牌广播。
 func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 	routes := make(map[cluster.NodeID]string)
 	pushes := make(chan []any, 8)
-	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{command: accessagent.DhmjDiscardPushCommand, received: pushes})
+	deals := make(chan []any, seatCount)
+	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{command: accessagent.DhmjDiscardPushCommand, received: pushes, deals: deals})
 	startDirectoryFixture(t, routes, "online", onlinerpc.ServiceName, directoryBackend{logins: map[uint64]string{}})
 	startDirectoryFixture(t, routes, "settlement", settlementread.ServiceName, directoryBackend{})
 	startDirectoryFixture(t, routes, "dhmj", dhmjrpc.ServiceName, newDirectory(defaultRoomRules, settlementJournal{}))
@@ -162,6 +168,31 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			}
 			if _, err := call(dhmjrpc.ReadyCommand, uid, "login"); err != nil {
 				return err
+			}
+		}
+		for seat := range seatCount {
+			var deal map[string]any
+			select {
+			case args := <-deals:
+				deal = args[1].(map[string]any)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			hand, _ := deal["hand"].([]any)
+			wantUsers := []any{uint64(1), uint64(2), uint64(3), uint64(4)}
+			if deal["table_name"] != tableName || deal["seat"] != int64(seat) || deal["revision"] != uint64(1) ||
+				deal["dealer_seat"] != int64(0) || deal["remaining"] != int64(92) ||
+				len(hand) != openingHandSize || !reflect.DeepEqual(deal["player_ids"], wantUsers) {
+				return fmt.Errorf("错误的开局发牌：%v", deal)
+			}
+			if seat != 0 { // 开局至此只有庄家会补花或摸牌。
+				value, err := call(dhmjrpc.SnapshotCommand, uint64(seat+1), "login")
+				if err != nil {
+					return err
+				}
+				if !reflect.DeepEqual(hand, value.(map[string]any)["hand"]) {
+					return fmt.Errorf("座位 %d 收到了其他人的起手牌", seat)
+				}
 			}
 		}
 		if _, err := call(dhmjrpc.LeaveCommand, uint64(1), "login"); err != nil {
