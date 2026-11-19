@@ -104,8 +104,11 @@ type roundSilver struct {
 	Version                      uint64
 }
 
-func (s roundSilver) wire() map[string]any {
-	return map[string]any{"user_id": s.UserID, "fee": s.Fee, "paid": s.Paid, "received": s.Received, "balance": s.Balance, "version": s.Version}
+func (s roundSilver) wire(operationID string) map[string]any {
+	return map[string]any{
+		"operation_id": operationID, "status": "committed", "user_id": s.UserID,
+		"fee": s.Fee, "paid": s.Paid, "received": s.Received, "balance": s.Balance, "version": s.Version,
+	}
 }
 
 func (op roundOperation) receipt(value any) ([seatCount]roundSilver, error) {

@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/cnooljaw/gsr"
+	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementread"
 )
@@ -51,6 +53,8 @@ var (
 type tablePlayer struct {
 	uid       uint64
 	login     string
+	access    cluster.NodeID
+	agent     cluster.ServiceName
 	ready     bool
 	connected bool
 }
@@ -117,6 +121,7 @@ func (d *directory) handleJoin(self gsr.CommandContext, uid uint64, login, acces
 	if err != nil {
 		return nil, err
 	}
+	table.players[seat].access, table.players[seat].agent = cluster.NodeID(access), cluster.ServiceName(agent)
 	return d.snapshotFor(self, table, seat)
 }
 
@@ -332,6 +337,7 @@ func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login strin
 		}
 		if table.service != 0 && table.settledAt.IsZero() {
 			table.players[seat].connected = false
+			table.players[seat].access, table.players[seat].agent = "", ""
 		} else {
 			d.releaseSeat(table, seat)
 			d.closeEmptyTable(self, table)
@@ -341,13 +347,23 @@ func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login strin
 	return false, errStaleLogin
 }
 
-func (d *directory) handleTableSettled(self gsr.CommandContext, name string) error {
+func (d *directory) handleTableSettled(self gsr.CommandContext, name, operationID string, receipt [seatCount]roundSilver) error {
 	table := d.tables[name]
 	if table == nil || table.service == 0 || table.service != self.Source() {
 		return runtime.ErrUnknownCommand
 	}
-	if table.settledAt.IsZero() {
-		table.settledAt = time.Now()
+	if !table.settledAt.IsZero() {
+		return nil
+	}
+	table.settledAt = time.Now()
+	for seat, player := range table.players {
+		if !player.connected || player.access == "" || player.agent == "" || receipt[seat].UserID != player.uid {
+			continue
+		}
+		payload := map[string]any{"table_name": name, "settlement": receipt[seat].wire(operationID)}
+		if err := self.Cluster().Send(player.access, player.agent, accessagent.DhmjSettlementPushCommand, player.login, payload); err != nil {
+			_ = self.Logger().Error("定海麻将结算推送未接纳", "operation_id", operationID, "user_id", player.uid, "error", err.Error())
+		}
 	}
 	return nil
 }

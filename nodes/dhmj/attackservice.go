@@ -123,8 +123,7 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	} else if s := service.settlement; s != nil {
 		view.Settlement = map[string]any{"operation_id": s.operation.ID, "status": "pending"}
 		if s.receipt != nil {
-			view.Settlement = s.receipt[seat].wire()
-			view.Settlement["operation_id"], view.Settlement["status"] = s.operation.ID, "committed"
+			view.Settlement = s.receipt[seat].wire(s.operation.ID)
 		}
 	}
 	if view.SelfAction {
@@ -201,7 +200,7 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 		return nil
 	}
 	if !service.notified && service.directory != 0 && service.settlement.receipt != nil {
-		if err := self.Send(service.directory, tableSettledCommand, service.name); err != nil {
+		if err := self.Send(service.directory, tableSettledCommand, service.name, service.settlement.operation.ID, *service.settlement.receipt); err != nil {
 			return err // 邮箱满时保留未通知状态，下一次 Pulse 重试。
 		}
 		service.notified = true

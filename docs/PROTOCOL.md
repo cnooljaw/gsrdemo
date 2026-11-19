@@ -128,7 +128,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应窗口和可选动作裁决。Respond 的动作编号见[麻将目录 RPC](#210-dhmj定海麻将凑桌与准备)。`ActionAck` 只确认当前请求，不附牌面或结算数据。请求超时后，可用 Snapshot 确认当前状态。
 
-Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将节点在本轮结算确认后发起推送的接线见[后续工作](DESIGN.md#11-后续工作)。
+Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将目录在结算确认后向各在线玩家发送本人回执。未收到推送时，可通过快照恢复结果。
 
 ### 1.6 错误
 
@@ -305,7 +305,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | landlord / 116 SettlementPush | `L, event map` | 转发本人的结算回执 | 1196 |
 | landlord / 117 TrusteePush | `L, event map` | 转发托管状态和操作时间 | 1197 |
 | landlord / 118 TurnPush | `L, event map` | 转发动画结束后的轮次开放 | 1198 |
-| 麻将结算接收端 / 119 DhmjSettlementPush | `L, payload map`，含 `table_name string, settlement map` | 核对当前登录、牌桌和回执 UserID，再转发 committed 回执 | 1396 |
+| dhmj / 119 DhmjSettlementPush | `L, payload map`，含 `table_name string, settlement map` | 核对当前登录、牌桌和回执 UserID，再转发 committed 回执 | 1396 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
@@ -384,7 +384,7 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 
 | 调用方 → 目标 | 命令 | 顺序参数 | 行为 |
 | --- | --- | --- | --- |
-| 牌桌 → 目录 | Send 11 | `tableName string` | 按发送者 ServiceID 核对牌桌，开始计算离线座位的重登窗口 |
+| 牌桌 → 目录 | Send 11 | `tableName, operationID string, receipt [4]roundSilver` | 按发送者 ServiceID 核对牌桌，转发在线玩家的本人回执并开始计算离线座位的重登窗口 |
 | 目录 Pulse → 目录 | Send 12 | 无 | 回收到期离线座位，重试关闭已空牌桌 |
 | 目录 → 牌桌 | Send 9 | 无 | 记录关闭意图，结算待记录清理完成后牌桌退出 |
 
@@ -473,5 +473,6 @@ MoleService/accounting.flush 本地 Send 原批次给 Submission
 牌桌结束 → Pulse 唤醒牌桌 → 从规则计算理论付款
   → 保存本局请求到 Redis → Call settlement-write/9
   → 校验完整回执 → 本人快照可读实扣费用、扣返与余额
-  → 删除待结算记录
+  → 清理 Redis 待记录，失败时重试删除
+  → Send 通知目录 → Send access Agent/119 → 推送本人结算 1396
 ```

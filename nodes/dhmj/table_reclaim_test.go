@@ -12,6 +12,7 @@ import (
 	"github.com/cnooljaw/gsr/cluster"
 	"github.com/cnooljaw/gsr/logging"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
 	onlinerpc "github.com/cnooljaw/gsrdemo/common/rpc/online"
 )
 
@@ -20,6 +21,19 @@ type reclaimFixture struct {
 	table   *table
 	attack  *attackService
 	settled chan struct{}
+}
+
+type settlementPushSink struct {
+	directoryBackend
+	received chan []any
+}
+
+func (s settlementPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd != accessagent.DhmjSettlementPushCommand {
+		return nil, runtime.ErrUnknownCommand
+	}
+	s.received <- args
+	return nil, nil
 }
 
 func (f *reclaimFixture) OnStart(ctx context.Context, self gsr.ServiceContext) error {
@@ -40,12 +54,14 @@ func (f *reclaimFixture) Handle(self gsr.CommandContext, cmd runtime.CommandID, 
 	return value, err
 }
 
-// TestSettledTableClosesAfterRejoinAndLeave 保护结算消息、生效后的四人重登回执、空桌退出及旧路由清理。
+// TestSettledTableClosesAfterRejoinAndLeave 保护在线玩家收到本人回执、离线玩家重登恢复及空桌退出。
 func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 	routes := make(map[cluster.NodeID]string)
 	startDirectoryFixture(t, routes, "online", onlinerpc.ServiceName, directoryBackend{logins: map[uint64]string{
 		1: "new", 2: "new", 3: "new", 4: "new",
 	}})
+	pushes := make(chan []any, seatCount)
+	startDirectoryFixture(t, routes, "access-01", "agent", settlementPushSink{received: pushes})
 	d := newDirectory(defaultRoomRules, settlementJournal{})
 	var oldTable *table
 	var users [seatCount]uint64
@@ -56,7 +72,12 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 		if err != nil || seat != i {
 			t.Fatalf("无法准备原桌：%v", err)
 		}
-		joined.players[seat].connected = false
+		player := &joined.players[seat]
+		player.access, player.agent = "access-01", "agent"
+		player.connected = i == 0 || i == seatCount-1
+		if player.connected {
+			player.login = fmt.Sprintf("current-%d", uid)
+		}
 		oldTable = joined
 	}
 	attack, err := newAttackService(wallWith(t, nil), 0, 0x31)
@@ -97,6 +118,20 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 			case <-f.settled:
 			case <-ctx.Done():
 				return ctx.Err()
+			}
+			for _, seat := range []int{0, seatCount - 1} {
+				want := []any{fmt.Sprintf("current-%d", users[seat]), map[string]any{
+					"table_name": oldName,
+					"settlement": receipt[seat].wire(op.ID),
+				}}
+				select {
+				case got := <-pushes:
+					if !reflect.DeepEqual(got, want) {
+						return fmt.Errorf("定海麻将结算推送错误：%v，预期 %v", got, want)
+					}
+				case <-ctx.Done():
+					return fmt.Errorf("座位 %d 未收到结算推送：%w", seat, ctx.Err())
+				}
 			}
 			for _, uid := range users {
 				value, err := self.Call(ctx, id, joinCommand, uid, "new", "access-01", "agent")
