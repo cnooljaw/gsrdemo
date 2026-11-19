@@ -57,11 +57,23 @@ func decodeEqualGroup(request map[string]any) (settlementBatch, error) {
 
 // decodeTransferGroup 接受去重的付款关系，并为事务派生参与者；付款明细本身参与幂等摘要。
 func decodeTransferGroup(request map[string]any) (settlementBatch, error) {
-	if !exactFields(request, "version", "operation_id", "business", "business_ref", "transfers", "detail") || !validVersion(request) {
+	return decodeTransferRequest(request, false)
+}
+
+func decodeTransferGroupWithFees(request map[string]any) (settlementBatch, error) {
+	return decodeTransferRequest(request, true)
+}
+
+func decodeTransferRequest(request map[string]any, withFees bool) (settlementBatch, error) {
+	fields := []string{"version", "operation_id", "business", "business_ref", "transfers", "detail"}
+	if withFees {
+		fields = append(fields, "fees")
+	}
+	if !exactFields(request, fields...) || !validVersion(request) {
 		return settlementBatch{}, errInvalidSettlement
 	}
 	values, ok := request["transfers"].([]any)
-	if !ok || len(values) == 0 || len(values) > maxSettlementChanges {
+	if !ok || (!withFees && len(values) == 0) || len(values) > maxSettlementChanges {
 		return settlementBatch{}, errInvalidSettlement
 	}
 	transfers := make([]settlementTransfer, 0, len(values))
@@ -97,6 +109,14 @@ func decodeTransferGroup(request map[string]any) (settlementBatch, error) {
 		totals[to] = a
 		transfers = append(transfers, settlementTransfer{FromUserID: from, ToUserID: to, Amount: sum})
 	}
+	var fees []settlementFee
+	if withFees {
+		var err error
+		fees, err = decodeTransferFees(request["fees"], totals)
+		if err != nil {
+			return settlementBatch{}, err
+		}
+	}
 	if len(totals) > maxSettlementParticipants {
 		return settlementBatch{}, errInvalidSettlement
 	}
@@ -119,6 +139,43 @@ func decodeTransferGroup(request map[string]any) (settlementBatch, error) {
 	op.Policy = "transfer"
 	op.Transfers = transfers
 	batch.Kind = "group-transfer"
+	if withFees {
+		op.Fees = fees
+		op.Policy = "transfer-fees"
+		batch.Kind = "group-transfer-fees"
+	}
 	batch.ID = derivedBatchID(batch.Kind, op.ID)
 	return boundedBatch(batch, request)
+}
+
+// decodeTransferFees 校验全部参与者，并把理论总扣款合入账务索引的金额上限检查。
+func decodeTransferFees(value any, totals map[uint64]settlementActual) ([]settlementFee, error) {
+	items, ok := value.([]any)
+	if !ok || len(items) < 2 || len(items) > maxSettlementParticipants {
+		return nil, errInvalidSettlement
+	}
+	seen := make(map[uint64]bool, len(items))
+	fees := make([]settlementFee, 0, len(items))
+	for _, item := range items {
+		fields, ok := item.(map[string]any)
+		if !ok || !exactFields(fields, "user_id", "amount") {
+			return nil, errInvalidSettlement
+		}
+		id, validID := fields["user_id"].(uint64)
+		amount, validAmount := fields["amount"].(int64)
+		if !validID || id == 0 || seen[id] || !validAmount || amount < 0 || totals[id].Debit > math.MaxInt64-amount {
+			return nil, errInvalidSettlement
+		}
+		seen[id] = true
+		fees = append(fees, settlementFee{UserID: id, Amount: amount})
+		total := totals[id]
+		total.UserID = id
+		total.Debit += amount
+		totals[id] = total
+	}
+	if len(totals) != len(seen) {
+		return nil, errInvalidSettlement
+	}
+	sort.Slice(fees, func(i, j int) bool { return fees[i].UserID < fees[j].UserID })
+	return fees, nil
 }

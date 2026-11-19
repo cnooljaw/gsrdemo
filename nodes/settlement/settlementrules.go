@@ -31,6 +31,7 @@ type silverOperation struct {
 	Detail    json.RawMessage      `json:"detail"`
 	Policy    string               `json:"policy,omitempty"`
 	Transfers []settlementTransfer `json:"transfers,omitempty"`
+	Fees      []settlementFee      `json:"fees,omitempty"`
 }
 
 func (operation silverOperation) digest() [32]byte {
@@ -66,6 +67,7 @@ type settlementResult struct {
 	OriginBatch     string               `json:"origin_batch"`
 	ActualChanges   []settlementActual   `json:"actual_changes,omitempty"`
 	ActualTransfers []settlementTransfer `json:"actual_transfers,omitempty"`
+	ActualFees      []settlementFee      `json:"actual_fees,omitempty"`
 }
 
 func (result settlementResult) wire() map[string]any {
@@ -77,12 +79,19 @@ func (result settlementResult) wire() map[string]any {
 		}
 		fields["actual_changes"] = changes
 	}
-	if result.ActualTransfers != nil {
+	if result.ActualTransfers != nil || result.ActualFees != nil {
 		transfers := make([]any, 0, len(result.ActualTransfers))
 		for _, e := range result.ActualTransfers {
 			transfers = append(transfers, map[string]any{"from_user_id": e.FromUserID, "to_user_id": e.ToUserID, "amount": e.Amount})
 		}
 		fields["actual_transfers"] = transfers
+	}
+	if result.ActualFees != nil {
+		fees := make([]any, 0, len(result.ActualFees))
+		for _, fee := range result.ActualFees {
+			fees = append(fees, map[string]any{"user_id": fee.UserID, "amount": fee.Amount})
+		}
+		fields["actual_fees"] = fees
 	}
 	return fields
 }

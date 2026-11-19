@@ -14,11 +14,12 @@ import (
 //
 //rpc:service settlementwrite public name=settlementWriteName
 const (
-	settlementWriteName                          = "settlement-write"
-	settleBatchCommand         runtime.CommandID = 1
-	settleSingleCommand        runtime.CommandID = 6
-	settleEqualGroupCommand    runtime.CommandID = 7
-	settleTransferGroupCommand runtime.CommandID = 8
+	settlementWriteName                                  = "settlement-write"
+	settleBatchCommand                 runtime.CommandID = 1
+	settleSingleCommand                runtime.CommandID = 6
+	settleEqualGroupCommand            runtime.CommandID = 7
+	settleTransferGroupCommand         runtime.CommandID = 8
+	settleTransferGroupWithFeesCommand runtime.CommandID = 9
 )
 
 const settlementSQLTimeout = 2 * time.Second
@@ -43,10 +44,11 @@ var _ gsr.Service = (*settlementWriteService)(nil)
 func newSettlementWriteService(db *sql.DB) *settlementWriteService {
 	service := &settlementWriteService{store: settlementStore{db: db}}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		settleBatchCommand:         service.handleSettleBatch,
-		settleSingleCommand:        service.handleSettleSingle,
-		settleEqualGroupCommand:    service.handleSettleEqualGroup,
-		settleTransferGroupCommand: service.handleSettleTransferGroup,
+		settleBatchCommand:                 service.handleSettleBatch,
+		settleSingleCommand:                service.handleSettleSingle,
+		settleEqualGroupCommand:            service.handleSettleEqualGroup,
+		settleTransferGroupCommand:         service.handleSettleTransferGroup,
+		settleTransferGroupWithFeesCommand: service.handleSettleTransferGroupWithFees,
 	})
 	return service
 }
@@ -92,6 +94,14 @@ func (service *settlementWriteService) handleSettleEqualGroup(self gsr.CommandCo
 
 func (service *settlementWriteService) handleSettleTransferGroup(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
 	batch, err := decodeTransferGroup(request)
+	if err != nil {
+		return nil, err
+	}
+	return service.commit(self, batch)
+}
+
+func (service *settlementWriteService) handleSettleTransferGroupWithFees(self gsr.CommandContext, request map[string]any) (map[string]any, error) {
+	batch, err := decodeTransferGroupWithFees(request)
 	if err != nil {
 		return nil, err
 	}

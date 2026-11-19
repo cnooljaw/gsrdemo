@@ -12,6 +12,11 @@ type settlementActual struct {
 	Credit int64  `json:"credit"`
 }
 
+type settlementFee struct {
+	UserID uint64 `json:"user_id"`
+	Amount int64  `json:"amount"`
+}
+
 type settlementTransfer struct {
 	FromUserID uint64 `json:"from_user_id"`
 	ToUserID   uint64 `json:"to_user_id"`
@@ -96,27 +101,63 @@ func settleEqualGroup(wallets map[uint64]walletBalance, changes []silverChange) 
 // settleTransferGroup 按每个付款人的事务前余额封顶，并按各收款明细比例分配，余数按收款 UserID 降序分配。
 func settleTransferGroup(wallets map[uint64]walletBalance, transfers []settlementTransfer) ([]settlementActual, []settlementTransfer, string) {
 	totals := map[uint64]settlementActual{}
+	edges, reason := allocateTransfers(wallets, transfers, totals)
+	if reason != "" {
+		return nil, nil, reason
+	}
+	actual, reason := applyActual(wallets, totals)
+	return actual, edges, reason
+}
+
+func settleTransferWithFees(wallets map[uint64]walletBalance, transfers []settlementTransfer, fees []settlementFee) ([]settlementActual, []settlementTransfer, []settlementFee, string) {
+	totals := make(map[uint64]settlementActual, len(fees))
+	charged := make([]settlementFee, 0, len(fees))
+	for _, fee := range fees {
+		balance, ok := wallets[fee.UserID]
+		if !ok {
+			return nil, nil, nil, "wallet_not_found"
+		}
+		amount := min(fee.Amount, balance.Amount)
+		totals[fee.UserID] = settlementActual{UserID: fee.UserID, Debit: amount}
+		charged = append(charged, settlementFee{UserID: fee.UserID, Amount: amount})
+	}
+	edges, reason := allocateTransfers(wallets, transfers, totals)
+	if reason != "" {
+		return nil, nil, nil, reason
+	}
+	actual, reason := applyActual(wallets, totals)
+	if reason != "" {
+		return nil, nil, nil, reason
+	}
+	return actual, edges, charged, ""
+}
+
+// allocateTransfers 以扣除已分配费用后的事务前余额为付款上限。
+func allocateTransfers(wallets map[uint64]walletBalance, transfers []settlementTransfer, totals map[uint64]settlementActual) ([]settlementTransfer, string) {
 	byPayer := map[uint64][]int{}
 	requested := map[uint64]int64{}
 	actualTransfers := append([]settlementTransfer(nil), transfers...)
 	for i, e := range transfers {
 		if _, ok := wallets[e.FromUserID]; !ok {
-			return nil, nil, "wallet_not_found"
+			return nil, "wallet_not_found"
 		}
 		if _, ok := wallets[e.ToUserID]; !ok {
-			return nil, nil, "wallet_not_found"
+			return nil, "wallet_not_found"
 		}
 		if e.Amount <= 0 || requested[e.FromUserID] > math.MaxInt64-e.Amount {
-			return nil, nil, "amount_overflow"
+			return nil, "amount_overflow"
 		}
 		requested[e.FromUserID] += e.Amount
 		byPayer[e.FromUserID] = append(byPayer[e.FromUserID], i)
-		totals[e.FromUserID] = settlementActual{UserID: e.FromUserID}
-		totals[e.ToUserID] = settlementActual{UserID: e.ToUserID}
+		for _, uid := range [...]uint64{e.FromUserID, e.ToUserID} {
+			if _, ok := totals[uid]; !ok {
+				totals[uid] = settlementActual{UserID: uid}
+			}
+		}
 	}
 	for payer, indices := range byPayer {
 		due := requested[payer]
-		paid := min(due, wallets[payer].Amount)
+		paid := min(due, wallets[payer].Amount-totals[payer].Debit)
 		allocated := int64(0)
 		for _, i := range indices {
 			hi, lo := bits.Mul64(uint64(paid), uint64(transfers[i].Amount))
@@ -129,17 +170,16 @@ func settleTransferGroup(wallets map[uint64]walletBalance, transfers []settlemen
 			actualTransfers[indices[i]].Amount++
 		}
 		a := totals[payer]
-		a.Debit = paid
+		a.Debit += paid
 		totals[payer] = a
 	}
 	for _, e := range actualTransfers {
 		a := totals[e.ToUserID]
 		if a.Credit > math.MaxInt64-e.Amount {
-			return nil, nil, "amount_overflow"
+			return nil, "amount_overflow"
 		}
 		a.Credit += e.Amount
 		totals[e.ToUserID] = a
 	}
-	actual, reason := applyActual(wallets, totals)
-	return actual, actualTransfers, reason
+	return actualTransfers, ""
 }

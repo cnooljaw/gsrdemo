@@ -6,8 +6,9 @@ package settlementwrite
 const ServiceName = "settlement-write"
 
 const (
-	SettleBatchCommand         = 1
-	SettleSingleCommand        = 6
-	SettleEqualGroupCommand    = 7
-	SettleTransferGroupCommand = 8
+	SettleBatchCommand                 = 1
+	SettleSingleCommand                = 6
+	SettleEqualGroupCommand            = 7
+	SettleTransferGroupCommand         = 8
+	SettleTransferGroupWithFeesCommand = 9
 )

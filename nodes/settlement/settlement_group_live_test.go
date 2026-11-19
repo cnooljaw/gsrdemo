@@ -16,6 +16,96 @@ import (
 	"github.com/cnooljaw/gsrdemo/common/rpc/settlementwrite"
 )
 
+// TestSettlementTransferWithFeesLiveMySQL 保护四人扣费、实际牌局付款及流局只扣费的原子入账和原回执重试。
+func TestSettlementTransferWithFeesLiveMySQL(t *testing.T) {
+	store, _ := liveSettlementStore(t)
+	address, _ := startSettlementTestNode(t, store.db)
+	for _, tc := range []struct {
+		name    string
+		pay     bool
+		balance [4]int64
+		debit   int64
+		credit  int64
+	}{
+		{"点炮", true, [4]int64{0, 10, 20, 0}, 150, 20},
+		{"流局", false, [4]int64{20, 0, 10, 0}, 130, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sample := newLiveSettlementSample(t, store, 4)
+			amounts := [4]int64{70, 20, 60, 10}
+			fees := make([]any, 0, 4)
+			wantFees := make(map[uint64]int64, 4)
+			wantBalances := make(map[uint64]int64, 4)
+			for i, uid := range sample.Users {
+				ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
+				_, err := store.db.ExecContext(ctx, "UPDATE silver_balances SET amount=? WHERE user_id=?", amounts[i], uid)
+				cancel()
+				if err != nil {
+					t.Fatal(err)
+				}
+				fees = append(fees, map[string]any{"user_id": uid, "amount": int64(50)})
+				wantFees[uid], wantBalances[uid] = min(int64(50), amounts[i]), tc.balance[i]
+			}
+			id := "transfer-fees-" + rand.Text()
+			sample.Operations = append(sample.Operations, id)
+			sample.Batches = append(sample.Batches, derivedBatchID("group-transfer-fees", id))
+			request := feeTransferRequest(id)
+			request["fees"] = fees
+			transfers := []any{}
+			if tc.pay {
+				for _, to := range sample.Users[1:3] {
+					transfers = append(transfers, map[string]any{"from_user_id": sample.Users[0], "to_user_id": to, "amount": int64(100)})
+				}
+			}
+			request["transfers"] = transfers
+			call := func() map[string]any {
+				t.Helper()
+				receipt, err := retryLiveSettlement(t, address, settlementwrite.ServiceName, settlementwrite.SettleTransferGroupWithFeesCommand, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return receipt
+			}
+			first := call()
+			item := first["results"].([]any)[0].(map[string]any)
+			if item["status"] != "committed" || len(item["actual_transfers"].([]any)) != len(transfers) {
+				t.Fatalf("错误结算回执：%v", item)
+			}
+			for _, value := range item["actual_transfers"].([]any) {
+				if value.(map[string]any)["amount"] != int64(10) {
+					t.Fatalf("扣费后的实际付款错误：%v", value)
+				}
+			}
+			gotFees := make(map[uint64]int64)
+			for _, value := range item["actual_fees"].([]any) {
+				fee := value.(map[string]any)
+				gotFees[fee["user_id"].(uint64)] = fee["amount"].(int64)
+			}
+			if !reflect.DeepEqual(gotFees, wantFees) {
+				t.Fatalf("费用回执错误：%v", gotFees)
+			}
+			if !reflect.DeepEqual(first, call()) {
+				t.Fatal("重提改变了原费用回执")
+			}
+			for _, uid := range sample.Users {
+				ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
+				wallet, err := store.getBalance(ctx, uid)
+				cancel()
+				if err != nil || wallet["amount"] != wantBalances[uid] || wallet["version"] != uint64(2) {
+					t.Fatalf("钱包未一次完成扣费和输赢：%v %v", wallet, err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), settlementSQLTimeout)
+			var debit, credit int64
+			err := store.db.QueryRowContext(ctx, "SELECT debit,credit FROM settlement_operations WHERE operation_id=?", id).Scan(&debit, &credit)
+			cancel()
+			if err != nil || debit != tc.debit || credit != tc.credit {
+				t.Fatalf("错误账务索引：%d %d %v", debit, credit, err)
+			}
+		})
+	}
+}
+
 // TestSettlementGroupPoliciesLiveMySQL 保护两个真实 Call 接口原子入账、实际回执持久化、并发原 ID 重试和历史回执不随余额变化。
 func TestSettlementGroupPoliciesLiveMySQL(t *testing.T) {
 	store, _ := liveSettlementStore(t)

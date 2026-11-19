@@ -130,7 +130,9 @@ func settlementRPC(t *testing.T, address string, command runtime.CommandID, args
 // settlementCall 供功能测试和压测直达固定公开入口；未知命令交由读入口验证拒绝契约。
 func settlementCall(ctx context.Context, self gsr.ServiceContext, command runtime.CommandID, args ...any) (any, error) {
 	name := settlementread.ServiceName
-	if command == settlementwrite.SettleBatchCommand || command == settlementwrite.SettleSingleCommand || command == settlementwrite.SettleEqualGroupCommand {
+	switch command {
+	case settlementwrite.SettleBatchCommand, settlementwrite.SettleSingleCommand, settlementwrite.SettleEqualGroupCommand,
+		settlementwrite.SettleTransferGroupCommand, settlementwrite.SettleTransferGroupWithFeesCommand:
 		name = settlementwrite.ServiceName
 	}
 	return self.Cluster().Call(ctx, "settlement", cluster.ServiceName(name), command, args...)
@@ -170,7 +172,11 @@ func TestSettlementClusterContractAndFailureBoundary(t *testing.T) {
 	for _, entry := range []struct {
 		command runtime.CommandID
 		request map[string]any
-	}{{settlementwrite.SettleSingleCommand, single}, {settlementwrite.SettleEqualGroupCommand, group}} {
+	}{
+		{settlementwrite.SettleSingleCommand, single},
+		{settlementwrite.SettleEqualGroupCommand, group},
+		{settlementwrite.SettleTransferGroupWithFeesCommand, feeTransferRequest("fees")},
+	} {
 		mock.ExpectBegin().WillReturnError(errors.New("injected SQL outage"))
 		if _, err := settlementRPC(t, address, entry.command, entry.request); !errors.Is(err, errSettlementUnavailable) {
 			t.Fatalf("write command %d did not reach its transaction: %v", entry.command, err)
@@ -205,9 +211,6 @@ func TestSettlementReadWriteBoundaries(t *testing.T) {
 	}
 	if _, err := businessRPC(t, routes, "settlement", settlementwrite.ServiceName, settlementread.GetBalanceCommand, uint64(1)); !errors.Is(err, runtime.ErrUnknownCommand) {
 		t.Fatal(err)
-	}
-	if _, err := businessRPC(t, routes, "settlement", settlementwrite.ServiceName, runtime.CommandID(9), map[string]any{}); !errors.Is(err, runtime.ErrUnknownCommand) {
-		t.Fatalf("移除后的旧编号仍可调用: %v", err)
 	}
 	if _, err := businessRPC(t, routes, "settlement", "settlement-submit", settlementwrite.SettleBatchCommand, map[string]any{}); !errors.Is(err, runtime.ErrServiceNotFound) {
 		t.Fatalf("旧 Send 入口仍存在: %v", err)

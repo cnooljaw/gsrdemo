@@ -104,6 +104,10 @@ func validStoredGroup(operation silverOperation, receipt settlementReceipt) bool
 	case "transfer":
 		actual, transfers, reason := settleTransferGroup(wallets, operation.Transfers)
 		return reason == "" && reflect.DeepEqual(actual, result.ActualChanges) && reflect.DeepEqual(transfers, result.ActualTransfers)
+	case "transfer-fees":
+		actual, transfers, fees, reason := settleTransferWithFees(wallets, operation.Transfers, operation.Fees)
+		return reason == "" && reflect.DeepEqual(actual, result.ActualChanges) &&
+			reflect.DeepEqual(transfers, result.ActualTransfers) && reflect.DeepEqual(fees, result.ActualFees)
 	default:
 		return false
 	}
@@ -139,6 +143,8 @@ func applySettlementBatch(ctx context.Context, tx *sql.Tx, batch settlementBatch
 			result.ActualChanges, result.Reason = settleEqualGroup(wallets, operation.Changes)
 		case "transfer":
 			result.ActualChanges, result.ActualTransfers, result.Reason = settleTransferGroup(wallets, operation.Transfers)
+		case "transfer-fees":
+			result.ActualChanges, result.ActualTransfers, result.ActualFees, result.Reason = settleTransferWithFees(wallets, operation.Transfers, operation.Fees)
 		case "":
 			result.Reason = applySilverOperation(wallets, operation)
 		default:
