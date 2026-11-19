@@ -130,6 +130,8 @@ Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应
 
 Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将目录在结算确认后向各在线玩家发送本人回执。未收到推送时，可通过快照恢复结果。
 
+Access 已注册 `1392 DhmjDiscardPush`，`request_id` 为 0。字段为 `table_name string, revision/turn uint64, seat/tile int64`，`turn` 是本次出牌使用的轮次。快照协议也可携带 `revision`。麻将节点的出牌事件发送及快照序号接线见[后续工作](DESIGN.md#11-后续工作)。
+
 ### 1.6 错误
 
 | 项目 | 当前约定 |
@@ -306,6 +308,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | landlord / 117 TrusteePush | `L, event map` | 转发托管状态和操作时间 | 1197 |
 | landlord / 118 TurnPush | `L, event map` | 转发动画结束后的轮次开放 | 1198 |
 | dhmj / 119 DhmjSettlementPush | `L, payload map`，含 `table_name string, settlement map` | 核对当前登录、牌桌和回执 UserID，再转发 committed 回执 | 1396 |
+| 麻将出牌接收端 / 120 DhmjDiscardPush | `L, payload map`，含 `table_name, revision, seat, turn, tile` | 核对当前登录和牌桌，校验出牌字段并转发 | 1392 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。

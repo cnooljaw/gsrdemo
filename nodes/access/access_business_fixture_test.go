@@ -183,6 +183,7 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 		case dhmjrpc.JoinCommand, dhmjrpc.SnapshotCommand:
 			return map[string]any{
 				"table_name": "dhmj-1", "seat": int64(0), "phase": "playing",
+				"revision": uint64(8),
 				"players":  []any{map[string]any{"seat": int64(0), "user_id": args[0], "ready": true}},
 				"hand":     []any{int64(1), int64(2)},
 				"discards": []any{[]any{}, []any{}, []any{}, []any{}},

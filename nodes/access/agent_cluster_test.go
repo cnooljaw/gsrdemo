@@ -321,3 +321,41 @@ func TestAccessDhmjSettlementPushFiltersRecipient(t *testing.T) {
 		t.Fatalf("收到错误的麻将回执：%v", &body)
 	}
 }
+
+// TestAccessDhmjDiscardPush 保护出牌事件仅转给当前桌和当前登录，且包含快照恢复所需的事件序号。
+func TestAccessDhmjDiscardPush(t *testing.T) {
+	gateAddress, backend, _ := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	response := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{})
+	var entry demopb.DhmjEnterResponse
+	if err := proto.Unmarshal(response.Payload, &entry); err != nil || response.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) ||
+		entry.GetSnapshot().GetRevision() != 8 {
+		t.Fatalf("进桌快照缺少事件序号：%v %v", response, err)
+	}
+
+	push := func(target any, table string, revision uint64, seat int64) {
+		t.Helper()
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjDiscardPushCommand), target, map[string]any{
+			"table_name": table, "revision": revision, "seat": seat, "turn": uint64(7), "tile": int64(0x25),
+		})
+	}
+	push("old-login", "dhmj-1", 9, 0)
+	push(login, "another-table", 9, 1)
+	push(login, "dhmj-1", 0, 2)
+	push(login, "dhmj-1", 9, 4)
+	push(login, "dhmj-1", 9, 3)
+
+	response = readAccessEnvelope(t, client)
+	var discard demopb.DhmjDiscardPush
+	if err := proto.Unmarshal(response.Payload, &discard); err != nil || response.MsgId != uint32(demopb.MsgId_S2C_DHMJ_DISCARD_PUSH) || response.RequestId != 0 {
+		t.Fatalf("未收到麻将出牌推送：%v %v", response, err)
+	}
+	if discard.GetTableName() != "dhmj-1" || discard.GetRevision() != 9 || discard.GetSeat() != 3 ||
+		discard.GetTurn() != 7 || discard.GetTile() != 0x25 {
+		t.Fatalf("出牌推送错误：%v", &discard)
+	}
+}

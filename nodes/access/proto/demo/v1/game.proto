@@ -242,6 +242,11 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
+  S2C_DHMJ_DISCARD_PUSH = 1392 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjDiscardPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
   S2C_DHMJ_SETTLEMENT_PUSH = 1396 [(gsr.protocol.v1.message_route) = {
     payload_type: ".demo.v1.DhmjSettlementPush"
     direction: DIRECTION_SERVER_TO_CLIENT
@@ -580,6 +585,7 @@ message DhmjSnapshot {
   int64 deadline_ms = 19;
   DhmjSettlement settlement = 20;
   repeated DhmjSeatTiles seat_tiles = 21;
+  uint64 revision = 22;
 }
 
 message DhmjPlayer {
@@ -618,4 +624,12 @@ message DhmjSettlement {
 message DhmjSettlementPush {
   string table_name = 1;
   DhmjSettlement settlement = 2;
+}
+
+message DhmjDiscardPush {
+  string table_name = 1;
+  uint64 revision = 2;
+  int64 seat = 3;
+  uint64 turn = 4;
+  int64 tile = 5;
 }

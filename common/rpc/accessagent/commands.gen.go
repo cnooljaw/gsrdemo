@@ -16,4 +16,5 @@ const (
 	LandlordTrusteePushCommand       = 117
 	LandlordTurnPushCommand          = 118
 	DhmjSettlementPushCommand        = 119
+	DhmjDiscardPushCommand           = 120
 )

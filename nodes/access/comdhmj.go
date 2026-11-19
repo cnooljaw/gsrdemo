@@ -45,21 +45,46 @@ func (game *comDhmj) ProtocolHandlers() map[uint32]any {
 }
 
 func (game *comDhmj) CommandHandlers() map[runtime.CommandID]any {
-	return map[runtime.CommandID]any{dhmjSettlementPushCommand: game.handleSettlementPush}
+	return map[runtime.CommandID]any{
+		dhmjSettlementPushCommand: game.handleSettlementPush,
+		dhmjDiscardPushCommand:    game.handleDiscardPush,
+	}
 }
 
-func (game *comDhmj) handleSettlementPush(_ gsr.CommandContext, login string, payload map[string]any) error {
+func (game *comDhmj) matchesEvent(login string, payload map[string]any) (bool, error) {
 	identity := game.deps.Identity()
 	if identity.UserID == 0 || identity.LoginID != login || !game.Entered() {
-		return nil
+		return false, nil
 	}
 	table, ok := payload["table_name"].(string)
 	if !ok || table == "" {
+		return false, errInvalidBackendReply
+	}
+	return table == game.table, nil
+}
+
+func (game *comDhmj) handleDiscardPush(_ gsr.CommandContext, login string, payload map[string]any) error {
+	if matches, err := game.matchesEvent(login, payload); !matches || err != nil {
+		return err
+	}
+	revision, revisionOK := payload["revision"].(uint64)
+	seat, seatOK := payload["seat"].(int64)
+	turn, turnOK := payload["turn"].(uint64)
+	tile, tileOK := payload["tile"].(int64)
+	if !revisionOK || revision == 0 || !seatOK || seat < 0 || seat >= 4 ||
+		!turnOK || turn == 0 || !tileOK || tile <= 0 || tile > 0x37 {
 		return errInvalidBackendReply
 	}
-	if table != game.table {
-		return nil
+	return game.deps.Push(uint32(demopb.MsgId_S2C_DHMJ_DISCARD_PUSH), &demopb.DhmjDiscardPush{
+		TableName: game.table, Revision: revision, Seat: seat, Turn: turn, Tile: tile,
+	})
+}
+
+func (game *comDhmj) handleSettlementPush(_ gsr.CommandContext, login string, payload map[string]any) error {
+	if matches, err := game.matchesEvent(login, payload); !matches || err != nil {
+		return err
 	}
+	identity := game.deps.Identity()
 	settlement, ok := payload["settlement"].(map[string]any)
 	uid, uidOK := settlement["user_id"].(uint64)
 	if !ok || !uidOK || uid == 0 {
