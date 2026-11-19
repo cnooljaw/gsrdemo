@@ -334,6 +334,19 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 6 号使用 Go 值类型身份快照，不传手牌、不做内部 Protobuf 编解码。入座确认、到期回收、重登保护和空桌退出见[斗地主设计](DESIGN.md#61-凑桌规则与可见性)及[恢复边界](DESIGN.md#63-重试清理与恢复)。完整注册就近见[地鼠 MainService](../nodes/mole/main_service.go)、[斗地主目录](../nodes/landlord/landlordservice.go)及各 Service 源码。
 
+### 2.10 dhmj：定海麻将凑桌与准备
+
+Node 和 Service 均为 `dhmj`。目录持有座位、准备和登录路由，开局后通过本地 Call 读取牌桌。当前入口用于节点联调。见[共享命令](../common/rpc/dhmj/commands.gen.go)。
+
+| Command | 方式 | 顺序参数 | 成功结果 |
+| --- | --- | --- | --- |
+| 1 Join | Call | `U, L, N, A` | 校验 Online 后分配座位，重登恢复原座并更新当前登录。返回本人快照 |
+| 2 Ready | Call | `U, L` | true。钱包至少 3000，四人准备后创建牌桌 |
+| 3 Snapshot | Call | `U, L` | map。公共字段为 `room_name string, seat int64, phase string, players list`。开局后附 `hand list, active_seat int64, turn uint64, window_id uint64` |
+| 4 Leave | Call | `U, L` | true。等待中立即释放座位，开局后保留座位并断开当前登录与牌桌的操作路由 |
+
+`players` 元素含 `user_id uint64, seat int64, ready bool`。`hand` 元素为 `int64` 牌值，只有当前用户自己的暗手。
+
 ## 3. 主要调用链
 
 以下只串联前文已定义的入口；箭头中的 Call/Send 区分等待结果和提交通知，本地步骤单独标明。

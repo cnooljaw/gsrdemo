@@ -1,4 +1,4 @@
-package dhmj
+package main
 
 import (
 	"errors"

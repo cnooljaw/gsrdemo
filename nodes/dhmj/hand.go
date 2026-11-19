@@ -1,4 +1,4 @@
-package dhmj
+package main
 
 // 定海麻将沿用高四位花色、低四位牌值的编码。花牌已在补花时移出暗手。
 type handCounts [4][10]uint8

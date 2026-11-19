@@ -1,4 +1,4 @@
-package dhmj
+package main
 
 type handPoints struct {
 	singleWait, clipWait, edgeWait, doubleWait        int

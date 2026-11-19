@@ -74,6 +74,7 @@ func TestExampleHostConfigsShareOneTable(t *testing.T) {
 	for instance, route := range map[string]string{
 		"access-01": "access-01", "access-02": "access-02", "login-01": "login",
 		"online-01": "online", "mole-01": "mole", "settlement-01": "settlement", "landlord-01": "landlord",
+		"dhmj-01": "dhmj",
 	} {
 		var config struct {
 			Node    NodeConfig     `yaml:",inline"`
@@ -87,7 +88,7 @@ func TestExampleHostConfigsShareOneTable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", instance, err)
 		}
-		if cfg.NodesFile != table || len(cfg.Nodes) != 7 || cfg.Nodes["access-02"] != "127.0.0.1:19006" {
+		if cfg.NodesFile != table || len(cfg.Nodes) != 8 || cfg.Nodes["access-02"] != "127.0.0.1:19006" {
 			t.Fatal("example config uses another table", instance)
 		}
 	}

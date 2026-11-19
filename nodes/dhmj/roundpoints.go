@@ -1,4 +1,4 @@
-package dhmj
+package main
 
 // winContext 是随机房计台所需的牌桌状态。风位使用 0x31～0x34。
 type winContext struct {

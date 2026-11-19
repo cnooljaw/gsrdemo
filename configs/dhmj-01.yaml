@@ -1,0 +1,4 @@
+instance: dhmj-01
+listen: dhmj
+nodes_file: nodes.yaml
+log_directory: ../logs/dhmj-01
