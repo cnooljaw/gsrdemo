@@ -27,57 +27,73 @@ const (
 	trusteeCommand  runtime.CommandID = 10
 )
 
+// 目录内部命令通过本地 ServiceID 校验来源。
 const (
-	maxRooms       = 1000
-	minimumBalance = int64(3000)
-	callTimeout    = 2 * time.Second
+	tableSettledCommand runtime.CommandID = 11
+	sweepTablesCommand  runtime.CommandID = 12
+)
+
+const (
+	maxTables        = 1000
+	minimumBalance   = int64(3000)
+	callTimeout      = 2 * time.Second
+	rejoinGrace      = 30 * time.Second
+	tableSweepPeriod = time.Second
 )
 
 var (
 	errStaleLogin   = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.stale_login", "当前登录或座位无效")
-	errRoomBusy     = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.busy", "牌桌已开始或暂时没有空桌")
+	errTableBusy    = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.busy", "牌桌已开始或暂时没有空桌")
 	errFunds        = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.insufficient_silver", "银子不足，不能准备")
 	errInvalidReply = errors.New("定海麻将收到无效的内部回包")
 )
 
-type roomPlayer struct {
+type tablePlayer struct {
 	uid       uint64
 	login     string
 	ready     bool
 	connected bool
 }
 
-type room struct {
-	name    string
-	players [seatCount]roomPlayer
-	service runtime.ServiceID
+type table struct {
+	name      string
+	players   [seatCount]tablePlayer
+	service   runtime.ServiceID
+	settledAt time.Time
 }
 
 type directory struct {
-	rooms      map[string]*room
-	routes     map[uint64]*room
-	nextRoom   uint64
+	tables     map[string]*table
+	routes     map[uint64]*table
+	nextTable  uint64
 	dispatcher *gsr.Dispatcher
 	rules      roomRules
 	journal    settlementJournal
+	pulse      runtime.ServiceID
 }
 
 var _ gsr.Service = (*directory)(nil)
 
 func newDirectory(rules roomRules, journal settlementJournal) *directory {
-	d := &directory{rooms: make(map[string]*room), routes: make(map[uint64]*room), rules: rules, journal: journal}
+	d := &directory{tables: make(map[string]*table), routes: make(map[uint64]*table), rules: rules, journal: journal}
 	d.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		joinCommand: d.handleJoin, readyCommand: d.handleReady,
 		snapshotCommand: d.handleSnapshot, leaveCommand: d.handleLeave,
 		discardCommand: d.handleDiscard, respondCommand: d.handleRespond,
 		selfWinCommand: d.handleSelfWin, kongCommand: d.handleKong,
 		passSelfCommand: d.handlePassSelf, trusteeCommand: d.handleTrustee,
+		tableSettledCommand: d.handleTableSettled, sweepTablesCommand: d.handleSweepTables,
 	})
 	return d
 }
 
-func (*directory) OnStart(context.Context, gsr.ServiceContext) error { return nil }
-func (*directory) OnStop(context.Context) error                      { return nil }
+func (d *directory) OnStart(ctx context.Context, self gsr.ServiceContext) error {
+	id, err := self.CreateService(ctx, &pulseService{target: self.Self(), command: sweepTablesCommand, period: tableSweepPeriod})
+	d.pulse = id
+	return err
+}
+
+func (*directory) OnStop(context.Context) error { return nil }
 
 func (d *directory) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
 	return d.dispatcher.Handle(self, cmd, args...)
@@ -104,8 +120,9 @@ func (d *directory) handleJoin(self gsr.CommandContext, uid uint64, login, acces
 	return d.snapshotFor(self, table, seat)
 }
 
-func (d *directory) seatPlayer(uid uint64, login string) (*room, int, error) {
+func (d *directory) seatPlayer(uid uint64, login string) (*table, int, error) {
 	if table := d.routes[uid]; table != nil {
+		d.expireSeats(table, time.Now())
 		for seat, member := range table.players {
 			if member.uid == uid {
 				table.players[seat].login = login
@@ -114,29 +131,29 @@ func (d *directory) seatPlayer(uid uint64, login string) (*room, int, error) {
 			}
 		}
 	}
-	for _, table := range d.rooms {
+	for _, table := range d.tables {
 		if table.service != 0 {
 			continue
 		}
 		for seat, member := range table.players {
 			if member.uid == 0 {
-				table.players[seat] = roomPlayer{uid: uid, login: login, connected: true}
+				table.players[seat] = tablePlayer{uid: uid, login: login, connected: true}
 				d.routes[uid] = table
 				return table, seat, nil
 			}
 		}
 	}
-	if len(d.rooms) >= maxRooms {
-		return nil, -1, errRoomBusy
+	if len(d.tables) >= maxTables {
+		return nil, -1, errTableBusy
 	}
-	d.nextRoom++
-	table := &room{name: fmt.Sprintf("dhmj-%d", d.nextRoom)}
-	table.players[0] = roomPlayer{uid: uid, login: login, connected: true}
-	d.rooms[table.name], d.routes[uid] = table, table
+	d.nextTable++
+	table := &table{name: fmt.Sprintf("dhmj-%d", d.nextTable)}
+	table.players[0] = tablePlayer{uid: uid, login: login, connected: true}
+	d.tables[table.name], d.routes[uid] = table, table
 	return table, 0, nil
 }
 
-func (d *directory) currentSeat(uid uint64, login string) (*room, int, error) {
+func (d *directory) currentSeat(uid uint64, login string) (*table, int, error) {
 	table := d.routes[uid]
 	if table != nil {
 		for seat, member := range table.players {
@@ -154,7 +171,7 @@ func (d *directory) handleReady(self gsr.CommandContext, uid uint64, login strin
 		return false, err
 	}
 	if table.service != 0 {
-		return false, errRoomBusy
+		return false, errTableBusy
 	}
 	if table.players[seat].ready {
 		return true, nil
@@ -188,6 +205,7 @@ func (d *directory) handleReady(self gsr.CommandContext, uid uint64, login strin
 		return false, err
 	}
 	service.rules, service.journal = d.rules, d.journal
+	service.name, service.directory = table.name, self.Self()
 	for i, player := range table.players {
 		service.users[i] = player.uid
 	}
@@ -210,14 +228,14 @@ func (d *directory) handleSnapshot(self gsr.CommandContext, uid uint64, login st
 	return d.snapshotFor(self, table, seat)
 }
 
-func (d *directory) snapshotFor(self gsr.ServiceContext, table *room, seat int) (map[string]any, error) {
+func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int) (map[string]any, error) {
 	members := make([]any, 0, seatCount)
 	for i, player := range table.players {
 		if player.uid != 0 {
 			members = append(members, map[string]any{"user_id": player.uid, "seat": int64(i), "ready": player.ready})
 		}
 	}
-	reply := map[string]any{"room_name": table.name, "seat": int64(seat), "players": members}
+	reply := map[string]any{"table_name": table.name, "seat": int64(seat), "players": members}
 	if table.service == 0 {
 		reply["phase"] = "waiting"
 		return reply, nil
@@ -273,7 +291,7 @@ func wireTiles(tiles []byte) []any {
 	return result
 }
 
-func (d *directory) handleLeave(_ gsr.CommandContext, uid uint64, login string) (bool, error) {
+func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login string) (bool, error) {
 	table := d.routes[uid]
 	if table == nil {
 		return true, nil
@@ -285,16 +303,75 @@ func (d *directory) handleLeave(_ gsr.CommandContext, uid uint64, login string) 
 		if member.login != login {
 			return false, errStaleLogin
 		}
-		if table.service != 0 {
+		if !member.connected {
+			return true, nil
+		}
+		if table.service != 0 && table.settledAt.IsZero() {
 			table.players[seat].connected = false
 		} else {
-			table.players[seat] = roomPlayer{}
-			delete(d.routes, uid)
-			if table.players == [seatCount]roomPlayer{} {
-				delete(d.rooms, table.name)
-			}
+			d.releaseSeat(table, seat)
+			d.closeEmptyTable(self, table)
 		}
 		return true, nil
 	}
 	return false, errStaleLogin
+}
+
+func (d *directory) handleTableSettled(self gsr.CommandContext, name string) error {
+	table := d.tables[name]
+	if table == nil || table.service == 0 || table.service != self.Source() {
+		return runtime.ErrUnknownCommand
+	}
+	if table.settledAt.IsZero() {
+		table.settledAt = time.Now()
+	}
+	return nil
+}
+
+func (d *directory) handleSweepTables(self gsr.CommandContext) error {
+	if d.pulse == 0 || self.Source() != d.pulse {
+		return runtime.ErrUnknownCommand
+	}
+	now := time.Now()
+	for _, table := range d.tables {
+		if !table.settledAt.IsZero() {
+			d.expireSeats(table, now)
+			d.closeEmptyTable(self, table)
+		}
+	}
+	return nil
+}
+
+func (d *directory) expireSeats(table *table, now time.Time) {
+	if table.settledAt.IsZero() || now.Before(table.settledAt.Add(rejoinGrace)) {
+		return
+	}
+	for seat, member := range table.players {
+		if member.uid != 0 && !member.connected {
+			d.releaseSeat(table, seat)
+		}
+	}
+}
+
+func (d *directory) releaseSeat(table *table, seat int) {
+	delete(d.routes, table.players[seat].uid)
+	table.players[seat] = tablePlayer{}
+}
+
+// closeEmptyTable 保留未接纳关闭命令的空桌，目录 Pulse 会再次尝试。
+func (d *directory) closeEmptyTable(self gsr.CommandContext, table *table) {
+	if table.players != [seatCount]tablePlayer{} {
+		return
+	}
+	if table.service != 0 {
+		err := self.Send(table.service, tableCloseCommand)
+		if err != nil && !errors.Is(err, runtime.ErrServiceNotFound) && !errors.Is(err, runtime.ErrServiceClosed) &&
+			!errors.Is(err, runtime.ErrServiceStopping) {
+			if !errors.Is(err, runtime.ErrMailboxFull) {
+				_ = self.Logger().Error("定海麻将牌桌关闭未接纳", "table_name", table.name, "error", err.Error())
+			}
+			return
+		}
+	}
+	delete(d.tables, table.name)
 }

@@ -15,7 +15,7 @@ func (d *directory) callTable(self gsr.CommandContext, uid uint64, login string,
 		return false, err
 	}
 	if table.service == 0 {
-		return false, errRoomBusy
+		return false, errTableBusy
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()

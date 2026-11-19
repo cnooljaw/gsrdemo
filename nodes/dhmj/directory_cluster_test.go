@@ -123,7 +123,7 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			_, err := self.Cluster().Call(ctx, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uid, login)
 			return err
 		}
-		var roomName string
+		var tableName string
 		for uid := uint64(1); uid <= 4; uid++ {
 			if err := bind(uid, "login"); err != nil {
 				return err
@@ -134,9 +134,9 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			}
 			scene := result.(map[string]any)
 			if uid == 1 {
-				roomName = scene["room_name"].(string)
+				tableName = scene["table_name"].(string)
 			}
-			if scene["room_name"] != roomName || scene["seat"] != int64(uid-1) || scene["phase"] != "waiting" {
+			if scene["table_name"] != tableName || scene["seat"] != int64(uid-1) || scene["phase"] != "waiting" {
 				return errors.New("四人未依序入同一张等待桌")
 			}
 			if _, err := call(dhmjrpc.DiscardCommand, uid, "login", uint64(1), int64(5)); err == nil {
@@ -161,7 +161,7 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		}
 		scene := result.(map[string]any)
 		hand, ok := scene["hand"].([]any)
-		if scene["room_name"] != roomName || scene["seat"] != int64(0) || scene["phase"] != "playing" || !ok || len(hand) != 14 {
+		if scene["table_name"] != tableName || scene["seat"] != int64(0) || scene["phase"] != "playing" || !ok || len(hand) != 14 {
 			return errors.New("重连未恢复原牌桌和本人暗手")
 		}
 		if _, err := call(dhmjrpc.SnapshotCommand, uint64(1), "login"); err == nil {

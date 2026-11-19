@@ -14,26 +14,30 @@ const pulseTickCommand runtime.CommandID = 1
 
 const pulsePeriod = 250 * time.Millisecond
 
-// tablePulse 只发送唤醒消息。牌桌邮箱满时保留下一次唤醒。
-type tablePulse struct{ target runtime.ServiceID }
+// pulseService 独立唤醒牌桌或目录。目标邮箱满时保留下一次唤醒。
+type pulseService struct {
+	target  runtime.ServiceID
+	command runtime.CommandID
+	period  time.Duration
+}
 
-var _ gsr.Service = (*tablePulse)(nil)
+var _ gsr.Service = (*pulseService)(nil)
 
-func (*tablePulse) OnStart(_ context.Context, self gsr.ServiceContext) error {
-	_, err := self.After(pulsePeriod, pulseTickCommand)
+func (pulse *pulseService) OnStart(_ context.Context, self gsr.ServiceContext) error {
+	_, err := self.After(pulse.period, pulseTickCommand)
 	return err
 }
 
-func (*tablePulse) OnStop(context.Context) error { return nil }
+func (*pulseService) OnStop(context.Context) error { return nil }
 
-func (pulse *tablePulse) Handle(self gsr.CommandContext, cmd runtime.CommandID, _ ...any) (any, error) {
+func (pulse *pulseService) Handle(self gsr.CommandContext, cmd runtime.CommandID, _ ...any) (any, error) {
 	if cmd != pulseTickCommand || self.Source() != 0 {
 		return nil, runtime.ErrUnknownCommand
 	}
-	if _, err := self.After(pulsePeriod, pulseTickCommand); err != nil {
+	if _, err := self.After(pulse.period, pulseTickCommand); err != nil {
 		return nil, err
 	}
-	err := self.Send(pulse.target, tableTickCommand)
+	err := self.Send(pulse.target, pulse.command)
 	if err != nil && !errors.Is(err, runtime.ErrMailboxFull) {
 		self.Exit()
 		return nil, err

@@ -21,6 +21,7 @@ const (
 	tablePassSelfCommand runtime.CommandID = 6
 	tableTrusteeCommand  runtime.CommandID = 7
 	tableTickCommand     runtime.CommandID = 8
+	tableCloseCommand    runtime.CommandID = 9
 )
 
 var errInvalidTableAction = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.invalid_turn", "定海麻将当前轮次或动作无效")
@@ -34,6 +35,10 @@ type attackService struct {
 	journal     settlementJournal
 	settlement  *roundSettlement
 	scoreFailed bool
+	name        string
+	directory   runtime.ServiceID
+	notified    bool
+	closing     bool
 }
 
 var _ gsr.Service = (*attackService)(nil)
@@ -53,13 +58,14 @@ func newAttackService(wall []byte, dealer int, roundWind byte) (*attackService, 
 		tablePassSelfCommand: service.handlePassSelf,
 		tableTrusteeCommand:  service.handleTrustee,
 		tableTickCommand:     service.handleTick,
+		tableCloseCommand:    service.handleClose,
 	})
 	return service, nil
 }
 
 func (service *attackService) OnStart(ctx context.Context, self gsr.ServiceContext) error {
 	service.game.startPlay(time.Now())
-	_, err := self.CreateService(ctx, &tablePulse{target: self.Self()})
+	_, err := self.CreateService(ctx, &pulseService{target: self.Self(), command: tableTickCommand, period: pulsePeriod})
 	return err
 }
 
@@ -166,10 +172,13 @@ func (service *attackService) handleTrustee(_ gsr.CommandContext, seat int, enab
 
 func (service *attackService) handleTick(self gsr.CommandContext) error {
 	service.game.tick(time.Now())
-	if service.game.end == nil || service.journal.client == nil || service.scoreFailed {
+	if service.game.end == nil || service.scoreFailed {
 		return nil
 	}
 	if service.settlement == nil {
+		if service.journal.client == nil {
+			return nil
+		}
 		operation, err := newRoundOperation(service.users, service.rules, *service.game.end)
 		if err != nil {
 			service.scoreFailed = true
@@ -179,6 +188,28 @@ func (service *attackService) handleTick(self gsr.CommandContext) error {
 		service.settlement = &roundSettlement{operation: operation}
 	}
 	service.settlement.advance(self, service.journal)
+	if service.closing && service.settlement.cleared {
+		self.Exit()
+		return nil
+	}
+	if !service.notified && service.directory != 0 && service.settlement.receipt != nil {
+		if err := self.Send(service.directory, tableSettledCommand, service.name); err != nil {
+			return err // 邮箱满时保留未通知状态，下一次 Pulse 重试。
+		}
+		service.notified = true
+	}
+	return nil
+}
+
+func (service *attackService) handleClose(self gsr.CommandContext) error {
+	if self.Source() != service.directory || service.settlement == nil || service.settlement.receipt == nil {
+		return runtime.ErrUnknownCommand
+	}
+	service.closing = true
+	if service.settlement.cleared {
+		self.Exit()
+		return nil
+	}
 	return nil
 }
 
