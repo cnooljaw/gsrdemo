@@ -30,6 +30,8 @@ const (
 	landlordTurnPushCommand          runtime.CommandID = 118
 	dhmjSettlementPushCommand        runtime.CommandID = 119
 	dhmjDiscardPushCommand           runtime.CommandID = 120
+	dhmjDrawPushCommand              runtime.CommandID = 121
+	dhmjFlowerPushCommand            runtime.CommandID = 122
 )
 
 // agent 独占当前连接身份和路由，不持有权威游戏状态或钱包。

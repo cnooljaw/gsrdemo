@@ -132,6 +132,15 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 
 `1392 DhmjDiscardPush` 发给同桌在线玩家，`request_id` 为 0。字段为 `table_name string, revision/turn uint64, seat/tile int64`，`turn` 是本次出牌使用的轮次。开局后快照返回当前 `revision`，第一张牌打出前为 0。客户端可忽略快照已包含的事件，发现缺口时可重新请求快照。
 
+Access 已注册以下摸牌和补花推送，麻将节点的发送端见[后续工作](DESIGN.md#11-后续工作)。两条消息都带 `table_name string, revision uint64, seat/remaining int64`，`remaining` 是当前牌墙余量，`request_id` 为 0。
+
+| 推送 | 公开字段 | 本人字段 |
+| --- | --- | --- |
+| 1393 `DhmjDrawPush` | `turn uint64`，此次摸牌开启的轮次 | `tile int64`，补花后最终摸到的普通牌 |
+| 1394 `DhmjFlowerPush` | `flowers int64[]`、`from_draw bool`，按顺序列出花牌，标记是否来自本次摸牌 | `replacements int64[]`，逐项对应花牌，0 表示终局未补牌 |
+
+来自摸牌的补花链用 Flower 展示，用 Draw 将最终普通牌加入暗手一次。起手花替换按 Flower 更新本人暗手。
+
 ### 1.6 错误
 
 | 项目 | 当前约定 |
@@ -309,6 +318,8 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | landlord / 118 TurnPush | `L, event map` | 转发动画结束后的轮次开放 | 1198 |
 | dhmj / 119 DhmjSettlementPush | `L, payload map`，含 `table_name string, settlement map` | 核对当前登录、牌桌和回执 UserID，再转发 committed 回执 | 1396 |
 | dhmj / 120 DhmjDiscardPush | `L, payload map`，含 `table_name, revision, seat, turn, tile` | 核对当前登录和牌桌，校验出牌字段并转发 | 1392 |
+| 麻将摸牌接收端 / 121 DhmjDrawPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `tile` | 1393 |
+| 麻将补花接收端 / 122 DhmjFlowerPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `replacements` | 1394 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。

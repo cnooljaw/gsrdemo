@@ -17,4 +17,6 @@ const (
 	LandlordTurnPushCommand          = 118
 	DhmjSettlementPushCommand        = 119
 	DhmjDiscardPushCommand           = 120
+	DhmjDrawPushCommand              = 121
+	DhmjFlowerPushCommand            = 122
 )

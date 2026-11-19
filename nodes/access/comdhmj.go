@@ -16,6 +16,7 @@ const dhmjNode = "dhmj"
 type comDhmj struct {
 	deps        componentDependencies
 	table       string
+	seat        int64
 	cleanupJoin bool // Join 可能已执行，但没有取得可用快照。
 }
 
@@ -48,6 +49,8 @@ func (game *comDhmj) CommandHandlers() map[runtime.CommandID]any {
 	return map[runtime.CommandID]any{
 		dhmjSettlementPushCommand: game.handleSettlementPush,
 		dhmjDiscardPushCommand:    game.handleDiscardPush,
+		dhmjDrawPushCommand:       game.handleDrawPush,
+		dhmjFlowerPushCommand:     game.handleFlowerPush,
 	}
 }
 
@@ -128,7 +131,7 @@ func (game *comDhmj) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 	if err != nil {
 		return err
 	}
-	game.table, game.cleanupJoin = snapshot.TableName, false
+	game.table, game.seat, game.cleanupJoin = snapshot.TableName, snapshot.Seat, false
 	return reply.Response(uint32(demopb.MsgId_S2C_DHMJ_ENTER), &demopb.DhmjEnterResponse{Snapshot: snapshot})
 }
 
@@ -167,7 +170,7 @@ func (game *comDhmj) onSnapshot(self gsr.CommandContext, reply protocol.Context,
 		return err
 	}
 	snapshot, err := dhmjSnapshot(value, identity.UserID)
-	if err != nil || snapshot.TableName != game.table {
+	if err != nil || snapshot.TableName != game.table || snapshot.Seat != game.seat {
 		return errInvalidBackendReply
 	}
 	return reply.Response(uint32(demopb.MsgId_S2C_DHMJ_SNAPSHOT), &demopb.DhmjSnapshotResponse{Snapshot: snapshot})

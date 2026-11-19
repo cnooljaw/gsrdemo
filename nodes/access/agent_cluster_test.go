@@ -359,3 +359,50 @@ func TestAccessDhmjDiscardPush(t *testing.T) {
 		t.Fatalf("出牌推送错误：%v", &discard)
 	}
 }
+
+// TestAccessDhmjTilePushHidesOtherSeats 保护摸牌和补花的公开信息仍可送达，其他座位的暗牌在 Access 被剔除。
+func TestAccessDhmjTilePushHidesOtherSeats(t *testing.T) {
+	gateAddress, backend, _ := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+	for i, seat := range []int64{2, 0} {
+		revision := uint64(9 + i*2)
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjFlowerPushCommand), login, map[string]any{
+			"table_name": "dhmj-1", "revision": revision, "seat": seat, "remaining": int64(13), "from_draw": true,
+			"flowers": []any{int64(0x41), int64(0x42)}, "replacements": []any{int64(0x42), int64(5)},
+		})
+		got := readAccessEnvelope(t, client)
+		var flower demopb.DhmjFlowerPush
+		if err := proto.Unmarshal(got.Payload, &flower); err != nil || got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_FLOWER_PUSH) || got.RequestId != 0 ||
+			flower.GetSeat() != seat || flower.GetRevision() != revision || !flower.GetFromDraw() || flower.GetRemaining() != 13 ||
+			!reflect.DeepEqual(flower.GetFlowers(), []int64{0x41, 0x42}) {
+			t.Fatalf("补花公开信息错误：%v %v", got, err)
+		}
+		var wantReplacements []int64
+		if seat == 0 {
+			wantReplacements = []int64{0x42, 5}
+		}
+		if !reflect.DeepEqual(flower.GetReplacements(), wantReplacements) {
+			t.Fatalf("补花替换牌可见性错误：%v", &flower)
+		}
+
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjDrawPushCommand), login, map[string]any{
+			"table_name": "dhmj-1", "revision": revision + 1, "seat": seat, "remaining": int64(13), "turn": uint64(7), "tile": int64(5),
+		})
+		got = readAccessEnvelope(t, client)
+		var draw demopb.DhmjDrawPush
+		if err := proto.Unmarshal(got.Payload, &draw); err != nil || got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_DRAW_PUSH) || got.RequestId != 0 ||
+			draw.GetSeat() != seat || draw.GetRevision() != revision+1 || draw.GetTurn() != 7 || draw.GetRemaining() != 13 {
+			t.Fatalf("摸牌公开信息错误：%v %v", got, err)
+		}
+		if (seat == 0 && draw.GetTile() != 5) || (seat != 0 && draw.Tile != nil) {
+			t.Fatalf("摸到的暗牌可见性错误：%v", &draw)
+		}
+	}
+}
