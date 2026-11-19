@@ -19,4 +19,5 @@ const (
 	DhmjDiscardPushCommand           = 120
 	DhmjDrawPushCommand              = 121
 	DhmjFlowerPushCommand            = 122
+	DhmjDealPushCommand              = 123
 )

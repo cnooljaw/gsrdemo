@@ -291,6 +291,12 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		NewMessage: func() proto.Message { return &DhmjFlowerPush{} },
 	},
 	{
+		ID:         uint32(MsgId_S2C_DHMJ_DEAL_PUSH),
+		Direction:  catalog.ServerToClient,
+		Kind:       catalog.Push,
+		NewMessage: func() proto.Message { return &DhmjDealPush{} },
+	},
+	{
 		ID:         uint32(MsgId_S2C_DHMJ_SETTLEMENT_PUSH),
 		Direction:  catalog.ServerToClient,
 		Kind:       catalog.Push,

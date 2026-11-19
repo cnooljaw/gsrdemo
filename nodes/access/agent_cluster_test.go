@@ -406,3 +406,46 @@ func TestAccessDhmjTilePushHidesOtherSeats(t *testing.T) {
 		}
 	}
 }
+
+// TestAccessDhmjDealPush 保护开局发牌只转给当前桌的本人，拒绝错座、错用户或不完整的起手牌。
+func TestAccessDhmjDealPush(t *testing.T) {
+	gateAddress, backend, _ := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+
+	ids := []any{uint64(7), uint64(8), uint64(9), uint64(10)}
+	hand := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 0x11, 0x12, 0x13, 0x41}
+	push := func(table string, seat int64, ids []any, tiles []int64) {
+		t.Helper()
+		cards := make([]any, len(tiles))
+		for i, tile := range tiles {
+			cards[i] = tile
+		}
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjDealPushCommand), login, map[string]any{
+			"table_name": table, "revision": uint64(1), "seat": seat, "dealer_seat": int64(2),
+			"remaining": int64(92), "player_ids": ids, "hand": cards,
+		})
+	}
+	push("another-table", 0, ids, hand)
+	push("dhmj-1", 1, ids, hand)
+	push("dhmj-1", 0, []any{uint64(11), uint64(8), uint64(9), uint64(10)}, hand)
+	push("dhmj-1", 0, ids, hand[:12])
+	push("dhmj-1", 0, ids, hand)
+
+	got := readAccessEnvelope(t, client)
+	var deal demopb.DhmjDealPush
+	if err := proto.Unmarshal(got.Payload, &deal); err != nil || got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_DEAL_PUSH) || got.RequestId != 0 {
+		t.Fatalf("未收到发牌推送：%v %v", got, err)
+	}
+	if deal.GetTableName() != "dhmj-1" || deal.GetRevision() != 1 || deal.GetSeat() != 0 ||
+		deal.GetDealerSeat() != 2 || deal.GetRemaining() != 92 ||
+		!reflect.DeepEqual(deal.GetPlayerIds(), []uint64{7, 8, 9, 10}) || !reflect.DeepEqual(deal.GetHand(), hand) {
+		t.Fatalf("错误发牌信息：%v", &deal)
+	}
+}

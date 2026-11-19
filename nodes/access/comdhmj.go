@@ -51,6 +51,7 @@ func (game *comDhmj) CommandHandlers() map[runtime.CommandID]any {
 		dhmjDiscardPushCommand:    game.handleDiscardPush,
 		dhmjDrawPushCommand:       game.handleDrawPush,
 		dhmjFlowerPushCommand:     game.handleFlowerPush,
+		dhmjDealPushCommand:       game.handleDealPush,
 	}
 }
 

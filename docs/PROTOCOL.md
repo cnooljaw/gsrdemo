@@ -141,6 +141,8 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 
 来自摸牌的补花链用 Flower 展示，用 Draw 将最终普通牌加入暗手一次。起手花替换按 Flower 更新本人暗手。
 
+Access 已注册 `1395 DhmjDealPush`，字段为 `table_name string, revision uint64, seat/dealer_seat/remaining int64, player_ids uint64[], hand int64[]`，`request_id` 为 0。`player_ids` 按 0～3 号座位排列，`seat` 表示接收者，`hand` 为本人 13 张起手牌。麻将节点的发送端见[后续工作](DESIGN.md#11-后续工作)。
+
 ### 1.6 错误
 
 | 项目 | 当前约定 |
@@ -320,6 +322,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 120 DhmjDiscardPush | `L, payload map`，含 `table_name, revision, seat, turn, tile` | 核对当前登录和牌桌，校验出牌字段并转发 | 1392 |
 | dhmj / 121 DhmjDrawPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `tile` | 1393 |
 | dhmj / 122 DhmjFlowerPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `replacements` | 1394 |
+| 麻将发牌接收端 / 123 DhmjDealPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌、接收座位和名单中的本人身份，再转发本人起手牌 | 1395 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
