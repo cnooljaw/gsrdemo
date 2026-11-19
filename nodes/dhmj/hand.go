@@ -8,17 +8,26 @@ func canHu(cards []byte) bool {
 	if len(cards) > 14 || len(cards)%3 != 2 {
 		return false
 	}
+	counts, ok := countHand(cards)
+	return ok && hasPairAndMelds(counts)
+}
+
+func countHand(cards []byte) (handCounts, bool) {
 	var counts handCounts
 	for _, card := range cards {
 		suit, rank := card>>4, card&15
 		if suit >= 4 || rank == 0 || rank > 9 || (suit == 3 && rank > 7) {
-			return false
+			return handCounts{}, false
 		}
 		counts[suit][rank]++
 		if counts[suit][rank] > 4 {
-			return false
+			return handCounts{}, false
 		}
 	}
+	return counts, true
+}
+
+func hasPairAndMelds(counts handCounts) bool {
 	for suit, ranks := range counts {
 		for rank, count := range ranks {
 			if count < 2 {
