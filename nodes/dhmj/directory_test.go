@@ -4,7 +4,7 @@ import "testing"
 
 // TestDirectoryKeepsSeatOnRejoin 保护四人同桌，重登更新身份但保留座位，旧登录不能再操作。
 func TestDirectoryKeepsSeatOnRejoin(t *testing.T) {
-	d := newDirectory()
+	d := newDirectory(defaultRoomRules, settlementJournal{})
 	var table *room
 	for uid := uint64(1); uid <= 4; uid++ {
 		joined, seat, err := d.seatPlayer(uid, "login")
@@ -28,7 +28,7 @@ func TestDirectoryKeepsSeatOnRejoin(t *testing.T) {
 
 // TestWaitingLeaveReleasesSeat 保护等候中离开立即放位，整桌空后删除目录。
 func TestWaitingLeaveReleasesSeat(t *testing.T) {
-	d := newDirectory()
+	d := newDirectory(defaultRoomRules, settlementJournal{})
 	table, _, _ := d.seatPlayer(1, "old")
 	if _, _, err := d.seatPlayer(1, "new"); err != nil {
 		t.Fatal(err)

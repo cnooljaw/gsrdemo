@@ -58,12 +58,14 @@ type directory struct {
 	routes     map[uint64]*room
 	nextRoom   uint64
 	dispatcher *gsr.Dispatcher
+	rules      roomRules
+	journal    settlementJournal
 }
 
 var _ gsr.Service = (*directory)(nil)
 
-func newDirectory() *directory {
-	d := &directory{rooms: make(map[string]*room), routes: make(map[uint64]*room)}
+func newDirectory(rules roomRules, journal settlementJournal) *directory {
+	d := &directory{rooms: make(map[string]*room), routes: make(map[uint64]*room), rules: rules, journal: journal}
 	d.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		joinCommand: d.handleJoin, readyCommand: d.handleReady,
 		snapshotCommand: d.handleSnapshot, leaveCommand: d.handleLeave,
@@ -185,6 +187,10 @@ func (d *directory) handleReady(self gsr.CommandContext, uid uint64, login strin
 	if err != nil {
 		return false, err
 	}
+	service.rules, service.journal = d.rules, d.journal
+	for i, player := range table.players {
+		service.users[i] = player.uid
+	}
 	ctx, cancel = context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	id, err := self.CreateService(ctx, service)
@@ -229,6 +235,9 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *room, seat int) 
 	reply["phase"] = "playing"
 	if view.Finished {
 		reply["phase"] = "finished"
+	}
+	if view.Settlement != nil {
+		reply["settlement"] = view.Settlement
 	}
 	reply["hand"] = wireTiles(view.Hand)
 	reply["active_seat"], reply["turn"], reply["window_id"] = int64(view.Active), view.Turn, view.WindowID

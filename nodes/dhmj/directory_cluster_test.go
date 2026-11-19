@@ -110,7 +110,7 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 	routes := make(map[cluster.NodeID]string)
 	startDirectoryFixture(t, routes, "online", onlinerpc.ServiceName, directoryBackend{logins: map[uint64]string{}})
 	startDirectoryFixture(t, routes, "settlement", settlementread.ServiceName, directoryBackend{})
-	startDirectoryFixture(t, routes, "dhmj", dhmjrpc.ServiceName, newDirectory())
+	startDirectoryFixture(t, routes, "dhmj", dhmjrpc.ServiceName, newDirectory(defaultRoomRules, settlementJournal{}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var verified bool

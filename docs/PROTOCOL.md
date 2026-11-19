@@ -202,7 +202,7 @@ Join 失败仍可能伴随旧成员回收的更新推送；该推送不代表本
 
 ### 2.6 通用银子结算接口
 
-Node 取游戏节点（mole、landlord）的配置 `settlement_node`，默认 `settlement`；access 不直接调用结算。入口见[Call 写入池](../nodes/settlement/settlementwriteservice.go)与[Call 读取池](../nodes/settlement/settlementreadservice.go)。
+mole、landlord 通过 `settlement_node` 指定目标（默认 `settlement`），dhmj 固定调用 `settlement`。入口见[Call 写入池](../nodes/settlement/settlementwriteservice.go)与[Call 读取池](../nodes/settlement/settlementreadservice.go)。
 
 | Service / Command | 调用方式 | 顺序参数 | 完成结果 |
 | --- | --- | --- | --- |
@@ -210,7 +210,7 @@ Node 取游戏节点（mole、landlord）的配置 `settlement_node`，默认 `s
 | `settlement-write / 6` SettleSingle | Call | Single 请求 map | 完整回执或错误；一笔单人操作 |
 | `settlement-write / 7` SettleEqualGroup | Call，斗地主使用 | EqualGroup 请求 map | 输方各自封顶、赢家均分；返回每人的实际扣返和余额 |
 | `settlement-write / 8` SettleTransferGroup | Call | TransferGroup 请求 map | 按付款明细比例封顶；返回实际付款明细、每人实际扣返和余额 |
-| `settlement-write / 9` SettleTransferGroupWithFees | Call | TransferGroupWithFees 请求 map | 同一事务先扣全员手续费，再按付款明细封顶；回执单列实扣手续费 |
+| `settlement-write / 9` SettleTransferGroupWithFees | Call，定海麻将使用 | TransferGroupWithFees 请求 map | 同一事务先扣全员手续费，再按付款明细封顶；回执单列实扣手续费 |
 | `settlement-read / 2` GetBatch | 受控 Call | `batchID string` | 原回执，缺失为 nil；不是提交前置查询 |
 | `settlement-read / 3` GetOperation | 受控 Call | `U, operationID string` | OperationResult；不存在或 U 不是参与用户时为 nil |
 | `settlement-read / 4` GetBalance | 游戏准入/初始化或受控 Call | `U` | map：`user_id uint64, amount int64, version uint64`；钱包缺失报错 |
@@ -236,7 +236,7 @@ Group 接口的规则及限制：
 
 - **7 均分**：采用 EqualGroup 请求结构，每人一条 change；正 Debit 表示输家且 Credit 必须为 0，Debit 为 0 的条目表示赢家（理论 Credit 可为 0，非参与者不应列入）。至少一输一赢，理论总扣款等于总返还；赢家理论 Credit 按理论奖池均分，余数按赢家 UserID 从大到小分配。每个输家按事务内余额独立封顶，实际扣款合计重新均分赢家，余数采用相同顺序；余额不足不由其他输家补足。
 - **8 明细**：`transfers` 为 1～512 条，不同付款人与收款人均为非零 UserID，amount 为正，每对付款人/收款人最多一条，全部参与者为 2～64 人。每位付款人按事务开始时的钱包余额独立封顶，实付款按原应付比例向下取整，余数按收款 UserID 从大到小分配；同组收入不能提前用于付款。请求明细顺序不影响身份，实际明细按付款、收款 UserID 升序返回。
-- **9 明细加手续费**：每人实扣手续费为应收手续费与事务内锁定余额的较小值。扣费后的剩余余额用于接口 8 的付款分配，同组入账不能抵付手续费或本组付款。付款双方都必须列在 `fees` 中，流局可以传空 `transfers`，只收手续费。费用按 UserID 升序返回。
+- **9 明细加手续费**：每人实扣手续费为应收手续费与事务内锁定余额的较小值。扣费后的剩余余额用于接口 8 的付款分配，同组入账不能抵付手续费或本组付款。付款双方都必须列在 `fees` 中，仅收手续费时可传空 `transfers`。费用按 UserID 升序返回。
 - 牌局实际付款合计等于返还合计。接口 9 的总实扣等于牌局实付与手续费之和。所有人实际扣返均为零时仍返回 committed，钱包余额和版本不变。每个发生实际扣款或返还的钱包版本增加一次。余额、版本或请求金额溢出返回错误并回滚，不保存财务终态。
 
 | 校验项 | 约束 |
@@ -361,6 +361,7 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 | 等待、进行中及结束 | `room_name string, seat int64, phase string, players list`。`players` 元素含 `user_id uint64, seat int64, ready bool` |
 | 开局后公开状态 | `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`。`discards/hand_counts/trustees` 分别按座位返回弃牌列表、暗手数量和托管标志。无对应窗口或截止时为 0 |
 | 开局后本人状态 | `hand` 为本人暗手。`offers` 为本人尚未提交的窗口可选动作编号，有选项时也可过。`self_action/can_self_win bool` 表示本人可选自操作及能否自摸。`concealed_kongs/added_kongs` 为暗杠、补杠候选牌值。牌值和动作编号均为 int64 |
+| 终局结算 | 可选 `settlement` map。已生成请求时返回 `operation_id/status string`。committed 时包含本人 `user_id uint64, fee/paid/received/balance int64, version uint64`。`paid` 与 `received` 只统计本局实际付款，手续费单列 |
 
 ## 3. 主要调用链
 
@@ -431,3 +432,13 @@ MoleService/accounting.flush 本地 Send 原批次给 Submission
 ```
 
 两个游戏在回执未知时都重提原 ID 和原内容，不追加玩家查账。重启只恢复已经保存的账务请求，不恢复未保存命中或进行中手牌；边界见[持久化与故障汇总](DESIGN.md#8-持久化与故障边界汇总)。
+
+
+### 3.5 定海麻将终局
+
+```text
+牌桌结束 → Pulse 唤醒牌桌 → 从规则计算理论付款
+  → 保存本局请求到 Redis → Call settlement-write/9
+  → 校验完整回执 → 本人快照可读实扣费用、扣返与余额
+  → 删除待结算记录
+```

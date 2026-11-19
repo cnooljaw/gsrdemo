@@ -27,8 +27,13 @@ var errInvalidTableAction = runtime.NewStatusError(runtime.ErrorClassDomain, "dh
 
 // attackService 独占单桌状态。
 type attackService struct {
-	game       round
-	dispatcher *gsr.Dispatcher
+	game        round
+	dispatcher  *gsr.Dispatcher
+	users       [seatCount]uint64
+	rules       roomRules
+	journal     settlementJournal
+	settlement  *roundSettlement
+	scoreFailed bool
 }
 
 var _ gsr.Service = (*attackService)(nil)
@@ -82,6 +87,7 @@ type tableView struct {
 	ConcealedKongs, AddedKongs []byte
 	Finished                   bool
 	Deadline                   time.Time
+	Settlement                 map[string]any
 }
 
 func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (tableView, error) {
@@ -100,6 +106,12 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	}
 	if !view.Finished {
 		view.Deadline = game.dueAt()
+	} else if s := service.settlement; s != nil {
+		view.Settlement = map[string]any{"operation_id": s.operation.ID, "status": "pending"}
+		if s.receipt != nil {
+			view.Settlement = s.receipt[seat].wire()
+			view.Settlement["operation_id"], view.Settlement["status"] = s.operation.ID, "committed"
+		}
 	}
 	if view.SelfAction {
 		view.CanSelfWin = canHu(view.Hand)
@@ -152,8 +164,21 @@ func (service *attackService) handleTrustee(_ gsr.CommandContext, seat int, enab
 	return actionResult(service.game.setTrustee(seat, enabled, time.Now()))
 }
 
-func (service *attackService) handleTick(_ gsr.CommandContext) error {
+func (service *attackService) handleTick(self gsr.CommandContext) error {
 	service.game.tick(time.Now())
+	if service.game.end == nil || service.journal.client == nil || service.scoreFailed {
+		return nil
+	}
+	if service.settlement == nil {
+		operation, err := newRoundOperation(service.users, service.rules, *service.game.end)
+		if err != nil {
+			service.scoreFailed = true
+			_ = self.Logger().Error("定海麻将终局无法生成结算请求", "error", err.Error())
+			return err
+		}
+		service.settlement = &roundSettlement{operation: operation}
+	}
+	service.settlement.advance(self, service.journal)
 	return nil
 }
 
