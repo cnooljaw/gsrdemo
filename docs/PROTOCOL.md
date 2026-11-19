@@ -107,7 +107,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 客户端以 Enter/Snapshot 的 revision 建立基线，对同桌事件按序应用，忽略已包含的旧事件，发现缺口请求 Snapshot；同一事件序号对每名在线玩家均有对应消息，发牌和结算的内容按本人生成。缓冲过多事件、场景不一致或等待预计更新超时也可恢复场景；最后一条事件丢失不能单靠序号发现。TS 演示客户端按事件驱动，恢复时最多保留 128 条在途事件。计时由牌桌服务器判定：发牌后等待 3 秒、首次或重新领出前等待 0.5 秒，客户端须等 Turn 推送或快照显示 `can_act=true` 才提交操作；托管玩家仍不能手动操作。客户端以服务器时间点与 `server_ms` 的差值及本地单调经过时间估计恢复等待，不依赖本机日历时间。`turn` 仍只用于操作校验，不充当事件序号。
 
-### 1.5 定海麻将进桌与恢复
+### 1.5 定海麻将协议
 
 客户端登录后通过 Access 调用麻将目录。同一连接只能进入一种游戏。
 
@@ -117,8 +117,16 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 | Ready | 1311 → 1005 | 空 | `ActionAck`，目录确认准备 |
 | Snapshot | 1321 → 1322 | 空 | `DhmjSnapshotResponse.snapshot`，用于显式恢复 |
 | Leave | 1331 → 1005 | 空 | `ActionAck`，目录接纳离开 |
+| Discard | 1341 → 1005 | `turn uint64, tile int64` | `ActionAck`，本次出牌已执行 |
+| Respond | 1351 → 1005 | `window_id uint64, action int64` | `ActionAck`，本人的选择已记录，窗口可能仍在等其他座位 |
+| SelfWin | 1361 → 1005 | `turn uint64` | `ActionAck`，牌桌确认自摸 |
+| Kong | 1371 → 1005 | `turn uint64, tile int64` | `ActionAck`，牌桌接受暗杠或补杠；补杠可能进入抢杠窗口 |
+| PassSelf | 1381 → 1005 | `turn uint64` | `ActionAck`，放弃当前自选动作，进入出牌轮次 |
+| Trustee | 1391 → 1005 | `enabled bool` | `ActionAck`，托管状态已设置 |
 
 `DhmjSnapshot` 使用[麻将目录快照](#210-dhmj定海麻将凑桌与准备)的字段，`discards` 按座位组织，每座的牌放在 `tiles` 中。`hand` 只含本人暗手，`settlement` 也只带本人的资金结果。重登后通过 Enter 恢复原座，再使用 Snapshot 补场景。
+
+Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应窗口和可选动作裁决。Respond 的动作编号见[麻将目录 RPC](#210-dhmj定海麻将凑桌与准备)。`ActionAck` 只确认当前请求，不附牌面或结算数据。请求超时后，可用 Snapshot 确认当前状态。
 
 ### 1.6 错误
 
@@ -352,7 +360,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 
 ### 2.10 dhmj：定海麻将凑桌与准备
 
-Node 和 Service 均为 `dhmj`。目录持有座位、准备和登录路由，开局后通过本地 Call 读取牌桌。Access 通过 [comDhmj](../nodes/access/comdhmj.go) 调用 1～4，命令定义见[共享命令](../common/rpc/dhmj/commands.gen.go)。
+Node 和 Service 均为 `dhmj`。目录持有座位、准备和登录路由，开局后通过本地 Call 访问牌桌。Access 通过 [comDhmj](../nodes/access/comdhmj.go) 调用目录，命令定义见[共享命令](../common/rpc/dhmj/commands.gen.go)。
 
 | Command | 方式 | 顺序参数 | 成功结果 |
 | --- | --- | --- | --- |

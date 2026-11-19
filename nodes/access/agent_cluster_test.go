@@ -2,11 +2,14 @@ package main
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
+	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
+	dhmjrpc "github.com/cnooljaw/gsrdemo/common/rpc/dhmj"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -221,5 +224,58 @@ func TestAccessDhmjReconnectAndLeave(t *testing.T) {
 	}
 	if got := accessRequest(t, current, demopb.MsgId_C2S_ENTER, &demopb.EnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_ENTER) {
 		t.Fatalf("麻将离桌后互斥占位仍存在：%v", got)
+	}
+}
+
+// TestAccessDhmjActionRequests 保护六种客户端动作的 RPC 类型与参数顺序、通用成功回包和麻将规则错误。
+func TestAccessDhmjActionRequests(t *testing.T) {
+	gateAddress, backend, calls := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_DISCARD, &demopb.DhmjDiscardRequest{Turn: 1, Tile: 5}); got.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+		t.Fatalf("未入桌的连接提交了麻将动作：%v", got)
+	}
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+
+	const turn uint64 = 1<<54 + 1
+	const windowID uint64 = 1<<55 + 3
+	for _, action := range []struct {
+		id      demopb.MsgId
+		request proto.Message
+		command runtime.CommandID
+		args    []any
+	}{
+		{demopb.MsgId_C2S_DHMJ_DISCARD, &demopb.DhmjDiscardRequest{Turn: turn, Tile: 5}, dhmjrpc.DiscardCommand, []any{turn, int64(5)}},
+		{demopb.MsgId_C2S_DHMJ_RESPOND, &demopb.DhmjRespondRequest{WindowId: windowID, Action: 6}, dhmjrpc.RespondCommand, []any{windowID, int64(6)}},
+		{demopb.MsgId_C2S_DHMJ_SELF_WIN, &demopb.DhmjSelfWinRequest{Turn: turn}, dhmjrpc.SelfWinCommand, []any{turn}},
+		{demopb.MsgId_C2S_DHMJ_KONG, &demopb.DhmjKongRequest{Turn: turn, Tile: 7}, dhmjrpc.KongCommand, []any{turn, int64(7)}},
+		{demopb.MsgId_C2S_DHMJ_PASS_SELF, &demopb.DhmjPassSelfRequest{Turn: turn}, dhmjrpc.PassSelfCommand, []any{turn}},
+		{demopb.MsgId_C2S_DHMJ_TRUSTEE, &demopb.DhmjTrusteeRequest{Enabled: true}, dhmjrpc.TrusteeCommand, []any{true}},
+	} {
+		got := accessRequest(t, client, action.id, action.request)
+		if got.MsgId != uint32(demopb.MsgId_S2C_ACTION_ACK) || got.RequestId != 1 || len(got.Payload) != 0 {
+			t.Fatalf("%s 未返回空确认：%v", action.id, got)
+		}
+		want := append([]any{action.command, uint64(7), login}, action.args...)
+		select {
+		case call := <-calls:
+			if !reflect.DeepEqual(call, want) {
+				t.Fatalf("%s 的 RPC 参数：%#v，预期 %#v", action.id, call, want)
+			}
+		default:
+			t.Fatalf("%s 未走麻将 RPC", action.id)
+		}
+	}
+
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_DISCARD, &demopb.DhmjDiscardRequest{Tile: 5}); got.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) || got.RequestId != 1 {
+		t.Fatalf("麻将拒绝旧轮次后仍返回成功：%v", got)
+	}
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_SNAPSHOT, &demopb.DhmjSnapshotRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_SNAPSHOT) {
+		t.Fatalf("业务拒绝后无法恢复牌桌：%v", got)
 	}
 }

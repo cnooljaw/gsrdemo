@@ -212,6 +212,36 @@ enum MsgId {
     direction: DIRECTION_CLIENT_TO_SERVER
     kind: KIND_REQUEST
   }];
+  C2S_DHMJ_DISCARD = 1341 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjDiscardRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_DHMJ_RESPOND = 1351 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjRespondRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_DHMJ_SELF_WIN = 1361 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjSelfWinRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_DHMJ_KONG = 1371 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjKongRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_DHMJ_PASS_SELF = 1381 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjPassSelfRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
+  C2S_DHMJ_TRUSTEE = 1391 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjTrusteeRequest"
+    direction: DIRECTION_CLIENT_TO_SERVER
+    kind: KIND_REQUEST
+  }];
 }
 
 message ActionAck {}
@@ -495,6 +525,33 @@ message DhmjSnapshotResponse {
 }
 
 message DhmjLeaveRequest {}
+
+message DhmjDiscardRequest {
+  uint64 turn = 1;
+  int64 tile = 2;
+}
+
+message DhmjRespondRequest {
+  uint64 window_id = 1;
+  int64 action = 2;
+}
+
+message DhmjSelfWinRequest {
+  uint64 turn = 1;
+}
+
+message DhmjKongRequest {
+  uint64 turn = 1;
+  int64 tile = 2;
+}
+
+message DhmjPassSelfRequest {
+  uint64 turn = 1;
+}
+
+message DhmjTrusteeRequest {
+  bool enabled = 1;
+}
 
 message DhmjSnapshot {
   string table_name = 1;

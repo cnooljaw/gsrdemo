@@ -31,10 +31,16 @@ func (game *comDhmj) Entered() bool { return game.table != "" }
 
 func (game *comDhmj) ProtocolHandlers() map[uint32]any {
 	return map[uint32]any{
-		uint32(demopb.MsgId_C2S_DHMJ_ENTER):    game.onEnter,
-		uint32(demopb.MsgId_C2S_DHMJ_READY):    game.onReady,
-		uint32(demopb.MsgId_C2S_DHMJ_SNAPSHOT): game.onSnapshot,
-		uint32(demopb.MsgId_C2S_DHMJ_LEAVE):    game.onLeave,
+		uint32(demopb.MsgId_C2S_DHMJ_ENTER):     game.onEnter,
+		uint32(demopb.MsgId_C2S_DHMJ_READY):     game.onReady,
+		uint32(demopb.MsgId_C2S_DHMJ_SNAPSHOT):  game.onSnapshot,
+		uint32(demopb.MsgId_C2S_DHMJ_LEAVE):     game.onLeave,
+		uint32(demopb.MsgId_C2S_DHMJ_DISCARD):   game.onDiscard,
+		uint32(demopb.MsgId_C2S_DHMJ_RESPOND):   game.onRespond,
+		uint32(demopb.MsgId_C2S_DHMJ_SELF_WIN):  game.onSelfWin,
+		uint32(demopb.MsgId_C2S_DHMJ_KONG):      game.onKong,
+		uint32(demopb.MsgId_C2S_DHMJ_PASS_SELF): game.onPassSelf,
+		uint32(demopb.MsgId_C2S_DHMJ_TRUSTEE):   game.onTrustee,
 	}
 }
 
@@ -63,10 +69,31 @@ func (game *comDhmj) onEnter(self gsr.CommandContext, reply protocol.Context, _ 
 }
 
 func (game *comDhmj) onReady(self gsr.CommandContext, reply protocol.Context, _ *demopb.DhmjReadyRequest) error {
-	if err := game.callAction(self, dhmjrpc.ReadyCommand); err != nil {
-		return err
-	}
-	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
+	return game.replyAction(self, reply, dhmjrpc.ReadyCommand)
+}
+
+func (game *comDhmj) onDiscard(self gsr.CommandContext, reply protocol.Context, request *demopb.DhmjDiscardRequest) error {
+	return game.replyAction(self, reply, dhmjrpc.DiscardCommand, request.Turn, request.Tile)
+}
+
+func (game *comDhmj) onRespond(self gsr.CommandContext, reply protocol.Context, request *demopb.DhmjRespondRequest) error {
+	return game.replyAction(self, reply, dhmjrpc.RespondCommand, request.WindowId, request.Action)
+}
+
+func (game *comDhmj) onSelfWin(self gsr.CommandContext, reply protocol.Context, request *demopb.DhmjSelfWinRequest) error {
+	return game.replyAction(self, reply, dhmjrpc.SelfWinCommand, request.Turn)
+}
+
+func (game *comDhmj) onKong(self gsr.CommandContext, reply protocol.Context, request *demopb.DhmjKongRequest) error {
+	return game.replyAction(self, reply, dhmjrpc.KongCommand, request.Turn, request.Tile)
+}
+
+func (game *comDhmj) onPassSelf(self gsr.CommandContext, reply protocol.Context, request *demopb.DhmjPassSelfRequest) error {
+	return game.replyAction(self, reply, dhmjrpc.PassSelfCommand, request.Turn)
+}
+
+func (game *comDhmj) onTrustee(self gsr.CommandContext, reply protocol.Context, request *demopb.DhmjTrusteeRequest) error {
+	return game.replyAction(self, reply, dhmjrpc.TrusteeCommand, request.Enabled)
 }
 
 func (game *comDhmj) onSnapshot(self gsr.CommandContext, reply protocol.Context, _ *demopb.DhmjSnapshotRequest) error {
@@ -90,8 +117,15 @@ func (game *comDhmj) onLeave(self gsr.CommandContext, reply protocol.Context, _ 
 	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
 }
 
-func (game *comDhmj) callAction(self gsr.CommandContext, cmd runtime.CommandID) error {
-	value, err := game.callTable(self, game.deps.Identity(), cmd)
+func (game *comDhmj) replyAction(self gsr.CommandContext, reply protocol.Context, cmd runtime.CommandID, args ...any) error {
+	if err := game.callAction(self, cmd, args...); err != nil {
+		return err
+	}
+	return reply.Response(uint32(demopb.MsgId_S2C_ACTION_ACK), &demopb.ActionAck{})
+}
+
+func (game *comDhmj) callAction(self gsr.CommandContext, cmd runtime.CommandID, args ...any) error {
+	value, err := game.callTable(self, game.deps.Identity(), cmd, args...)
 	if err != nil {
 		return err
 	}
@@ -101,14 +135,14 @@ func (game *comDhmj) callAction(self gsr.CommandContext, cmd runtime.CommandID) 
 	return nil
 }
 
-func (game *comDhmj) callTable(self gsr.CommandContext, identity agentIdentity, cmd runtime.CommandID) (any, error) {
+func (game *comDhmj) callTable(self gsr.CommandContext, identity agentIdentity, cmd runtime.CommandID, args ...any) (any, error) {
 	if err := identity.RequireLogin(); err != nil {
 		return nil, err
 	}
 	if !game.Entered() {
 		return nil, errEnterRequired
 	}
-	return game.deps.Call(self, dhmjNode, dhmjrpc.ServiceName, cmd, identity.UserID, identity.LoginID)
+	return game.deps.Call(self, dhmjNode, dhmjrpc.ServiceName, cmd, append([]any{identity.UserID, identity.LoginID}, args...)...)
 }
 
 func (game *comDhmj) Disconnect(self gsr.ServiceContext) error {

@@ -236,4 +236,40 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		Kind:       catalog.Request,
 		NewMessage: func() proto.Message { return &DhmjLeaveRequest{} },
 	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_DISCARD),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjDiscardRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_RESPOND),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjRespondRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_SELF_WIN),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjSelfWinRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_KONG),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjKongRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_PASS_SELF),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjPassSelfRequest{} },
+	},
+	{
+		ID:         uint32(MsgId_C2S_DHMJ_TRUSTEE),
+		Direction:  catalog.ClientToServer,
+		Kind:       catalog.Request,
+		NewMessage: func() proto.Message { return &DhmjTrusteeRequest{} },
+	},
 }

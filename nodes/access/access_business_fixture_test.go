@@ -189,6 +189,13 @@ func (service *accessBackendFixture) Handle(self gsr.CommandContext, command run
 			}, nil
 		case dhmjrpc.ReadyCommand:
 			return true, nil
+		case dhmjrpc.DiscardCommand, dhmjrpc.RespondCommand, dhmjrpc.SelfWinCommand,
+			dhmjrpc.KongCommand, dhmjrpc.PassSelfCommand, dhmjrpc.TrusteeCommand:
+			service.hits <- append([]any{command}, args...)
+			if command == dhmjrpc.DiscardCommand && len(args) == 4 && args[2] == uint64(0) {
+				return nil, runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.invalid_turn", "无效轮次")
+			}
+			return true, nil
 		case dhmjrpc.LeaveCommand:
 			service.current = nil
 			return true, nil
