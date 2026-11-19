@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"time"
 
@@ -10,7 +9,7 @@ import (
 	"github.com/cnooljaw/gsr/runtime"
 )
 
-// 当前只供本节点使用。对 access 开放的命令由身份与路由接线另行定义。
+// 牌桌命令只供本节点使用。目录核对登录并派发。
 //
 //rpc:service dhmjattack private
 const (
@@ -24,7 +23,7 @@ const (
 	tableTickCommand     runtime.CommandID = 8
 )
 
-var errInvalidTableAction = errors.New("定海麻将当前轮次或动作无效")
+var errInvalidTableAction = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.invalid_turn", "定海麻将当前轮次或动作无效")
 
 // attackService 独占单桌状态。
 type attackService struct {
@@ -69,17 +68,20 @@ func (service *attackService) Handle(self gsr.CommandContext, cmd runtime.Comman
 }
 
 type tableView struct {
-	Hand       []byte
-	HandCounts [seatCount]int
-	Out        [seatCount][]byte
-	Trustees   [seatCount]bool
-	Active     int
-	Turn       uint64
-	WindowID   uint64
-	Offer      actionOptions
-	SelfAction bool
-	Finished   bool
-	Deadline   time.Time
+	Hand                       []byte
+	HandCounts                 [seatCount]int
+	Out                        [seatCount][]byte
+	Trustees                   [seatCount]bool
+	Active                     int
+	Turn                       uint64
+	WindowID                   uint64
+	WindowTile                 byte
+	Offer                      actionOptions
+	SelfAction                 bool
+	CanSelfWin                 bool
+	ConcealedKongs, AddedKongs []byte
+	Finished                   bool
+	Deadline                   time.Time
 }
 
 func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (tableView, error) {
@@ -99,7 +101,24 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	if !view.Finished {
 		view.Deadline = game.dueAt()
 	}
+	if view.SelfAction {
+		view.CanSelfWin = canHu(view.Hand)
+		var seen [256]bool
+		for _, tile := range view.Hand {
+			if tile >= 0x41 || seen[tile] {
+				continue
+			}
+			seen[tile] = true
+			if tileCount(view.Hand, tile) == 4 {
+				view.ConcealedKongs = append(view.ConcealedKongs, tile)
+			}
+			if game.pongIndex(seat, tile) >= 0 {
+				view.AddedKongs = append(view.AddedKongs, tile)
+			}
+		}
+	}
 	if game.window != nil {
+		view.WindowTile = game.window.tile
 		view.WindowID = game.windowID
 		view.Deadline = game.deadline
 		if game.window.choices[seat] == unanswered {

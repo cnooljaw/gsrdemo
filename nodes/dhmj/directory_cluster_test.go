@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -138,6 +139,9 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			if scene["room_name"] != roomName || scene["seat"] != int64(uid-1) || scene["phase"] != "waiting" {
 				return errors.New("四人未依序入同一张等待桌")
 			}
+			if _, err := call(dhmjrpc.DiscardCommand, uid, "login", uint64(1), int64(5)); err == nil {
+				return errors.New("等待中的牌桌接受了出牌")
+			}
 			if _, err := call(dhmjrpc.ReadyCommand, uid, "login"); err != nil {
 				return err
 			}
@@ -165,6 +169,34 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		}
 		if _, err := call(dhmjrpc.SnapshotCommand, uint64(1), "new-login"); err != nil {
 			return err
+		}
+		turn := scene["turn"].(uint64)
+		tile := hand[0].(int64)
+		for _, attempt := range []struct {
+			uid   uint64
+			login string
+			turn  uint64
+			tile  int64
+		}{
+			{1, "login", turn, tile},
+			{2, "login", turn, tile},
+			{1, "new-login", turn - 1, tile},
+			{1, "new-login", turn, tile + 256},
+		} {
+			if _, err := call(dhmjrpc.DiscardCommand, attempt.uid, attempt.login, attempt.turn, attempt.tile); err == nil {
+				return errors.New("非法远程出牌被接受")
+			}
+		}
+		if value, err := call(dhmjrpc.DiscardCommand, uint64(1), "new-login", turn, tile); err != nil || value != true {
+			return fmt.Errorf("当前座位出牌未执行：%v %w", value, err)
+		}
+		result, err = call(dhmjrpc.SnapshotCommand, uint64(2), "login")
+		if err != nil {
+			return err
+		}
+		out := result.(map[string]any)["discards"].([]any)[0].([]any)
+		if len(out) != 1 || out[0] != tile {
+			return errors.New("其他座位未看到已执行的出牌")
 		}
 		verified = true
 		cancel()

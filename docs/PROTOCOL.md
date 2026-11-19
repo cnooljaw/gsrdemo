@@ -342,10 +342,22 @@ Node 和 Service 均为 `dhmj`。目录持有座位、准备和登录路由，�
 | --- | --- | --- | --- |
 | 1 Join | Call | `U, L, N, A` | 校验 Online 后分配座位，重登恢复原座并更新当前登录。返回本人快照 |
 | 2 Ready | Call | `U, L` | true。钱包至少 3000，四人准备后创建牌桌 |
-| 3 Snapshot | Call | `U, L` | map。公共字段为 `room_name string, seat int64, phase string, players list`。开局后附 `hand list, active_seat int64, turn uint64, window_id uint64` |
+| 3 Snapshot | Call | `U, L` | 本人快照，字段见下方 |
 | 4 Leave | Call | `U, L` | true。等待中立即释放座位，开局后保留座位并断开当前登录与牌桌的操作路由 |
+| 5 Discard | Call | `U, L, turn uint64, tile int64` | true。当前座位出牌 |
+| 6 Respond | Call | `U, L, windowID uint64, action int64` | true。提交对当前窗口的选择，裁决可能仍在等待其他座位 |
+| 7 SelfWin | Call | `U, L, turn uint64` | true。确认自摸 |
+| 8 Kong | Call | `U, L, turn uint64, tile int64` | true。暗杠或发起补杠，补杠可能开启抢杠窗口 |
+| 9 PassSelf | Call | `U, L, turn uint64` | true。放弃当前自选动作，进入出牌轮次 |
+| 10 Trustee | Call | `U, L, enabled bool` | true。设置托管状态 |
 
-`players` 元素含 `user_id uint64, seat int64, ready bool`。`hand` 元素为 `int64` 牌值，只有当前用户自己的暗手。
+Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 胡、7 过。两类轮次编号分别使用快照中的 `turn` 和 `window_id`。目录按当前登录查出牌桌和座位，调用者无需提供座位。
+
+| 本人快照 | 字段 |
+| --- | --- |
+| 等待、进行中及结束 | `room_name string, seat int64, phase string, players list`。`players` 元素含 `user_id uint64, seat int64, ready bool` |
+| 开局后公开状态 | `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`。`discards/hand_counts/trustees` 分别按座位返回弃牌列表、暗手数量和托管标志。无对应窗口或截止时为 0 |
+| 开局后本人状态 | `hand` 为本人暗手。`offers` 为本人尚未提交的窗口可选动作编号，有选项时也可过。`self_action/can_self_win bool` 表示本人可选自操作及能否自摸。`concealed_kongs/added_kongs` 为暗杠、补杠候选牌值。牌值和动作编号均为 int64 |
 
 ## 3. 主要调用链
 

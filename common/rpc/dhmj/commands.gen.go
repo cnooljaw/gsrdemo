@@ -10,4 +10,10 @@ const (
 	ReadyCommand    = 2
 	SnapshotCommand = 3
 	LeaveCommand    = 4
+	DiscardCommand  = 5
+	RespondCommand  = 6
+	SelfWinCommand  = 7
+	KongCommand     = 8
+	PassSelfCommand = 9
+	TrusteeCommand  = 10
 )

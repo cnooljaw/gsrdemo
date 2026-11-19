@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,6 +19,12 @@ const (
 	readyCommand    runtime.CommandID = 2
 	snapshotCommand runtime.CommandID = 3
 	leaveCommand    runtime.CommandID = 4
+	discardCommand  runtime.CommandID = 5
+	respondCommand  runtime.CommandID = 6
+	selfWinCommand  runtime.CommandID = 7
+	kongCommand     runtime.CommandID = 8
+	passSelfCommand runtime.CommandID = 9
+	trusteeCommand  runtime.CommandID = 10
 )
 
 const (
@@ -27,9 +34,10 @@ const (
 )
 
 var (
-	errStaleLogin = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.stale_login", "当前登录或座位无效")
-	errRoomBusy   = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.busy", "牌桌已开始或暂时没有空桌")
-	errFunds      = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.insufficient_silver", "银子不足，不能准备")
+	errStaleLogin   = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.stale_login", "当前登录或座位无效")
+	errRoomBusy     = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.busy", "牌桌已开始或暂时没有空桌")
+	errFunds        = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.insufficient_silver", "银子不足，不能准备")
+	errInvalidReply = errors.New("定海麻将收到无效的内部回包")
 )
 
 type roomPlayer struct {
@@ -59,6 +67,9 @@ func newDirectory() *directory {
 	d.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
 		joinCommand: d.handleJoin, readyCommand: d.handleReady,
 		snapshotCommand: d.handleSnapshot, leaveCommand: d.handleLeave,
+		discardCommand: d.handleDiscard, respondCommand: d.handleRespond,
+		selfWinCommand: d.handleSelfWin, kongCommand: d.handleKong,
+		passSelfCommand: d.handlePassSelf, trusteeCommand: d.handleTrustee,
 	})
 	return d
 }
@@ -155,7 +166,7 @@ func (d *directory) handleReady(self gsr.CommandContext, uid uint64, login strin
 	wallet, ok := value.(map[string]any)
 	amount, valid := wallet["amount"].(int64)
 	if !ok || !valid || wallet["user_id"] != uid {
-		return false, errInvalidTableAction
+		return false, errInvalidReply
 	}
 	if amount < minimumBalance {
 		return false, errFunds
@@ -213,7 +224,7 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *room, seat int) 
 	}
 	view, ok := value.(tableView)
 	if !ok {
-		return nil, errInvalidTableAction
+		return nil, errInvalidReply
 	}
 	reply["phase"] = "playing"
 	if view.Finished {
@@ -221,6 +232,27 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *room, seat int) 
 	}
 	reply["hand"] = wireTiles(view.Hand)
 	reply["active_seat"], reply["turn"], reply["window_id"] = int64(view.Active), view.Turn, view.WindowID
+	reply["server_ms"], reply["deadline_ms"] = time.Now().UnixMilli(), int64(0)
+	if !view.Deadline.IsZero() {
+		reply["deadline_ms"] = view.Deadline.UnixMilli()
+	}
+	discards, handCounts, trustees := make([]any, seatCount), make([]any, seatCount), make([]any, seatCount)
+	for seat := range seatCount {
+		discards[seat] = wireTiles(view.Out[seat])
+		handCounts[seat] = int64(view.HandCounts[seat])
+		trustees[seat] = view.Trustees[seat]
+	}
+	reply["discards"], reply["hand_counts"], reply["trustees"] = discards, handCounts, trustees
+	reply["window_tile"] = int64(view.WindowTile)
+	offers := make([]any, 0)
+	for action := eatRight; action <= claimHu; action++ {
+		if view.Offer.has(action) {
+			offers = append(offers, int64(action))
+		}
+	}
+	reply["offers"] = offers
+	reply["self_action"], reply["can_self_win"] = view.SelfAction, view.CanSelfWin
+	reply["concealed_kongs"], reply["added_kongs"] = wireTiles(view.ConcealedKongs), wireTiles(view.AddedKongs)
 	return reply, nil
 }
 
