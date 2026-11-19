@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/big"
 	"slices"
+	"time"
 )
 
 const wallSize = 144
@@ -23,6 +24,14 @@ type round struct {
 	hands     [seatCount][]byte
 	flowers   [seatCount][]byte
 	end       *roundEnd
+	out       [seatCount][]byte
+	melds     [seatCount][]meld
+	drawn     [seatCount]bool
+	winDetail [seatCount]winPoints
+	turn      uint64
+	windowID  uint64
+	window    *discardWindow
+	deadline  time.Time
 }
 
 type flowerReplacement struct {
@@ -124,6 +133,7 @@ func (g *round) drawActive() drawResult {
 	if drawn == 0 {
 		return drawResult{}
 	}
+	g.drawn[seat] = true
 	index := len(g.hands[seat])
 	g.hands[seat] = append(g.hands[seat], drawn)
 	changes := g.replaceFlowers(seat, index, nil)
@@ -142,7 +152,8 @@ func (g *round) replaceFlowers(seat, index int, changes []flowerReplacement) []f
 		}
 		g.flowers[seat] = append(g.flowers[seat], tile)
 		if len(g.flowers[seat]) == 8 {
-			g.end = &roundEnd{kind: eightFlowers, dealer: g.dealer, winners: []hu{{seat, 4}}}
+			g.end = &roundEnd{kind: eightFlowers, dealer: g.dealer, winners: []hu{{seat, 4}}, claims: g.claimCounts()}
+			g.winDetail[seat] = scoreWin(nil, nil, 0, winContext{kind: eightFlowers})
 		}
 		var replacement byte
 		if g.end == nil {
