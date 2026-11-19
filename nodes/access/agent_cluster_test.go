@@ -279,3 +279,45 @@ func TestAccessDhmjActionRequests(t *testing.T) {
 		t.Fatalf("业务拒绝后无法恢复牌桌：%v", got)
 	}
 }
+
+// TestAccessDhmjSettlementPushFiltersRecipient 保护本人结算经过真实 Cluster 和 WebSocket，只向当前桌的当前登录推送。
+func TestAccessDhmjSettlementPushFiltersRecipient(t *testing.T) {
+	gateAddress, backend, _ := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+
+	const balance int64 = 1<<54 + 30
+	const version uint64 = 1<<55 + 2
+	push := func(target any, table string, uid uint64, operationID string, fees any) {
+		t.Helper()
+		accessFixtureRPC(t, backend, 98, uint64(dhmjSettlementPushCommand), target, map[string]any{
+			"table_name": table,
+			"settlement": map[string]any{
+				"operation_id": operationID, "status": "committed", "user_id": uid,
+				"fee": fees, "paid": int64(10), "received": int64(0), "balance": balance, "version": version,
+			},
+		})
+	}
+	push("old-login", "dhmj-1", 7, "old-login", int64(50))
+	push(login, "another-table", 7, "old-table", int64(50))
+	push(login, "dhmj-1", 8, "another-user", int64(50))
+	push(login, "dhmj-1", 7, "bad-fee", nil)
+	push(login, "dhmj-1", 7, "round-1", int64(50))
+
+	response := readAccessEnvelope(t, client)
+	var body demopb.DhmjSettlementPush
+	if err := proto.Unmarshal(response.Payload, &body); err != nil || response.MsgId != uint32(demopb.MsgId_S2C_DHMJ_SETTLEMENT_PUSH) || response.RequestId != 0 {
+		t.Fatalf("没有收到麻将结算推送：%v %v", response, err)
+	}
+	silver := body.GetSettlement()
+	if body.GetTableName() != "dhmj-1" || silver.GetOperationId() != "round-1" || silver.GetUserId() != 7 ||
+		silver.GetFee() != 50 || silver.GetPaid() != 10 || silver.GetBalance() != balance || silver.GetVersion() != version {
+		t.Fatalf("收到错误的麻将回执：%v", &body)
+	}
+}

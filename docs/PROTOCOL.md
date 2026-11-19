@@ -128,6 +128,8 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应窗口和可选动作裁决。Respond 的动作编号见[麻将目录 RPC](#210-dhmj定海麻将凑桌与准备)。`ActionAck` 只确认当前请求，不附牌面或结算数据。请求超时后，可用 Snapshot 确认当前状态。
 
+Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将节点在本轮结算确认后发起推送的接线见[后续工作](DESIGN.md#11-后续工作)。
+
 ### 1.6 错误
 
 | 项目 | 当前约定 |
@@ -303,6 +305,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | landlord / 116 SettlementPush | `L, event map` | 转发本人的结算回执 | 1196 |
 | landlord / 117 TrusteePush | `L, event map` | 转发托管状态和操作时间 | 1197 |
 | landlord / 118 TurnPush | `L, event map` | 转发动画结束后的轮次开放 | 1198 |
+| 麻将结算接收端 / 119 DhmjSettlementPush | `L, payload map`，含 `table_name string, settlement map` | 核对当前登录、牌桌和回执 UserID，再转发 committed 回执 | 1396 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。

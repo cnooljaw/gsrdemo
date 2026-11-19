@@ -272,4 +272,10 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		Kind:       catalog.Request,
 		NewMessage: func() proto.Message { return &DhmjTrusteeRequest{} },
 	},
+	{
+		ID:         uint32(MsgId_S2C_DHMJ_SETTLEMENT_PUSH),
+		Direction:  catalog.ServerToClient,
+		Kind:       catalog.Push,
+		NewMessage: func() proto.Message { return &DhmjSettlementPush{} },
+	},
 }

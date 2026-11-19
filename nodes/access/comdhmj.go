@@ -44,7 +44,46 @@ func (game *comDhmj) ProtocolHandlers() map[uint32]any {
 	}
 }
 
-func (*comDhmj) CommandHandlers() map[runtime.CommandID]any { return nil }
+func (game *comDhmj) CommandHandlers() map[runtime.CommandID]any {
+	return map[runtime.CommandID]any{dhmjSettlementPushCommand: game.handleSettlementPush}
+}
+
+func (game *comDhmj) handleSettlementPush(_ gsr.CommandContext, login string, payload map[string]any) error {
+	identity := game.deps.Identity()
+	if identity.UserID == 0 || identity.LoginID != login || !game.Entered() {
+		return nil
+	}
+	table, ok := payload["table_name"].(string)
+	if !ok || table == "" {
+		return errInvalidBackendReply
+	}
+	if table != game.table {
+		return nil
+	}
+	settlement, ok := payload["settlement"].(map[string]any)
+	uid, uidOK := settlement["user_id"].(uint64)
+	if !ok || !uidOK || uid == 0 {
+		return errInvalidBackendReply
+	}
+	if uid != identity.UserID {
+		return nil
+	}
+	operationID, idOK := settlement["operation_id"].(string)
+	version, versionOK := settlement["version"].(uint64)
+	if !idOK || operationID == "" || settlement["status"] != "committed" || !versionOK || version == 0 {
+		return errInvalidBackendReply
+	}
+	for _, field := range [...]string{"fee", "paid", "received", "balance"} {
+		if amount, ok := settlement[field].(int64); !ok || amount < 0 {
+			return errInvalidBackendReply
+		}
+	}
+	message := &demopb.DhmjSettlementPush{}
+	if err := clientMessage(payload, message); err != nil {
+		return err
+	}
+	return game.deps.Push(uint32(demopb.MsgId_S2C_DHMJ_SETTLEMENT_PUSH), message)
+}
 
 func (game *comDhmj) onEnter(self gsr.CommandContext, reply protocol.Context, _ *demopb.DhmjEnterRequest) error {
 	if err := game.deps.AllowEnter(game.Name()); err != nil {
