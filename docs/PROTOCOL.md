@@ -143,7 +143,7 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 
 四人准备后发送 `1395 DhmjDealPush`，字段为 `table_name string, revision uint64, seat/dealer_seat/remaining int64, player_ids uint64[], hand int64[]`，`request_id` 为 0。`player_ids` 按 0～3 号座位排列，`seat` 表示接收者，`hand` 为本人 13 张起手牌。发牌是牌桌首条事件，先于补花和首摸。
 
-Access 已注册 `1397 DhmjTurnPush`，`request_id` 为 0。麻将节点的发送端见[后续工作](DESIGN.md#11-后续工作)。
+`1397 DhmjTurnPush` 在操作阶段、活动座位、窗口、截止时间或活动座位的操作权变化时发给同桌在线玩家，`request_id` 为 0。牌桌在一次推进的其他事件发出后发送最终生效的阶段。快照的 `operation_phase` 与此处的 `phase` 对应。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -332,7 +332,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 121 DhmjDrawPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `tile` | 1393 |
 | dhmj / 122 DhmjFlowerPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `replacements` | 1394 |
 | dhmj / 123 DhmjDealPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌、接收座位和名单中的本人身份，再转发本人起手牌 | 1395 |
-| 麻将轮次接收端 / 124 DhmjTurnPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌和接收座位，拒绝阶段或本人选项不一致的消息 | 1397 |
+| dhmj / 124 DhmjTurnPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌和接收座位，拒绝阶段或本人选项不一致的消息 | 1397 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
@@ -413,15 +413,15 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 | --- | --- | --- | --- |
 | 牌桌 → 目录 | Send 11 | `tableName, operationID string, receipt [4]roundSilver` | 按发送者 ServiceID 核对牌桌，转发在线玩家的本人回执并开始计算离线座位的重登窗口 |
 | 目录 Pulse → 目录 | Send 12 | 无 | 回收到期离线座位，重试关闭已空牌桌 |
-| 牌桌 → 目录 | Send 13 | `tableName string, event roundEvent` | 目录核对来源，转发发牌、出牌、摸牌或补花；暗牌只随本人消息发送 |
+| 牌桌 → 目录 | Send 13 | `tableName string, event roundEvent` | 目录核对来源，转发发牌、出牌、摸牌、补花和轮次；私有牌面和选项只随本人消息发送 |
 | 目录 → 牌桌 | Send 9 | 无 | 记录关闭意图，结算待记录清理完成后牌桌退出 |
 
 | 本人快照 | 字段 |
 | --- | --- |
 | 等待、进行中及结束 | `table_name string, seat int64, phase string, players list`。`players` 元素含 `user_id uint64, seat int64, ready bool` |
-| 开局后公开状态 | `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`。`discards/hand_counts/trustees` 分别按座位返回弃牌列表、暗手数量和托管标志。无对应窗口或截止时为 0 |
+| 开局后公开状态 | `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`。`discards/hand_counts/trustees` 分别按座位返回弃牌列表、暗手数量和托管标志。无对应窗口或截止时为 0。`operation_phase string, rob_kong bool` 与轮次推送的阶段和抢杠标记一致 |
 | 开局后公开副露与花牌 | `seat_tiles list` 按 0～3 号座位排列，每项含 `flowers list`、`melds list`。副露项含 `kind string, source_seat int64, tiles list`，种类为 `eat`、`pong`、`direct_kong`、`concealed_kong`、`added_kong`。暗杠牌值公开，来源为本人座位；补杠保留原碰的来源。牌值为 int64 |
-| 开局后本人状态 | `hand` 为本人暗手。`offers` 为本人尚未提交的窗口可选动作编号，有选项时也可过。`self_action/can_self_win bool` 表示本人可选自操作及能否自摸。`concealed_kongs/added_kongs` 为暗杠、补杠候选牌值。牌值和动作编号均为 int64 |
+| 开局后本人状态 | `hand` 为本人暗手。`offers` 为本人尚未提交的窗口可选动作编号，有选项时也可过。`self_action/can_self_win/can_discard bool` 表示本人能否自选、自摸或出牌。`concealed_kongs/added_kongs` 为暗杠、补杠候选牌值。牌值和动作编号均为 int64 |
 | 终局结算 | 可选 `settlement` map。已生成请求时返回 `operation_id/status string`。committed 时包含本人 `user_id uint64, fee/paid/received/balance int64, version uint64`。`paid` 与 `received` 只统计本局实际付款，手续费单列 |
 
 ## 3. 主要调用链

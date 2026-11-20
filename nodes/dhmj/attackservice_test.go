@@ -36,12 +36,13 @@ func TestTableSnapshotClonesSeatTiles(t *testing.T) {
 const testObserveCommand runtime.CommandID = 1
 
 type tableTestMain struct {
-	table        *attackService
-	id           runtime.ServiceID
-	done         chan error
-	discard      roundEvent
-	nextRevision uint64
-	discardTurn  uint64
+	table           *attackService
+	id              runtime.ServiceID
+	done            chan error
+	discard         roundEvent
+	initialRevision uint64
+	turnEvent       roundEvent
+	discardTurn     uint64
 }
 
 func (m *tableTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) error {
@@ -62,7 +63,7 @@ func (m *tableTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) er
 		return errors.New("庄家没有正确开局")
 	}
 	m.discardTurn = view.Turn
-	m.nextRevision = view.Revision + 1
+	m.initialRevision = view.Revision
 	if view.SelfAction {
 		m.discardTurn++ // 托管放弃自选窗口后才进入出牌轮次。
 	}
@@ -85,8 +86,12 @@ func (m *tableTestMain) OnStop(context.Context) error { return nil }
 
 func (m *tableTestMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
 	if cmd == tableEventCommand && self.Source() == m.id {
-		if event := args[1].(roundEvent); event.kind == discardEvent {
+		event := args[1].(roundEvent)
+		switch event.kind {
+		case discardEvent:
 			m.discard = event
+		case turnEvent:
+			m.turnEvent = event
 		}
 		return nil, nil
 	}
@@ -100,12 +105,13 @@ func (m *tableTestMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, a
 		return nil, err
 	}
 	view := value.(tableView)
-	if len(view.Out[0]) == 0 || m.discard.revision == 0 {
+	if len(view.Out[0]) == 0 || m.discard.revision == 0 || m.turnEvent.revision <= m.discard.revision {
 		_, err := self.After(100*time.Millisecond, testObserveCommand)
 		return nil, err
 	}
 	if view.Out[0][0] != 0x37 || !view.Trustees[0] || len(view.Hand) != view.HandCounts[1] ||
-		view.Revision < m.nextRevision || m.discard.revision != m.nextRevision ||
+		view.Revision != m.turnEvent.revision || m.turnEvent.operation.state.phase != view.OperationPhase ||
+		m.discard.revision <= m.initialRevision ||
 		m.discard.turn != m.discardTurn || m.discard.seat != 0 || m.discard.tile != 0x37 {
 		m.done <- errors.New("Pulse 未用托管推进，或快照含错误座位的手牌")
 	} else {

@@ -33,9 +33,13 @@ func (g *round) drawTurn(now time.Time) {
 	g.drawForTurn(now, false, g.active)
 }
 
+func (g *round) mayDiscard(seat int) bool {
+	return validSeat(seat) && seat == g.active && g.turn != 0 && g.end == nil &&
+		g.window == nil && !g.trustees[seat] && len(g.hands[seat])%3 == 2
+}
+
 func (g *round) discard(seat int, turn uint64, tile byte, now time.Time) bool {
-	if !validSeat(seat) || seat != g.active || turn == 0 || turn != g.turn || g.end != nil ||
-		g.window != nil || g.trustees[seat] || !now.Before(g.deadline) || len(g.hands[seat])%3 != 2 || tile >= 0x41 {
+	if !g.mayDiscard(seat) || turn != g.turn || !now.Before(g.deadline) || tile >= 0x41 {
 		return false
 	}
 	index := slices.Index(g.hands[seat], tile)

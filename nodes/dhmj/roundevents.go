@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"time"
 
 	"github.com/cnooljaw/gsr/runtime"
 	"github.com/cnooljaw/gsrdemo/common/rpc/accessagent"
@@ -14,11 +15,20 @@ const (
 	drawEvent
 	flowerEvent
 	dealEvent
+	turnEvent
 )
 
 type openingDeal struct {
 	dealer int
 	hands  [seatCount][]byte
+}
+
+type turnNotice struct {
+	state            turnState
+	serverMS         int64
+	offers           [seatCount]actionOptions
+	canWin           bool
+	concealed, added []byte
 }
 
 // roundEvent 保存状态变化当时的数据，按同一序号流在回合推进后发送。
@@ -30,6 +40,20 @@ type roundEvent struct {
 	flowers         []flowerReplacement
 	fromDraw        bool
 	deal            *openingDeal
+	operation       *turnNotice
+}
+
+func (g *round) recordTurn(state turnState, now time.Time) {
+	notice := &turnNotice{state: state, serverMS: now.UnixMilli()}
+	if state.phase == "respond" {
+		for seat := range seatCount {
+			notice.offers[seat] = g.offersFor(seat)
+		}
+	}
+	if state.self {
+		notice.canWin, notice.concealed, notice.added = g.selfOptions(state.active)
+	}
+	g.recordEvent(roundEvent{kind: turnEvent, operation: notice})
 }
 
 func (g *round) recordDeal() {
@@ -56,6 +80,21 @@ func (g *round) recordFlowers(seat int, flowers []flowerReplacement, fromDraw bo
 func (event roundEvent) wire(tableName string, recipient int) (runtime.CommandID, map[string]any) {
 	payload := map[string]any{"table_name": tableName, "revision": event.revision, "seat": int64(event.seat)}
 	switch event.kind {
+	case turnEvent:
+		n := event.operation
+		s := n.state
+		payload["seat"], payload["phase"], payload["active_seat"] = int64(recipient), s.phase, int64(s.active)
+		payload["turn"], payload["window_id"], payload["window_tile"], payload["rob_kong"] = s.turn, s.windowID, int64(s.windowTile), s.robKong
+		payload["server_ms"], payload["deadline_ms"] = n.serverMS, int64(0)
+		if !s.deadline.IsZero() {
+			payload["deadline_ms"] = s.deadline.UnixMilli()
+		}
+		payload["offers"] = wireOffers(n.offers[recipient])
+		if recipient == s.active {
+			payload["can_discard"], payload["can_self_win"] = s.discard, n.canWin
+			payload["concealed_kongs"], payload["added_kongs"] = wireTiles(n.concealed), wireTiles(n.added)
+		}
+		return accessagent.DhmjTurnPushCommand, payload
 	case dealEvent:
 		payload["seat"], payload["dealer_seat"] = int64(recipient), int64(event.deal.dealer)
 		payload["hand"], payload["remaining"] = wireTiles(event.deal.hands[recipient]), int64(event.remaining)

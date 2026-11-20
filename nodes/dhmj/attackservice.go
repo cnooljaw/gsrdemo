@@ -35,6 +35,7 @@ type attackService struct {
 	journal     settlementJournal
 	settlement  *roundSettlement
 	scoreFailed bool
+	lastTurn    turnState
 	name        string
 	directory   runtime.ServiceID
 	notified    bool
@@ -93,6 +94,8 @@ type tableView struct {
 	Revision                   uint64
 	WindowID                   uint64
 	WindowTile                 byte
+	OperationPhase             string
+	RobKong, CanDiscard        bool
 	Offer                      actionOptions
 	SelfAction                 bool
 	CanSelfWin                 bool
@@ -107,10 +110,13 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 		return tableView{}, errInvalidTableAction
 	}
 	game := &service.game
+	state := game.currentTurn()
 	view := tableView{
 		Hand: slices.Clone(game.hands[seat]), Trustees: game.trustees,
-		Active: game.active, Turn: game.turn, Revision: game.revision, Finished: game.end != nil,
-		SelfAction: game.end == nil && game.window == nil && game.selfPending && seat == game.active && !game.trustees[seat],
+		Active: state.active, Turn: state.turn, Revision: game.revision, Finished: state.phase == "finished",
+		OperationPhase: state.phase, WindowID: state.windowID, WindowTile: state.windowTile, RobKong: state.robKong,
+		Deadline: state.deadline, Offer: game.offersFor(seat),
+		SelfAction: state.self && seat == state.active, CanDiscard: state.discard && seat == state.active,
 	}
 	for i := range seatCount {
 		view.HandCounts[i] = len(game.hands[i])
@@ -122,37 +128,14 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 			meld.tiles = slices.Clone(meld.tiles)
 		}
 	}
-	if !view.Finished {
-		view.Deadline = game.dueAt()
-	} else if s := service.settlement; s != nil {
+	if s := service.settlement; view.Finished && s != nil {
 		view.Settlement = map[string]any{"operation_id": s.operation.ID, "status": "pending"}
 		if s.receipt != nil {
 			view.Settlement = s.receipt[seat].wire(s.operation.ID)
 		}
 	}
 	if view.SelfAction {
-		view.CanSelfWin = canHu(view.Hand)
-		var seen [256]bool
-		for _, tile := range view.Hand {
-			if tile >= 0x41 || seen[tile] {
-				continue
-			}
-			seen[tile] = true
-			if tileCount(view.Hand, tile) == 4 {
-				view.ConcealedKongs = append(view.ConcealedKongs, tile)
-			}
-			if game.pongIndex(seat, tile) >= 0 {
-				view.AddedKongs = append(view.AddedKongs, tile)
-			}
-		}
-	}
-	if game.window != nil {
-		view.WindowTile = game.window.tile
-		view.WindowID = game.windowID
-		view.Deadline = game.deadline
-		if game.window.choices[seat] == unanswered {
-			view.Offer = game.window.offers[seat]
-		}
+		view.CanSelfWin, view.ConcealedKongs, view.AddedKongs = game.selfOptions(seat)
 	}
 	return view, nil
 }
@@ -162,6 +145,11 @@ func (service *attackService) handleDiscard(self gsr.CommandContext, seat int, t
 }
 
 func (service *attackService) sendEvents(self gsr.ServiceContext) {
+	state := service.game.currentTurn()
+	if state != service.lastTurn {
+		service.game.recordTurn(state, time.Now())
+		service.lastTurn = state
+	}
 	for _, event := range service.game.events {
 		if service.directory == 0 {
 			break

@@ -286,13 +286,8 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 	reply["discards"], reply["hand_counts"], reply["trustees"] = discards, handCounts, trustees
 	reply["seat_tiles"] = seatTiles
 	reply["window_tile"] = int64(view.WindowTile)
-	offers := make([]any, 0)
-	for action := eatRight; action <= claimHu; action++ {
-		if view.Offer.has(action) {
-			offers = append(offers, int64(action))
-		}
-	}
-	reply["offers"] = offers
+	reply["offers"] = wireOffers(view.Offer)
+	reply["operation_phase"], reply["rob_kong"], reply["can_discard"] = view.OperationPhase, view.RobKong, view.CanDiscard
 	reply["self_action"], reply["can_self_win"] = view.SelfAction, view.CanSelfWin
 	reply["concealed_kongs"], reply["added_kongs"] = wireTiles(view.ConcealedKongs), wireTiles(view.AddedKongs)
 	return reply, nil

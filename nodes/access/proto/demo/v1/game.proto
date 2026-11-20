@@ -606,6 +606,9 @@ message DhmjSnapshot {
   DhmjSettlement settlement = 20;
   repeated DhmjSeatTiles seat_tiles = 21;
   uint64 revision = 22;
+  string operation_phase = 23;
+  bool rob_kong = 24;
+  bool can_discard = 25;
 }
 
 message DhmjPlayer {
