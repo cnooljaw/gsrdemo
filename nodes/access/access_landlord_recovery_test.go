@@ -76,7 +76,7 @@ func landlordProcessView(t *testing.T, client *accessClient, id demopb.MsgId, re
 	return view
 }
 
-func landlordRedis(t *testing.T, ctx context.Context, address string, args ...string) []byte {
+func accessProcessRedis(t *testing.T, ctx context.Context, address string, args ...string) []byte {
 	t.Helper()
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
@@ -202,7 +202,7 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 		var saved landlordSavedResult
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			data := landlordRedis(t, ctx, redisAddress, "HGET", accessRedisKey, operationID)
+			data := accessProcessRedis(t, ctx, redisAddress, "HGET", accessRedisKey, operationID)
 			if len(data) > 0 {
 				if err := json.Unmarshal(data, &saved); err != nil {
 					t.Fatal(err)
@@ -278,7 +278,7 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 		// 受控验收集中查 SQL，客户端不通过公开协议逐人查账。
 		accessWaitCommitted(t, ctx, db, operationID)
 		deadline = time.Now().Add(5 * time.Second)
-		for len(landlordRedis(t, ctx, redisAddress, "HGET", accessRedisKey, operationID)) > 0 {
+		for len(accessProcessRedis(t, ctx, redisAddress, "HGET", accessRedisKey, operationID)) > 0 {
 			if time.Now().After(deadline) {
 				t.Fatal("confirmed landlord pending was not cleared")
 			}

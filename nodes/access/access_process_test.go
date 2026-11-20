@@ -168,7 +168,7 @@ func startAccessProcess(t *testing.T, binary string, arguments []string, address
 
 // TestAccessThreeClientsLiveMySQL 保护三个不同账号并发进入同组、共享目标且各完成三次入账，余额/版本与逐锤结果一致。
 func TestAccessThreeClientsLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 3, 1, "mole")
+	runAccessClientsLiveMySQL(t, 3, 1, "mole", false)
 }
 
 type accessDemoPlayer struct {
@@ -178,7 +178,7 @@ type accessDemoPlayer struct {
 	output             bytes.Buffer
 }
 
-func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game string) {
+func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game string, settlementOutage bool) {
 	t.Helper()
 	if os.Getenv("GSRDEMO_ACCESS_PROCESSES") != "1" {
 		t.Skip("build all nodes/typeclient and set GSRDEMO_ACCESS_PROCESSES=1 for dedicated local databases")
@@ -341,6 +341,10 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 		}
 		process := startAccessProcess(t, binary, []string{"-config", path}, address)
 		processes[node] = accessNodeProcess{process: process, binary: binary, config: path, address: address}
+	}
+	if settlementOutage {
+		verifyDhmjSettlementOutage(t, ctx, gateAddress, players, settlementDB, &operationIDs, processes["settlement"], redisAddress)
+		return
 	}
 	clientPath, err := filepath.Abs("../../typeclient/dist/index.js")
 	if err != nil {
