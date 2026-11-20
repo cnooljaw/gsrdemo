@@ -126,6 +126,8 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 `DhmjSnapshot` 使用[麻将目录快照](#210-dhmj定海麻将凑桌与准备)的字段，`discards` 按座位组织，每座的牌放在 `tiles` 中。`hand` 只含本人暗手，`settlement` 也只带本人的资金结果。重登后通过 Enter 恢复原座，再使用 Snapshot 补场景。
 
+Access 已注册等待区推送 `1401 DhmjSeatPush`，字段为 `table_name string, revision/user_id uint64, seat int64, joined/ready bool`，`request_id` 为 0。`seat` 是发生变化的座位，`joined=false` 表示离座且 `ready=false`。麻将目录的发送端见[后续工作](DESIGN.md#11-后续工作)。
+
 Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应窗口和可选动作裁决。Respond 的动作编号见[麻将目录 RPC](#210-dhmj定海麻将凑桌与准备)。`ActionAck` 只确认当前请求，不附牌面或结算数据。请求超时后，可用 Snapshot 确认当前状态。
 
 Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将目录在结算确认后向各在线玩家发送本人回执。未收到推送时，可通过快照恢复结果。
@@ -344,6 +346,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 124 DhmjTurnPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌和接收座位，拒绝阶段或本人选项不一致的消息 | 1397 |
 | dhmj / 125 DhmjMeldPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发生效的副露 | 1398 |
 | dhmj / 126 DhmjRoundEndPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发完整终局裁决 | 1399 |
+| 麻将座位接收端 / 127 DhmjSeatPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发进桌、准备或离桌变化 | 1401 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。

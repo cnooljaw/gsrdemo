@@ -558,3 +558,41 @@ func TestAccessDhmjRulingPushes(t *testing.T) {
 		t.Fatalf("抢杠终局信息错误：%v", result)
 	}
 }
+
+// TestAccessDhmjSeatPush 保护等待区座位变化按当前路由转发，并过滤矛盾的离座状态。
+func TestAccessDhmjSeatPush(t *testing.T) {
+	gateAddress, backend, _ := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+	const uid uint64 = 1<<54 + 7
+	push := func(target any, table string, revision uint64, joined, ready bool) {
+		t.Helper()
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjSeatPushCommand), target, map[string]any{
+			"table_name": table, "revision": revision, "seat": int64(3), "user_id": uid, "joined": joined, "ready": ready,
+		})
+	}
+	push("old-login", "dhmj-1", 9, true, true)
+	push(login, "another-table", 9, true, true)
+	push(login, "dhmj-1", 9, false, true)
+	push(login, "dhmj-1", 10, true, true)
+	push(login, "dhmj-1", 11, false, false)
+	for _, expected := range []struct {
+		revision uint64
+		joined   bool
+	}{{10, true}, {11, false}} {
+		envelope := readAccessEnvelope(t, client)
+		var event demopb.DhmjSeatPush
+		err := proto.Unmarshal(envelope.Payload, &event)
+		if err != nil || envelope.MsgId != uint32(demopb.MsgId_S2C_DHMJ_SEAT_PUSH) || envelope.RequestId != 0 ||
+			event.GetTableName() != "dhmj-1" || event.GetRevision() != expected.revision || event.GetSeat() != 3 ||
+			event.GetUserId() != uid || event.GetJoined() != expected.joined || event.GetReady() != expected.joined {
+			t.Fatalf("错误的麻将座位推送：%v %v", &event, err)
+		}
+	}
+}

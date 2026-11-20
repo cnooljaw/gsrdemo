@@ -55,7 +55,26 @@ func (game *comDhmj) CommandHandlers() map[runtime.CommandID]any {
 		dhmjTurnPushCommand:       game.handleTurnPush,
 		dhmjMeldPushCommand:       game.handleMeldPush,
 		dhmjRoundEndPushCommand:   game.handleRoundEndPush,
+		dhmjSeatPushCommand:       game.handleSeatPush,
 	}
+}
+
+func (game *comDhmj) handleSeatPush(_ gsr.CommandContext, login string, payload map[string]any) error {
+	if matches, err := game.matchesEvent(login, payload); !matches || err != nil {
+		return err
+	}
+	revision, revisionOK := payload["revision"].(uint64)
+	seat, seatOK := payload["seat"].(int64)
+	uid, uidOK := payload["user_id"].(uint64)
+	joined, joinedOK := payload["joined"].(bool)
+	ready, readyOK := payload["ready"].(bool)
+	if !revisionOK || revision == 0 || !seatOK || seat < 0 || seat >= 4 || !uidOK || uid == 0 ||
+		!joinedOK || !readyOK || (!joined && ready) {
+		return errInvalidBackendReply
+	}
+	return game.deps.Push(uint32(demopb.MsgId_S2C_DHMJ_SEAT_PUSH), &demopb.DhmjSeatPush{
+		TableName: game.table, Revision: revision, Seat: seat, UserId: uid, Joined: joined, Ready: ready,
+	})
 }
 
 func (game *comDhmj) matchesEvent(login string, payload map[string]any) (bool, error) {

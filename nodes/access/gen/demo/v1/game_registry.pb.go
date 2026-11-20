@@ -320,4 +320,10 @@ var MessageCatalogDemoV1Game = []catalog.Entry{
 		Kind:       catalog.Push,
 		NewMessage: func() proto.Message { return &DhmjRoundEndPush{} },
 	},
+	{
+		ID:         uint32(MsgId_S2C_DHMJ_SEAT_PUSH),
+		Direction:  catalog.ServerToClient,
+		Kind:       catalog.Push,
+		NewMessage: func() proto.Message { return &DhmjSeatPush{} },
+	},
 }
