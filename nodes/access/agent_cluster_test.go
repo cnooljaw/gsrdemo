@@ -449,3 +449,55 @@ func TestAccessDhmjDealPush(t *testing.T) {
 		t.Fatalf("错误发牌信息：%v", &deal)
 	}
 }
+
+// TestAccessDhmjTurnPush 保护窗口、抢杠和轮次事件只转给当前座位，并拒绝错误的阶段或私有选项。
+func TestAccessDhmjTurnPush(t *testing.T) {
+	gateAddress, backend, _ := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+	push := func(seat int64, revision uint64, phase string, fields map[string]any) {
+		t.Helper()
+		payload := map[string]any{"table_name": "dhmj-1", "revision": revision, "seat": seat,
+			"phase": phase, "active_seat": int64(2), "turn": uint64(3), "server_ms": int64(100), "deadline_ms": int64(200)}
+		for key, value := range fields {
+			payload[key] = value
+		}
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjTurnPushCommand), login, payload)
+	}
+	read := func(phase string, revision uint64) *demopb.DhmjTurnPush {
+		t.Helper()
+		got := readAccessEnvelope(t, client)
+		var turn demopb.DhmjTurnPush
+		if err := proto.Unmarshal(got.Payload, &turn); err != nil || got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_TURN_PUSH) ||
+			got.RequestId != 0 || turn.GetPhase() != phase || turn.GetRevision() != revision {
+			t.Fatalf("错误的轮次推送：%v %v", got, err)
+		}
+		return &turn
+	}
+
+	response := map[string]any{"window_id": uint64(5), "window_tile": int64(0x14), "rob_kong": true, "offers": []any{int64(6), int64(7)}}
+	push(1, 9, "respond", response)
+	push(0, 9, "respond", nil)
+	push(0, 9, "self", map[string]any{"can_self_win": true})
+	push(0, 9, "respond", response)
+	window := read("respond", 9)
+	if window.GetWindowId() != 5 || !window.GetRobKong() || window.GetWindowTile() != 0x14 ||
+		window.GetDeadlineMs() != 200 || !reflect.DeepEqual(window.GetOffers(), []int64{6, 7}) {
+		t.Fatalf("抢杠窗口内容错误：%v", window)
+	}
+
+	push(0, 10, "self", map[string]any{"active_seat": int64(0), "can_self_win": true, "concealed_kongs": []any{int64(0x11)}})
+	if self := read("self", 10); !self.GetCanSelfWin() || !reflect.DeepEqual(self.GetConcealedKongs(), []int64{0x11}) {
+		t.Fatalf("本人自选动作未送达：%v", self)
+	}
+	push(0, 11, "discard", map[string]any{"active_seat": int64(0), "turn": uint64(4), "can_discard": true})
+	if next := read("discard", 11); next.GetWindowId() != 0 || !next.GetCanDiscard() || next.GetTurn() != 4 {
+		t.Fatalf("窗口关闭后没有恢复出牌：%v", next)
+	}
+}

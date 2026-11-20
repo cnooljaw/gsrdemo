@@ -143,6 +143,15 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 
 四人准备后发送 `1395 DhmjDealPush`，字段为 `table_name string, revision uint64, seat/dealer_seat/remaining int64, player_ids uint64[], hand int64[]`，`request_id` 为 0。`player_ids` 按 0～3 号座位排列，`seat` 表示接收者，`hand` 为本人 13 张起手牌。发牌是牌桌首条事件，先于补花和首摸。
 
+Access 已注册 `1397 DhmjTurnPush`，`request_id` 为 0。麻将节点的发送端见[后续工作](DESIGN.md#11-后续工作)。
+
+| 字段 | 含义 |
+| --- | --- |
+| `table_name/phase string, revision/turn uint64, seat/active_seat int64` | 同桌事件序号，接收者座位和当前活动座位。阶段为 `discard`（出牌）、`self`（自选）、`respond`（响应）或 `finished`（终局） |
+| `server_ms/deadline_ms int64` | 服务端当前时间与截止时间。终局截止时间为 0 |
+| `window_id uint64, window_tile int64, rob_kong bool` | 响应窗口编号、牌值及是否抢杠。窗口外为 0 或 false |
+| `offers/concealed_kongs/added_kongs int64[], can_self_win/can_discard bool` | 发给接收者本人的操作选项。响应用 `offers`，自摸和自杠候选仅在本人自选阶段提供 |
+
 ### 1.6 错误
 
 | 项目 | 当前约定 |
@@ -323,6 +332,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 121 DhmjDrawPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `tile` | 1393 |
 | dhmj / 122 DhmjFlowerPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `replacements` | 1394 |
 | dhmj / 123 DhmjDealPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌、接收座位和名单中的本人身份，再转发本人起手牌 | 1395 |
+| 麻将轮次接收端 / 124 DhmjTurnPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌和接收座位，拒绝阶段或本人选项不一致的消息 | 1397 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
