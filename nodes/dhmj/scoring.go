@@ -31,6 +31,7 @@ type roundEnd struct {
 	kind       endKind
 	dealer     int
 	source     int // 点炮、被抢补杠或供直杠的座位
+	tile       byte
 	robbedKong bool
 	winners    []hu
 	claims     [seatCount][seatCount]int // claims[A][B] 是 A 从 B 取得的副露数

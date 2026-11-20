@@ -22,6 +22,9 @@ func TestAddedKongWaitsForRob(t *testing.T) {
 		g.remaining() != 1 || g.winDetail[1].robKong != 1 || !slices.Equal(g.hands[0], []byte{9}) {
 		t.Fatal("抢杠终局未保留原碰或误摸补牌")
 	}
+	if len(g.events) != 0 || g.end.tile != 5 {
+		t.Fatalf("抢杠错误地广播副露变更或丢失胡牌张：%+v", g.events)
+	}
 }
 
 // TestAddedKongAllPass 保护抢杠超时都过后升级原副露、保留供牌者并且只补摸一次。
@@ -35,6 +38,10 @@ func TestAddedKongAllPass(t *testing.T) {
 		g.melds[0][0].action != addedKong || g.melds[0][0].source != 2 || len(g.melds[0][0].tiles) != 4 ||
 		g.expireResponse(now.Add(responsePeriod)) {
 		t.Fatalf("补杠超时落地失败：%+v", g)
+	}
+	if len(g.events) != 2 || g.events[0].kind != meldEvent || g.events[0].meld.index != 0 ||
+		g.events[0].meld.value.action != addedKong || g.events[0].meld.value.source != 2 || g.events[1].kind != drawEvent {
+		t.Fatalf("补杠未先更新原碰位置再补牌：%+v", g.events)
 	}
 }
 
@@ -54,8 +61,8 @@ func TestConcealedKongAndSelfHu(t *testing.T) {
 		!slices.Equal(g.hands[1], []byte{0x34, 0x34}) {
 		t.Fatal("杠后自摸没有正确结局或改变了摊牌暗手")
 	}
-	if len(g.events) != 1 || g.events[0].kind != drawEvent || g.events[0].seat != 1 ||
-		g.events[0].tile != 0x34 || g.events[0].turn != g.turn {
+	if len(g.events) != 2 || g.events[0].kind != meldEvent || g.events[1].kind != drawEvent || g.events[1].seat != 1 ||
+		g.events[1].tile != 0x34 || g.events[1].turn != g.turn {
 		t.Fatalf("暗杠后的补牌事件错误：%+v", g.events)
 	}
 }
@@ -71,8 +78,8 @@ func TestDirectKongBloomKeepsProvider(t *testing.T) {
 		t.Fatal("直杠开花未保留正确的供杠座位")
 	}
 	got, err := roundPayments(roomScore{tier: 5, base: 100}, *g.end)
-	if len(g.events) != 2 || g.events[0].kind != discardEvent || g.events[1].kind != drawEvent ||
-		g.events[1].seat != 1 || g.events[1].revision != g.events[0].revision+1 {
+	if len(g.events) != 3 || g.events[0].kind != discardEvent || g.events[1].kind != meldEvent || g.events[2].kind != drawEvent ||
+		g.events[1].meld.value.source != 0 || g.events[2].seat != 1 || g.events[2].revision != g.events[0].revision+2 {
 		t.Fatalf("直杠补牌事件未接在弃牌之后：%+v", g.events)
 	}
 	if err != nil || !slices.Equal(got, []payment{{0, 1, 2500}}) {

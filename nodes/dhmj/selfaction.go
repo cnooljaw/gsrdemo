@@ -63,7 +63,7 @@ func (g *round) selfWin(seat int, turn uint64, now time.Time) bool {
 		kind = kongFlower
 	}
 	point := g.recordWin(seat, hand, g.lastDraw, g.winds[seat], kind, g.kongBloom, false)
-	g.end = &roundEnd{kind: kind, dealer: g.dealer, source: g.kongProvider, winners: []hu{{seat, point}}, claims: g.claimCounts()}
+	g.end = &roundEnd{kind: kind, dealer: g.dealer, source: g.kongProvider, tile: g.lastDraw, winners: []hu{{seat, point}}, claims: g.claimCounts()}
 	g.selfPending = false
 	g.deadline = time.Time{}
 	return true
@@ -100,6 +100,7 @@ func (g *round) declareKong(seat int, turn uint64, tile byte, now time.Time) boo
 			g.removeFromHand(seat, tile)
 		}
 		g.melds[seat] = append(g.melds[seat], meld{concealedKong, seat, []byte{tile, tile, tile, tile}})
+		g.recordMeld(seat, len(g.melds[seat])-1)
 		g.deadline = time.Time{}
 		g.drawForTurn(now, true, seat)
 		return true
@@ -130,10 +131,12 @@ func (g *round) pongIndex(seat int, tile byte) int {
 }
 
 func (g *round) completeAddedKong(w discardWindow, now time.Time) {
-	m := &g.melds[w.source][g.pongIndex(w.source, w.tile)]
+	index := g.pongIndex(w.source, w.tile)
+	m := &g.melds[w.source][index]
 	g.removeFromHand(w.source, w.tile)
 	m.action = addedKong
 	m.tiles = append(m.tiles, w.tile)
+	g.recordMeld(w.source, index)
 	g.drawForTurn(now, true, w.source)
 }
 

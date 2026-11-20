@@ -23,17 +23,17 @@ type reclaimFixture struct {
 	settled chan struct{}
 }
 
-func (f *reclaimFixture) OnStart(ctx context.Context, self gsr.ServiceContext) error {
-	if err := f.directory.OnStart(ctx, self); err != nil {
-		return err
-	}
-	f.attack.name, f.attack.directory = f.table.name, self.Self()
-	id, err := self.CreateService(ctx, f.attack)
-	f.table.service = id
-	return err
-}
+const testStartReclaimTableCommand runtime.CommandID = 100
 
 func (f *reclaimFixture) Handle(self gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
+	if cmd == testStartReclaimTableCommand {
+		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		defer cancel()
+		f.attack.name, f.attack.directory = f.table.name, self.Self()
+		id, err := self.CreateService(ctx, f.attack)
+		f.table.service = id
+		return nil, err
+	}
 	value, err := f.directory.Handle(self, cmd, args...)
 	if err == nil && cmd == tableSettledCommand {
 		close(f.settled)
@@ -48,7 +48,7 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 		1: "new", 2: "new", 3: "new", 4: "new",
 	}})
 	pushes := make(chan []any, seatCount)
-	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{command: accessagent.DhmjSettlementPushCommand, received: pushes})
+	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{command: accessagent.DhmjSettlementPushCommand, received: pushes, includeRoundEnd: true})
 	d := newDirectory(defaultRoomRules, settlementJournal{})
 	var oldTable *table
 	var users [seatCount]uint64
@@ -101,10 +101,26 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			if _, err := self.Call(ctx, id, testStartReclaimTableCommand); err != nil {
+				return err
+			}
 			select {
 			case <-f.settled:
 			case <-ctx.Done():
 				return ctx.Err()
+			}
+			for _, seat := range []int{0, seatCount - 1} {
+				want := []any{fmt.Sprintf("current-%d", users[seat]), map[string]any{
+					"table_name": oldName, "revision": uint64(1), "round_end": end.wire(),
+				}}
+				select {
+				case got := <-pushes:
+					if !reflect.DeepEqual(got, want) {
+						return fmt.Errorf("终局裁决没有先于资金回执发出：%v", got)
+					}
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 			for _, seat := range []int{0, seatCount - 1} {
 				want := []any{fmt.Sprintf("current-%d", users[seat]), map[string]any{
@@ -129,6 +145,9 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 				silver, _ := snapshot["settlement"].(map[string]any)
 				if snapshot["table_name"] != oldName || silver["status"] != "committed" || silver["user_id"] != uid {
 					return fmt.Errorf("重登未返回原桌的本人结算：%v", snapshot)
+				}
+				if !reflect.DeepEqual(snapshot["round_end"], end.wire()) {
+					return fmt.Errorf("重登未恢复终局裁决：%v", snapshot["round_end"])
 				}
 				// 第一座离开后，其副露和花牌仍是本局的公开牌面。
 				areas, _ := snapshot["seat_tiles"].([]any)

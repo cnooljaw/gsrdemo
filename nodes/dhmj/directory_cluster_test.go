@@ -109,9 +109,10 @@ func startDirectoryFixture(t *testing.T, routes map[cluster.NodeID]string, node 
 
 type agentPushSink struct {
 	directoryBackend
-	command  runtime.CommandID
-	received chan []any
-	deals    chan []any
+	command         runtime.CommandID
+	received        chan []any
+	deals           chan []any
+	includeRoundEnd bool
 }
 
 func (s agentPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
@@ -119,7 +120,7 @@ func (s agentPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args 
 		s.deals <- args
 		return nil, nil
 	}
-	if cmd != s.command {
+	if cmd != s.command && !(s.includeRoundEnd && cmd == accessagent.DhmjRoundEndPushCommand) {
 		return nil, runtime.ErrUnknownCommand
 	}
 	s.received <- args

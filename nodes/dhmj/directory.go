@@ -260,6 +260,7 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 	reply["phase"] = "playing"
 	if view.Finished {
 		reply["phase"] = "finished"
+		reply["round_end"] = view.RoundEnd
 	}
 	if view.Settlement != nil {
 		reply["settlement"] = view.Settlement

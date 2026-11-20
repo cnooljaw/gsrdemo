@@ -103,6 +103,7 @@ type tableView struct {
 	Finished                   bool
 	Deadline                   time.Time
 	Settlement                 map[string]any
+	RoundEnd                   map[string]any
 }
 
 func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (tableView, error) {
@@ -128,6 +129,9 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 			meld.tiles = slices.Clone(meld.tiles)
 		}
 	}
+	if view.Finished {
+		view.RoundEnd = game.end.wire()
+	}
 	if s := service.settlement; view.Finished && s != nil {
 		view.Settlement = map[string]any{"operation_id": s.operation.ID, "status": "pending"}
 		if s.receipt != nil {
@@ -147,6 +151,9 @@ func (service *attackService) handleDiscard(self gsr.CommandContext, seat int, t
 func (service *attackService) sendEvents(self gsr.ServiceContext) {
 	state := service.game.currentTurn()
 	if state != service.lastTurn {
+		if state.phase == "finished" && service.lastTurn.phase != "finished" {
+			service.game.recordRoundEnd()
+		}
 		service.game.recordTurn(state, time.Now())
 		service.lastTurn = state
 	}

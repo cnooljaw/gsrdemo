@@ -16,6 +16,8 @@ const (
 	flowerEvent
 	dealEvent
 	turnEvent
+	meldEvent
+	roundEndEvent
 )
 
 type openingDeal struct {
@@ -41,6 +43,41 @@ type roundEvent struct {
 	fromDraw        bool
 	deal            *openingDeal
 	operation       *turnNotice
+	meld            *meldChange
+	end             *roundEnd
+}
+
+type meldChange struct {
+	index int
+	value meld
+}
+
+func (g *round) recordMeld(seat, index int) {
+	value := g.melds[seat][index]
+	value.tiles = slices.Clone(value.tiles)
+	g.recordEvent(roundEvent{kind: meldEvent, seat: seat, meld: &meldChange{index: index, value: value}})
+}
+
+func (g *round) recordRoundEnd() {
+	end := *g.end
+	end.winners = slices.Clone(end.winners)
+	g.recordEvent(roundEvent{kind: roundEndEvent, end: &end})
+}
+
+func (end roundEnd) wire() map[string]any {
+	kinds := [...]string{draw: "draw", discardHu: "discard_hu", selfHu: "self_hu", kongFlower: "kong_flower", eightFlowers: "eight_flowers"}
+	winners := make([]any, 0, len(end.winners))
+	for _, winner := range end.winners {
+		winners = append(winners, map[string]any{"seat": int64(winner.seat), "point": int64(winner.point)})
+	}
+	payload := map[string]any{"kind": kinds[end.kind], "rob_kong": end.robbedKong, "winners": winners}
+	if end.kind == discardHu || end.kind == kongFlower {
+		payload["source_seat"] = int64(end.source)
+	}
+	if end.tile != 0 {
+		payload["tile"] = int64(end.tile)
+	}
+	return payload
 }
 
 func (g *round) recordTurn(state turnState, now time.Time) {
@@ -80,6 +117,13 @@ func (g *round) recordFlowers(seat int, flowers []flowerReplacement, fromDraw bo
 func (event roundEvent) wire(tableName string, recipient int) (runtime.CommandID, map[string]any) {
 	payload := map[string]any{"table_name": tableName, "revision": event.revision, "seat": int64(event.seat)}
 	switch event.kind {
+	case meldEvent:
+		payload["meld_index"], payload["meld"] = int64(event.meld.index), event.meld.value.wire()
+		return accessagent.DhmjMeldPushCommand, payload
+	case roundEndEvent:
+		delete(payload, "seat")
+		payload["round_end"] = event.end.wire()
+		return accessagent.DhmjRoundEndPushCommand, payload
 	case turnEvent:
 		n := event.operation
 		s := n.state

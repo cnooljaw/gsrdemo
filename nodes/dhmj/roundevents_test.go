@@ -113,3 +113,18 @@ func TestTurnNoticeAfterResponseTimeout(t *testing.T) {
 		t.Fatalf("超时后未推送实际出牌阶段：%v", payload)
 	}
 }
+
+// TestRoundEndEventIncludesAllWinningSeats 保护一炮多响一次公布所有赢家并保留胡牌张。
+func TestRoundEndEventIncludesAllWinningSeats(t *testing.T) {
+	g := round{hands: [4][]byte{nil, {3, 4, 7, 7}, nil, {6, 7, 9, 9}}}
+	g.finishDiscardHu(discardWindow{source: 0, tile: 5}, []response{{seat: 1, action: claimHu}, {seat: 3, action: claimHu}})
+	g.recordRoundEnd()
+	command, payload := g.events[0].wire("table", 0)
+	result := payload["round_end"].(map[string]any)
+	winners := result["winners"].([]any)
+	if command != accessagent.DhmjRoundEndPushCommand || result["kind"] != "discard_hu" ||
+		result["source_seat"] != int64(0) || result["tile"] != int64(5) || len(winners) != 2 ||
+		winners[0].(map[string]any)["seat"] != int64(1) || winners[1].(map[string]any)["seat"] != int64(3) {
+		t.Fatalf("一炮多响事件错误：%v", payload)
+	}
+}

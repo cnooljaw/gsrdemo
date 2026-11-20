@@ -158,6 +158,7 @@ func (g *round) takeDiscard(w discardWindow, chosen response, now time.Time) {
 	tiles := append(used, w.tile)
 	slices.Sort(tiles)
 	g.melds[seat] = append(g.melds[seat], meld{chosen.action, w.source, tiles})
+	g.recordMeld(seat, len(g.melds[seat])-1)
 	g.active = seat
 	var flowers []flowerReplacement
 	if !g.drawn[seat] {
@@ -192,7 +193,7 @@ func (g *round) claimCounts() (claims [seatCount][seatCount]int) {
 }
 
 func (g *round) finishDiscardHu(w discardWindow, actions []response) {
-	end := roundEnd{kind: discardHu, dealer: g.dealer, source: w.source, robbedKong: w.robKong, claims: g.claimCounts()}
+	end := roundEnd{kind: discardHu, dealer: g.dealer, source: w.source, tile: w.tile, robbedKong: w.robKong, claims: g.claimCounts()}
 	if w.robKong {
 		g.removeFromHand(w.source, w.tile)
 	}
