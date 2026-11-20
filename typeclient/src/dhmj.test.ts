@@ -5,8 +5,8 @@ import type { DemoClient } from "./client.js";
 import { runDhmj } from "./dhmj.js";
 import { DhmjScene, type DhmjEvent } from "./dhmj_state.js";
 import {
-  DhmjDiscardPushSchema, DhmjDiscardRequestSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
-  DhmjRoundEndPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTurnPushSchema, MsgId,
+  DhmjDealPushSchema, DhmjDiscardPushSchema, DhmjDiscardRequestSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
+  DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTurnPushSchema, MsgId,
 } from "./gen/demo/v1/game_pb.js";
 
 function sceneSnapshot() {
@@ -15,6 +15,29 @@ function sceneSnapshot() {
     players: [{ userId: 7n, seat: 0n }], discards: [{}, {}, {}, {}],
   });
 }
+
+test("麻将等待区按序应用进桌、准备和离桌，发牌沿用同一序号", () => {
+  const scene = new DhmjScene(() => {});
+  const pushSeat = (revision: bigint, joined: boolean, ready: boolean) => scene.accept({
+    kind: "seat", value: create(DhmjSeatPushSchema, { tableName: "table", revision, seat: 1n, userId: 8n, joined, ready }),
+  });
+  pushSeat(2n, true, false);
+  scene.restore(create(DhmjSnapshotSchema, {
+    tableName: "table", phase: "waiting", seat: 0n, revision: 1n, players: [{ userId: 7n, seat: 0n }],
+  }));
+  assert.deepEqual(scene.view?.players.map(p => p.userId), [7n, 8n]);
+  pushSeat(3n, true, true);
+  assert.equal(scene.view?.players[1]?.ready, true);
+  pushSeat(4n, false, false);
+  pushSeat(3n, true, true);
+  assert.deepEqual(scene.view?.players.map(p => p.userId), [7n]);
+  scene.accept({ kind: "deal", value: create(DhmjDealPushSchema, {
+    tableName: "table", revision: 5n, seat: 0n, playerIds: [7n, 9n, 10n, 11n], hand: [1n, 2n],
+  }) });
+  assert.equal(scene.view?.phase, "playing");
+  assert.equal(scene.view?.revision, 5n);
+  assert.equal(scene.needsSync, false);
+});
 
 test("麻将缺号时恢复快照并接续较新的摸牌和轮次", () => {
   const scene = new DhmjScene(() => {});

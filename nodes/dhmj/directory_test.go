@@ -10,21 +10,21 @@ func TestDirectoryKeepsSeatOnRejoin(t *testing.T) {
 	d := newDirectory(defaultRoomRules, settlementJournal{})
 	var table *table
 	for uid := uint64(1); uid <= 4; uid++ {
-		joined, seat, err := d.seatPlayer(uid, "login")
+		joined, seat, _, err := d.seatPlayer(uid, "login")
 		if err != nil || seat != int(uid-1) || (table != nil && joined != table) {
 			t.Fatalf("四人未正确凑桌：%v %d %v", joined, seat, err)
 		}
 		table = joined
 	}
 	table.players[1].ready = true
-	joined, seat, err := d.seatPlayer(2, "new")
+	joined, seat, _, err := d.seatPlayer(2, "new")
 	if err != nil || joined != table || seat != 1 || !joined.players[1].ready {
 		t.Fatal("重登改变了座位或准备状态")
 	}
 	if _, _, err := d.currentSeat(2, "login"); err == nil {
 		t.Fatal("旧登录仍可操作新成员")
 	}
-	if next, _, err := d.seatPlayer(5, "login"); err != nil || next == table {
+	if next, _, _, err := d.seatPlayer(5, "login"); err != nil || next == table {
 		t.Fatal("满桌仍被选入")
 	}
 }
@@ -32,8 +32,8 @@ func TestDirectoryKeepsSeatOnRejoin(t *testing.T) {
 // TestWaitingLeaveReleasesSeat 保护等候中离开立即放位，整桌空后删除目录。
 func TestWaitingLeaveReleasesSeat(t *testing.T) {
 	d := newDirectory(defaultRoomRules, settlementJournal{})
-	table, _, _ := d.seatPlayer(1, "old")
-	if _, _, err := d.seatPlayer(1, "new"); err != nil {
+	table, _, _, _ := d.seatPlayer(1, "old")
+	if _, _, _, err := d.seatPlayer(1, "new"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.handleLeave(nil, 1, "old"); err == nil {
@@ -47,8 +47,8 @@ func TestWaitingLeaveReleasesSeat(t *testing.T) {
 // TestSettledTableKeepsDisconnectedSeatsUntilDeadline 保护结算前后的重登期限，以及旧登录和重复离开不会误删座位。
 func TestSettledTableKeepsDisconnectedSeatsUntilDeadline(t *testing.T) {
 	d := newDirectory(defaultRoomRules, settlementJournal{})
-	table, _, _ := d.seatPlayer(1, "old")
-	if _, _, err := d.seatPlayer(2, "second"); err != nil {
+	table, _, _, _ := d.seatPlayer(1, "old")
+	if _, _, _, err := d.seatPlayer(2, "second"); err != nil {
 		t.Fatal(err)
 	}
 	table.service = 42
@@ -68,7 +68,7 @@ func TestSettledTableKeepsDisconnectedSeatsUntilDeadline(t *testing.T) {
 	if d.routes[1] != table {
 		t.Fatal("重复离开缩短了重登窗口")
 	}
-	if joined, _, err := d.seatPlayer(1, "new"); err != nil || joined != table {
+	if joined, _, _, err := d.seatPlayer(1, "new"); err != nil || joined != table {
 		t.Fatalf("窗口内未回到原桌：%v", err)
 	}
 	if _, err := d.handleLeave(nil, 1, "old"); err == nil {

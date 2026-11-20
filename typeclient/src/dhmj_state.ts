@@ -2,12 +2,13 @@ import { create, fromBinary } from "@bufbuild/protobuf";
 import type { Envelope } from "./gen/gsr/common/v1/common_pb.js";
 import {
   DhmjDealPushSchema, DhmjDiscardPushSchema, DhmjDiscardsSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
-  DhmjMeldPushSchema, DhmjPlayerSchema, DhmjRoundEndPushSchema, DhmjSettlementPushSchema, DhmjTurnPushSchema, MsgId,
+  DhmjMeldPushSchema, DhmjPlayerSchema, DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjTurnPushSchema, MsgId,
   type DhmjDealPush, type DhmjDiscardPush, type DhmjDrawPush, type DhmjFlowerPush, type DhmjMeldPush,
-  type DhmjRoundEndPush, type DhmjSettlementPush, type DhmjSnapshot, type DhmjTurnPush,
+  type DhmjRoundEndPush, type DhmjSeatPush, type DhmjSettlementPush, type DhmjSnapshot, type DhmjTurnPush,
 } from "./gen/demo/v1/game_pb.js";
 
 type SequencedEvent =
+  | { kind: "seat"; value: DhmjSeatPush }
   | { kind: "deal"; value: DhmjDealPush }
   | { kind: "discard"; value: DhmjDiscardPush }
   | { kind: "draw"; value: DhmjDrawPush }
@@ -19,6 +20,7 @@ export type DhmjEvent = SequencedEvent | { kind: "settlement"; value: DhmjSettle
 
 export function decodeDhmjEvent(frame: Envelope): DhmjEvent | undefined {
   switch (frame.msgId) {
+    case MsgId.S2C_DHMJ_SEAT_PUSH: return { kind: "seat", value: fromBinary(DhmjSeatPushSchema, frame.payload) };
     case MsgId.S2C_DHMJ_DEAL_PUSH: return { kind: "deal", value: fromBinary(DhmjDealPushSchema, frame.payload) };
     case MsgId.S2C_DHMJ_DISCARD_PUSH: return { kind: "discard", value: fromBinary(DhmjDiscardPushSchema, frame.payload) };
     case MsgId.S2C_DHMJ_DRAW_PUSH: return { kind: "draw", value: fromBinary(DhmjDrawPushSchema, frame.payload) };
@@ -36,8 +38,17 @@ function removeTile(hand: bigint[], tile: bigint): void {
   hand.splice(index, 1);
 }
 
-// 演示客户端维护暗手、弃牌堆、操作权及庄家和牌墙余量。
+// 演示客户端按序更新等待区座位、暗手、弃牌堆和操作权。
 function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
+  if (event.kind === "seat") {
+    const { revision, seat, userId, joined, ready } = event.value;
+    if (view.phase !== "waiting") throw new Error("麻将座位事件与当前阶段不一致");
+    const players = view.players.filter(player => player.seat !== seat);
+    if (joined) players.push(create(DhmjPlayerSchema, { seat, userId, ready }));
+    view.players = players.sort((a, b) => Number(a.seat - b.seat));
+    view.revision = revision;
+    return;
+  }
   const ownHand = [...view.hand];
   if (event.kind !== "turn") {
     view.canDiscard = false;

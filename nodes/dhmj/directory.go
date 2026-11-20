@@ -63,6 +63,7 @@ type tablePlayer struct {
 type table struct {
 	name      string
 	players   [seatCount]tablePlayer
+	revision  uint64 // 等待区序号，开局后由牌桌继续递增。
 	service   runtime.ServiceID
 	settledAt time.Time
 }
@@ -119,22 +120,25 @@ func (d *directory) handleJoin(self gsr.CommandContext, uid uint64, login, acces
 	if !ok || location["login_id"] != login || location["access_node"] != access || location["agent_name"] != agent {
 		return nil, errStaleLogin
 	}
-	table, seat, err := d.seatPlayer(uid, login)
+	table, seat, joined, err := d.seatPlayer(uid, login)
 	if err != nil {
 		return nil, err
 	}
 	table.players[seat].access, table.players[seat].agent = cluster.NodeID(access), cluster.ServiceName(agent)
+	if joined {
+		table.pushSeat(self, seat, uid, true, false, uid)
+	}
 	return d.snapshotFor(self, table, seat)
 }
 
-func (d *directory) seatPlayer(uid uint64, login string) (*table, int, error) {
+func (d *directory) seatPlayer(uid uint64, login string) (*table, int, bool, error) {
 	if table := d.routes[uid]; table != nil {
 		d.expireSeats(table, time.Now())
 		for seat, member := range table.players {
 			if member.uid == uid {
 				table.players[seat].login = login
 				table.players[seat].connected = true
-				return table, seat, nil
+				return table, seat, false, nil
 			}
 		}
 	}
@@ -146,18 +150,18 @@ func (d *directory) seatPlayer(uid uint64, login string) (*table, int, error) {
 			if member.uid == 0 {
 				table.players[seat] = tablePlayer{uid: uid, login: login, connected: true}
 				d.routes[uid] = table
-				return table, seat, nil
+				return table, seat, true, nil
 			}
 		}
 	}
 	if len(d.tables) >= maxTables {
-		return nil, -1, errTableBusy
+		return nil, -1, false, errTableBusy
 	}
 	d.nextTable++
 	table := &table{name: fmt.Sprintf("dhmj-%d", d.nextTable)}
 	table.players[0] = tablePlayer{uid: uid, login: login, connected: true}
 	d.tables[table.name], d.routes[uid] = table, table
-	return table, 0, nil
+	return table, 0, true, nil
 }
 
 func (d *directory) currentSeat(uid uint64, login string) (*table, int, error) {
@@ -200,6 +204,7 @@ func (d *directory) handleReady(self gsr.CommandContext, uid uint64, login strin
 	for i, player := range table.players {
 		if i != seat && !player.ready {
 			table.players[seat].ready = true
+			table.pushSeat(self, seat, uid, true, true, 0)
 			return true, nil
 		}
 	}
@@ -213,6 +218,8 @@ func (d *directory) handleReady(self gsr.CommandContext, uid uint64, login strin
 	}
 	service.rules, service.journal = d.rules, d.journal
 	service.name, service.directory = table.name, self.Self()
+	// 预留最后一位玩家的准备事件，创建成功后才发布。
+	service.game.revision = table.revision + 1
 	for i, player := range table.players {
 		service.users[i] = player.uid
 	}
@@ -224,6 +231,7 @@ func (d *directory) handleReady(self gsr.CommandContext, uid uint64, login strin
 	}
 	table.players[seat].ready = true
 	table.service = id
+	table.pushSeat(self, seat, uid, true, true, 0)
 	return true, nil
 }
 
@@ -245,6 +253,7 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 	reply := map[string]any{"table_name": table.name, "seat": int64(seat), "players": members}
 	if table.service == 0 {
 		reply["phase"] = "waiting"
+		reply["revision"] = table.revision
 		return reply, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
@@ -340,11 +349,30 @@ func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login strin
 			table.players[seat].access, table.players[seat].agent = "", ""
 		} else {
 			d.releaseSeat(table, seat)
+			if table.service == 0 {
+				table.pushSeat(self, seat, uid, false, false, 0)
+			}
 			d.closeEmptyTable(self, table)
 		}
 		return true, nil
 	}
 	return false, errStaleLogin
+}
+
+func (table *table) pushSeat(self gsr.CommandContext, seat int, uid uint64, joined, ready bool, skipUID uint64) {
+	table.revision++
+	payload := map[string]any{
+		"table_name": table.name, "revision": table.revision, "seat": int64(seat),
+		"user_id": uid, "joined": joined, "ready": ready,
+	}
+	for _, player := range table.players {
+		if !player.connected || player.uid == skipUID || player.access == "" || player.agent == "" {
+			continue
+		}
+		if err := self.Cluster().Send(player.access, player.agent, accessagent.DhmjSeatPushCommand, player.login, payload); err != nil {
+			_ = self.Logger().Error("定海麻将座位推送未接纳", "table_name", table.name, "revision", table.revision, "user_id", player.uid, "error", err.Error())
+		}
+	}
 }
 
 func (d *directory) handleTableEvent(self gsr.CommandContext, name string, event roundEvent) error {

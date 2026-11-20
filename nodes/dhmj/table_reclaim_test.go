@@ -55,7 +55,7 @@ func TestSettledTableClosesAfterRejoinAndLeave(t *testing.T) {
 	for i := range users {
 		uid := uint64(i + 1)
 		users[i] = uid
-		joined, seat, err := d.seatPlayer(uid, "old")
+		joined, seat, _, err := d.seatPlayer(uid, "old")
 		if err != nil || seat != i {
 			t.Fatalf("无法准备原桌：%v", err)
 		}

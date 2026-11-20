@@ -126,13 +126,13 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 `DhmjSnapshot` 使用[麻将目录快照](#210-dhmj定海麻将凑桌与准备)的字段，`discards` 按座位组织，每座的牌放在 `tiles` 中。`hand` 只含本人暗手，`settlement` 也只带本人的资金结果。重登后通过 Enter 恢复原座，再使用 Snapshot 补场景。
 
-Access 已注册等待区推送 `1401 DhmjSeatPush`，字段为 `table_name string, revision/user_id uint64, seat int64, joined/ready bool`，`request_id` 为 0。`seat` 是发生变化的座位，`joined=false` 表示离座且 `ready=false`。麻将目录的发送端见[后续工作](DESIGN.md#11-后续工作)。
+等待区变化使用 `1401 DhmjSeatPush`，字段为 `table_name string, revision/user_id uint64, seat int64, joined/ready bool`，`request_id` 为 0。`seat` 是发生变化的座位，`joined=false` 表示离座且 `ready=false`。进桌者收到含本人座位的快照，其他在线玩家收到座位事件。首次准备的事件也发给本人，离桌事件发给仍在桌上的在线玩家。恢复原座或重复准备时沿用当前座位状态。
 
 Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应窗口和可选动作裁决。Respond 的动作编号见[麻将目录 RPC](#210-dhmj定海麻将凑桌与准备)。`ActionAck` 只确认当前请求，不附牌面或结算数据。请求超时后，可用 Snapshot 确认当前状态。
 
 Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将目录在结算确认后向各在线玩家发送本人回执。未收到推送时，可通过快照恢复结果。
 
-`1392 DhmjDiscardPush` 发给同桌在线玩家，`request_id` 为 0。字段为 `table_name string, revision/turn uint64, seat/tile int64`，`turn` 是本次出牌使用的轮次。开局后快照返回当前 `revision`。出牌、摸牌和补花共用序号，第一条事件从 1 开始。客户端可忽略快照已包含的事件，发现缺口时可重新请求快照。
+`1392 DhmjDiscardPush` 发给同桌在线玩家，`request_id` 为 0。字段为 `table_name string, revision/turn uint64, seat/tile int64`，`turn` 是本次出牌使用的轮次。等待区和开局后的牌局事件共用一条递增序号，第一位玩家进桌从 1 开始。快照始终返回当前 `revision`，客户端可忽略快照已包含的事件，发现缺口时可重新请求快照。
 
 摸牌和补花推送发给同桌在线玩家。两条消息都带 `table_name string, revision uint64, seat/remaining int64`，`remaining` 是当前牌墙余量，`request_id` 为 0。
 
@@ -346,7 +346,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 124 DhmjTurnPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌和接收座位，拒绝阶段或本人选项不一致的消息 | 1397 |
 | dhmj / 125 DhmjMeldPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发生效的副露 | 1398 |
 | dhmj / 126 DhmjRoundEndPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发完整终局裁决 | 1399 |
-| 麻将座位接收端 / 127 DhmjSeatPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发进桌、准备或离桌变化 | 1401 |
+| dhmj / 127 DhmjSeatPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发进桌、准备或离桌变化 | 1401 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
@@ -432,7 +432,7 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 
 | 本人快照 | 字段 |
 | --- | --- |
-| 等待、进行中及结束 | `table_name string, seat int64, phase string, players list`。`players` 元素含 `user_id uint64, seat int64, ready bool` |
+| 等待、进行中及结束 | `table_name string, seat int64, phase string, revision uint64, players list`。`players` 元素含 `user_id uint64, seat int64, ready bool` |
 | 开局后公开状态 | `dealer_seat/remaining int64` 为庄家座位与牌墙余量，0 分别表示 0 号座位和牌墙耗尽。当前轮次用 `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`，无对应窗口或截止时为 0。`discards/hand_counts/trustees` 按座位返回弃牌、暗手数量和托管标志。`operation_phase string, rob_kong bool` 与轮次推送的阶段和抢杠标记一致 |
 | 开局后公开副露与花牌 | `seat_tiles list` 按 0～3 号座位排列，每项含 `flowers list`、`melds list`。副露项含 `kind string, source_seat int64, tiles list`，种类为 `eat`、`pong`、`direct_kong`、`concealed_kong`、`added_kong`。暗杠牌值公开，来源为本人座位；补杠保留原碰的来源。牌值为 int64 |
 | 开局后本人状态 | `hand` 为本人暗手。`offers` 为本人尚未提交的窗口可选动作编号，有选项时也可过。`self_action/can_self_win/can_discard bool` 表示本人能否自选、自摸或出牌。`concealed_kongs/added_kongs` 为暗杠、补杠候选牌值。牌值和动作编号均为 int64 |

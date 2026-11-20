@@ -112,12 +112,17 @@ type agentPushSink struct {
 	command         runtime.CommandID
 	received        chan []any
 	deals           chan []any
+	seats           chan []any
 	includeRoundEnd bool
 }
 
 func (s agentPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args ...any) (any, error) {
 	if cmd == accessagent.DhmjDealPushCommand && s.deals != nil {
 		s.deals <- args
+		return nil, nil
+	}
+	if cmd == accessagent.DhmjSeatPushCommand && s.seats != nil {
+		s.seats <- args
 		return nil, nil
 	}
 	if cmd != s.command && !(s.includeRoundEnd && cmd == accessagent.DhmjRoundEndPushCommand) {
@@ -127,12 +132,15 @@ func (s agentPushSink) Handle(_ gsr.CommandContext, cmd runtime.CommandID, args 
 	return nil, nil
 }
 
-// TestDirectoryClusterJoinReadyAndReconnect 保护四人凑桌、按座位发牌、重连及同桌出牌广播。
+// TestDirectoryClusterJoinReadyAndReconnect 保护等待区事件、接续发牌、重连及同桌出牌广播。
 func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 	routes := make(map[cluster.NodeID]string)
 	pushes := make(chan []any, 8)
 	deals := make(chan []any, seatCount)
-	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{command: accessagent.DhmjDiscardPushCommand, received: pushes, deals: deals})
+	seats := make(chan []any, seatCount)
+	startDirectoryFixture(t, routes, "access-01", "agent", agentPushSink{
+		command: accessagent.DhmjDiscardPushCommand, received: pushes, deals: deals, seats: seats,
+	})
 	startDirectoryFixture(t, routes, "online", onlinerpc.ServiceName, directoryBackend{logins: map[uint64]string{}})
 	startDirectoryFixture(t, routes, "settlement", settlementread.ServiceName, directoryBackend{})
 	startDirectoryFixture(t, routes, "dhmj", dhmjrpc.ServiceName, newDirectory(defaultRoomRules, settlementJournal{}))
@@ -149,6 +157,25 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			return err
 		}
 		var tableName string
+		var revision uint64
+		checkSeats := func(uid uint64, joined, ready bool, recipients int) error {
+			revision++
+			want := map[string]any{
+				"table_name": tableName, "revision": revision, "seat": int64(uid - 1),
+				"user_id": uid, "joined": joined, "ready": ready,
+			}
+			for range recipients {
+				select {
+				case args := <-seats:
+					if !reflect.DeepEqual(args[1], want) {
+						return fmt.Errorf("座位推送=%v，期望 %v", args[1], want)
+					}
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return nil
+		}
 		for uid := uint64(1); uid <= 4; uid++ {
 			if err := bind(uid, "login"); err != nil {
 				return err
@@ -161,14 +188,40 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			if uid == 1 {
 				tableName = scene["table_name"].(string)
 			}
-			if scene["table_name"] != tableName || scene["seat"] != int64(uid-1) || scene["phase"] != "waiting" {
+			if err := checkSeats(uid, true, false, int(uid-1)); err != nil {
+				return err
+			}
+			if scene["table_name"] != tableName || scene["seat"] != int64(uid-1) || scene["phase"] != "waiting" ||
+				scene["revision"] != revision {
 				return errors.New("四人未依序入同一张等待桌")
+			}
+			if uid == 2 {
+				if _, err := call(dhmjrpc.LeaveCommand, uid, "login"); err != nil {
+					return err
+				}
+				if err := checkSeats(uid, false, false, 1); err != nil {
+					return err
+				}
+				if _, err := call(dhmjrpc.JoinCommand, uid, "login", "access-01", "agent"); err != nil {
+					return err
+				}
+				if err := checkSeats(uid, true, false, 1); err != nil {
+					return err
+				}
 			}
 			if _, err := call(dhmjrpc.DiscardCommand, uid, "login", uint64(1), int64(5)); err == nil {
 				return errors.New("等待中的牌桌接受了出牌")
 			}
 			if _, err := call(dhmjrpc.ReadyCommand, uid, "login"); err != nil {
 				return err
+			}
+			if err := checkSeats(uid, true, true, int(uid)); err != nil {
+				return err
+			}
+			if uid == 1 {
+				if _, err := call(dhmjrpc.ReadyCommand, uid, "login"); err != nil {
+					return err
+				}
 			}
 		}
 		for seat := range seatCount {
@@ -181,7 +234,7 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			}
 			hand, _ := deal["hand"].([]any)
 			wantUsers := []any{uint64(1), uint64(2), uint64(3), uint64(4)}
-			if deal["table_name"] != tableName || deal["seat"] != int64(seat) || deal["revision"] != uint64(1) ||
+			if deal["table_name"] != tableName || deal["seat"] != int64(seat) || deal["revision"] != revision+1 ||
 				deal["dealer_seat"] != int64(0) || deal["remaining"] != int64(92) ||
 				len(hand) != openingHandSize || !reflect.DeepEqual(deal["player_ids"], wantUsers) {
 				return fmt.Errorf("错误的开局发牌：%v", deal)
