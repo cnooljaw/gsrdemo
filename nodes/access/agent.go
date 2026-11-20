@@ -34,6 +34,8 @@ const (
 	dhmjFlowerPushCommand            runtime.CommandID = 122
 	dhmjDealPushCommand              runtime.CommandID = 123
 	dhmjTurnPushCommand              runtime.CommandID = 124
+	dhmjMeldPushCommand              runtime.CommandID = 125
+	dhmjRoundEndPushCommand          runtime.CommandID = 126
 )
 
 // agent 独占当前连接身份和路由，不持有权威游戏状态或钱包。

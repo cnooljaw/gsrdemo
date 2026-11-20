@@ -53,6 +53,8 @@ func (game *comDhmj) CommandHandlers() map[runtime.CommandID]any {
 		dhmjFlowerPushCommand:     game.handleFlowerPush,
 		dhmjDealPushCommand:       game.handleDealPush,
 		dhmjTurnPushCommand:       game.handleTurnPush,
+		dhmjMeldPushCommand:       game.handleMeldPush,
+		dhmjRoundEndPushCommand:   game.handleRoundEndPush,
 	}
 }
 
@@ -257,6 +259,9 @@ func dhmjSnapshot(value any, userID uint64) (*demopb.DhmjSnapshot, error) {
 		return nil, errInvalidBackendReply
 	}
 	if snapshot.TableName == "" {
+		return nil, errInvalidBackendReply
+	}
+	if snapshot.RoundEnd != nil && (snapshot.Phase != "finished" || !validDhmjRoundEnd(snapshot.RoundEnd)) {
 		return nil, errInvalidBackendReply
 	}
 	if settlement := snapshot.Settlement; settlement != nil && settlement.UserId != 0 && settlement.UserId != userID {

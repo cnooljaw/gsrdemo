@@ -272,6 +272,16 @@ enum MsgId {
     direction: DIRECTION_SERVER_TO_CLIENT
     kind: KIND_PUSH
   }];
+  S2C_DHMJ_MELD_PUSH = 1398 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjMeldPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
+  S2C_DHMJ_ROUND_END_PUSH = 1399 [(gsr.protocol.v1.message_route) = {
+    payload_type: ".demo.v1.DhmjRoundEndPush"
+    direction: DIRECTION_SERVER_TO_CLIENT
+    kind: KIND_PUSH
+  }];
 }
 
 message ActionAck {}
@@ -609,6 +619,7 @@ message DhmjSnapshot {
   string operation_phase = 23;
   bool rob_kong = 24;
   bool can_discard = 25;
+  DhmjRoundEnd round_end = 26;
 }
 
 message DhmjPlayer {
@@ -703,4 +714,31 @@ message DhmjTurnPush {
   repeated int64 concealed_kongs = 14;
   repeated int64 added_kongs = 15;
   bool can_discard = 16;
+}
+
+message DhmjMeldPush {
+  string table_name = 1;
+  uint64 revision = 2;
+  int64 seat = 3; // 副露所属座位。
+  int64 meld_index = 4; // 从 0 开始，补杠更新原碰的位置。
+  DhmjMeld meld = 5;
+}
+
+message DhmjRoundEndPush {
+  string table_name = 1;
+  uint64 revision = 2;
+  DhmjRoundEnd round_end = 3;
+}
+
+message DhmjRoundEnd {
+  string kind = 1;
+  optional int64 source_seat = 2; // 点炮、被抢杠或供直杠的座位。
+  optional int64 tile = 3; // 胡牌张。流局或八花时省略。
+  bool rob_kong = 4;
+  repeated DhmjWinner winners = 5;
+}
+
+message DhmjWinner {
+  int64 seat = 1;
+  int64 point = 2;
 }

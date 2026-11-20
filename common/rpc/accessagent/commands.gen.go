@@ -21,4 +21,6 @@ const (
 	DhmjFlowerPushCommand            = 122
 	DhmjDealPushCommand              = 123
 	DhmjTurnPushCommand              = 124
+	DhmjMeldPushCommand              = 125
+	DhmjRoundEndPushCommand          = 126
 )

@@ -152,6 +152,15 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 | `window_id uint64, window_tile int64, rob_kong bool` | 响应窗口编号、牌值及是否抢杠。窗口外为 0 或 false |
 | `offers/concealed_kongs/added_kongs int64[], can_self_win/can_discard bool` | 发给接收者本人的操作选项。响应用 `offers`，自摸和自杠候选仅在本人自选阶段提供 |
 
+Access 已注册以下裁决推送，麻将节点的发送端见[后续工作](DESIGN.md#11-后续工作)。两条消息都带 `table_name string, revision uint64`，`request_id` 为 0。
+
+| 推送 | 业务字段 |
+| --- | --- |
+| 1398 `DhmjMeldPush` | `seat/meld_index int64, meld DhmjMeld`。`seat` 是副露所属座位，`meld_index` 从 0 开始，补杠更新原碰的位置 |
+| 1399 `DhmjRoundEndPush` | `round_end DhmjRoundEnd`。含 `kind string, optional source_seat/tile int64, rob_kong bool, winners list`，每个赢家为 `seat/point int64` |
+
+`round_end.kind` 为 `draw`、`discard_hu`、`self_hu`、`kong_flower` 或 `eight_flowers`。点炮、抢杠和直杠开花带 `source_seat`。流局和八花省略胡牌张 `tile`。一炮多响的赢家放在同一条终局消息里，已确认的资金结果通过 1396 发给本人。`DhmjSnapshot` 也提供可选的 `round_end` 字段。
+
 ### 1.6 错误
 
 | 项目 | 当前约定 |
@@ -333,6 +342,8 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 122 DhmjFlowerPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，按接收座位控制 `replacements` | 1394 |
 | dhmj / 123 DhmjDealPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌、接收座位和名单中的本人身份，再转发本人起手牌 | 1395 |
 | dhmj / 124 DhmjTurnPush | `L, payload map`，字段同 C/S | 核对当前登录、牌桌和接收座位，拒绝阶段或本人选项不一致的消息 | 1397 |
+| 麻将副露接收端 / 125 DhmjMeldPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发生效的副露 | 1398 |
+| 麻将终局接收端 / 126 DhmjRoundEndPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发完整终局裁决 | 1399 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。

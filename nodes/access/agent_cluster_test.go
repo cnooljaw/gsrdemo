@@ -501,3 +501,60 @@ func TestAccessDhmjTurnPush(t *testing.T) {
 		t.Fatalf("窗口关闭后没有恢复出牌：%v", next)
 	}
 }
+
+// TestAccessDhmjRulingPushes 保护已完成的副露和一炮多响终局按原事件字段转发。
+func TestAccessDhmjRulingPushes(t *testing.T) {
+	gateAddress, backend, _ := startAccessBusiness(t)
+	client := dialAccess(t, gateAddress)
+	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
+		t.Fatal(got)
+	}
+	login := accessFixtureRPC(t, backend, 99).(map[string]any)["login_id"]
+	if got := accessRequest(t, client, demopb.MsgId_C2S_DHMJ_ENTER, &demopb.DhmjEnterRequest{}); got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ENTER) {
+		t.Fatal(got)
+	}
+
+	pushMeld := func(table string, tiles []any) {
+		t.Helper()
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjMeldPushCommand), login, map[string]any{
+			"table_name": table, "revision": uint64(10), "seat": int64(1), "meld_index": int64(0),
+			"meld": map[string]any{"kind": "added_kong", "source_seat": int64(2), "tiles": tiles},
+		})
+	}
+	tiles := []any{int64(5), int64(5), int64(5), int64(5)}
+	pushMeld("another-table", tiles)
+	pushMeld("dhmj-1", tiles[:3])
+	pushMeld("dhmj-1", tiles)
+	got := readAccessEnvelope(t, client)
+	var meld demopb.DhmjMeldPush
+	if err := proto.Unmarshal(got.Payload, &meld); err != nil || got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_MELD_PUSH) ||
+		got.RequestId != 0 || meld.GetTableName() != "dhmj-1" || meld.GetRevision() != 10 || meld.GetSeat() != 1 ||
+		meld.GetMeldIndex() != 0 || meld.GetMeld().GetKind() != "added_kong" || meld.GetMeld().GetSourceSeat() != 2 ||
+		!reflect.DeepEqual(meld.GetMeld().GetTiles(), []int64{5, 5, 5, 5}) {
+		t.Fatalf("副露裁决推送错误：%v %v", got, err)
+	}
+
+	pushEnd := func(revision uint64, secondSeat int64) {
+		t.Helper()
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjRoundEndPushCommand), login, map[string]any{
+			"table_name": "dhmj-1", "revision": revision, "round_end": map[string]any{
+				"kind": "discard_hu", "source_seat": int64(1), "tile": int64(7), "rob_kong": true,
+				"winners": []any{map[string]any{"seat": int64(0), "point": int64(3)}, map[string]any{"seat": secondSeat, "point": int64(2)}},
+			},
+		})
+	}
+	pushEnd(11, 0)
+	pushEnd(12, 3)
+	got = readAccessEnvelope(t, client)
+	var roundEnd demopb.DhmjRoundEndPush
+	if err := proto.Unmarshal(got.Payload, &roundEnd); err != nil || got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_ROUND_END_PUSH) ||
+		got.RequestId != 0 || roundEnd.GetRevision() != 12 {
+		t.Fatalf("终局裁决推送错误：%v %v", got, err)
+	}
+	result := roundEnd.GetRoundEnd()
+	winners := result.GetWinners()
+	if result.GetKind() != "discard_hu" || result.GetSourceSeat() != 1 || result.GetTile() != 7 || !result.GetRobKong() ||
+		len(winners) != 2 || winners[0].GetSeat() != 0 || winners[0].GetPoint() != 3 || winners[1].GetSeat() != 3 {
+		t.Fatalf("抢杠终局信息错误：%v", result)
+	}
+}
