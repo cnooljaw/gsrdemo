@@ -4,7 +4,7 @@
 
 调用链：客户端 → access → login / online / mole、landlord 或 dhmj → settlement → MySQL。Redis 保存临时认证 Token、地鼠批次和统计检查点，以及斗地主和麻将的待结算请求。
 
-了解节点设计和调用契约见 [DESIGN](docs/DESIGN.md) 与 [PROTOCOL](docs/PROTOCOL.md)；接入新游戏从 [接入顺序](docs/GO-CODE-STYLE.md#332-新增游戏的接入顺序) 开始，配合 [HTML 教程](docs/gsr-game-business.html) 第 12、16、20 页查看命令、组件组装和工作清单。
+了解节点设计和调用契约见 [DESIGN](docs/DESIGN.md) 与 [PROTOCOL](docs/PROTOCOL.md)；接入新游戏从 [接入顺序](docs/GO-CODE-STYLE.md#332-新增游戏的接入顺序) 开始，配合 [HTML 教程](docs/gsr-game-business.html) 第 12、16、20 页查看命令、组件组装和工作清单，第 22、23 页查看定海麻将的事件与结算。
 
 ## 运行 Demo
 
@@ -246,5 +246,5 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)。
 - 结算与推送：见 [结算池组装](nodes/settlement/main_service.go)、[结算池成员](nodes/settlement/settlementwriteservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/commole.go)。
 - [业务协议](docs/PROTOCOL.md)、[设计与恢复边界](docs/DESIGN.md)、[Go 代码规范](docs/GO-CODE-STYLE.md)、[工作规则](AGENTS.md)。
-- [GSR 游戏业务教程（21 页 HTML）](docs/gsr-game-business.html)：在浏览器中离线打开，支持分步讲解、讲者备注、打印 PDF 和新游戏开发清单。
+- [GSR 游戏业务教程（23 页 HTML）](docs/gsr-game-business.html)：在浏览器中离线打开，支持分步讲解、讲者备注、打印 PDF 和新游戏开发清单。
 - 容量测试入口及适用边界见 [并行与容量取舍](docs/DESIGN.md#92-并行与容量取舍)，不属于运行 Demo 的必需步骤。
