@@ -430,7 +430,7 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 | 本人快照 | 字段 |
 | --- | --- |
 | 等待、进行中及结束 | `table_name string, seat int64, phase string, players list`。`players` 元素含 `user_id uint64, seat int64, ready bool` |
-| 开局后公开状态 | `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`。`discards/hand_counts/trustees` 分别按座位返回弃牌列表、暗手数量和托管标志。无对应窗口或截止时为 0。`operation_phase string, rob_kong bool` 与轮次推送的阶段和抢杠标记一致 |
+| 开局后公开状态 | `dealer_seat/remaining int64` 为庄家座位与牌墙余量，0 分别表示 0 号座位和牌墙耗尽。当前轮次用 `active_seat int64, turn/window_id uint64, window_tile/server_ms/deadline_ms int64`，无对应窗口或截止时为 0。`discards/hand_counts/trustees` 按座位返回弃牌、暗手数量和托管标志。`operation_phase string, rob_kong bool` 与轮次推送的阶段和抢杠标记一致 |
 | 开局后公开副露与花牌 | `seat_tiles list` 按 0～3 号座位排列，每项含 `flowers list`、`melds list`。副露项含 `kind string, source_seat int64, tiles list`，种类为 `eat`、`pong`、`direct_kong`、`concealed_kong`、`added_kong`。暗杠牌值公开，来源为本人座位；补杠保留原碰的来源。牌值为 int64 |
 | 开局后本人状态 | `hand` 为本人暗手。`offers` 为本人尚未提交的窗口可选动作编号，有选项时也可过。`self_action/can_self_win/can_discard bool` 表示本人能否自选、自摸或出牌。`concealed_kongs/added_kongs` 为暗杠、补杠候选牌值。牌值和动作编号均为 int64 |
 | 终局裁决 | `round_end` map，与 1399 本体一致，包含结束原因和所有赢家 |

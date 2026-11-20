@@ -620,6 +620,8 @@ message DhmjSnapshot {
   bool rob_kong = 24;
   bool can_discard = 25;
   DhmjRoundEnd round_end = 26;
+  optional int64 dealer_seat = 27; // 开局后提供，0 是有效座位。
+  optional int64 remaining = 28; // 开局后提供，0 表示牌墙已耗尽。
 }
 
 message DhmjPlayer {

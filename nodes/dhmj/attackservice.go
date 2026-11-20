@@ -90,6 +90,7 @@ type tableView struct {
 	Melds                      [seatCount][]meld
 	Trustees                   [seatCount]bool
 	Active                     int
+	Dealer, Remaining          int
 	Turn                       uint64
 	Revision                   uint64
 	WindowID                   uint64
@@ -115,6 +116,7 @@ func (service *attackService) handleSnapshot(_ gsr.CommandContext, seat int) (ta
 	view := tableView{
 		Hand: slices.Clone(game.hands[seat]), Trustees: game.trustees,
 		Active: state.active, Turn: state.turn, Revision: game.revision, Finished: state.phase == "finished",
+		Dealer: game.dealer, Remaining: game.remaining(),
 		OperationPhase: state.phase, WindowID: state.windowID, WindowTile: state.windowTile, RobKong: state.robKong,
 		Deadline: state.deadline, Offer: game.offersFor(seat),
 		SelfAction: state.self && seat == state.active, CanDiscard: state.discard && seat == state.active,

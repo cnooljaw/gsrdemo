@@ -18,6 +18,7 @@ func TestDhmjComponentLifecycle(t *testing.T) {
 	identity := agentIdentity{UserID: 7, LoginID: "current", AccessNode: "access-01", AgentName: "agent-7"}
 	snapshot := map[string]any{
 		"table_name": "dhmj-1", "seat": int64(1), "phase": "playing",
+		"dealer_seat": int64(0), "remaining": int64(0),
 		"players": []any{
 			map[string]any{"user_id": uint64(5), "seat": int64(0)},
 			map[string]any{"user_id": uint64(7), "seat": int64(1), "ready": true},
@@ -84,6 +85,9 @@ func TestDhmjComponentLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := body.GetSnapshot()
+			if got.DealerSeat == nil || got.GetDealerSeat() != 0 || got.Remaining == nil || got.GetRemaining() != 0 {
+				t.Fatalf("庄家座位或零张余牌在转换时丢失：%v", got)
+			}
 			if got.GetTableName() != "dhmj-1" || !reflect.DeepEqual(got.GetHand(), []int64{1, 3}) ||
 				len(got.GetDiscards()) != 4 || !reflect.DeepEqual(got.GetDiscards()[0].GetTiles(), []int64{4}) {
 				t.Fatalf("快照内容错误：%v", got)

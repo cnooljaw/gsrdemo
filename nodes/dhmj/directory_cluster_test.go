@@ -214,6 +214,10 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		if scene["table_name"] != tableName || scene["seat"] != int64(0) || scene["phase"] != "playing" || !ok || len(hand) != 14 {
 			return errors.New("重连未恢复原牌桌和本人暗手")
 		}
+		flowers := scene["seat_tiles"].([]any)[0].(map[string]any)["flowers"].([]any)
+		if scene["dealer_seat"] != int64(0) || scene["remaining"] != int64(wallSize-seatCount*openingHandSize-1-len(flowers)) {
+			return fmt.Errorf("快照未恢复庄家或首摸后的牌墙余量：%v", scene)
+		}
 		if _, err := call(dhmjrpc.SnapshotCommand, uint64(1), "login"); err == nil {
 			return errors.New("旧登录仍可读取重连后的暗手")
 		}

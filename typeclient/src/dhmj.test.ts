@@ -19,14 +19,16 @@ function sceneSnapshot() {
 test("麻将缺号时恢复快照并接续较新的摸牌和轮次", () => {
   const scene = new DhmjScene(() => {});
   scene.restore(sceneSnapshot());
-  scene.accept({ kind: "draw", value: create(DhmjDrawPushSchema, { tableName: "table", revision: 7n, seat: 0n, tile: 3n }) });
+  scene.accept({ kind: "draw", value: create(DhmjDrawPushSchema, { tableName: "table", revision: 7n, seat: 0n, tile: 3n, remaining: 40n }) });
   scene.accept({ kind: "turn", value: create(DhmjTurnPushSchema, { tableName: "table", revision: 8n, seat: 0n, phase: "discard", canDiscard: true, turn: 4n }) });
   assert.equal(scene.needsSync, true);
   assert.deepEqual(scene.view?.hand, [1n, 2n]);
-  scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), revision: 6n, hand: [2n] }));
+  scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), revision: 6n, hand: [2n], dealerSeat: 0n, remaining: 41n }));
   assert.equal(scene.needsSync, false);
   assert.equal(scene.view?.revision, 8n);
   assert.equal(scene.view?.canDiscard, true);
+  assert.equal(scene.view?.dealerSeat, 0n);
+  assert.equal(scene.view?.remaining, 40n);
   assert.deepEqual(scene.view?.hand, [2n, 3n]);
 });
 
@@ -34,11 +36,12 @@ test("麻将补花和出牌事件只更新本人的暗手", () => {
   const scene = new DhmjScene(() => {});
   scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), hand: [1n, 0x41n] }));
   scene.accept({ kind: "flower", value: create(DhmjFlowerPushSchema, {
-    tableName: "table", revision: 6n, seat: 0n, flowers: [0x41n, 0x42n], replacements: [0x42n, 5n],
+    tableName: "table", revision: 6n, seat: 0n, flowers: [0x41n, 0x42n], replacements: [0x42n, 5n], remaining: 26n,
   }) });
   scene.accept({ kind: "discard", value: create(DhmjDiscardPushSchema, { tableName: "table", revision: 7n, seat: 1n, tile: 1n }) });
   assert.deepEqual(scene.view?.hand, [1n, 5n]);
   assert.deepEqual(scene.view?.discards[1]?.tiles, [1n]);
+  assert.equal(scene.view?.remaining, 26n);
 });
 
 test("麻将出牌结果未知时恢复同一轮次也只提交一次", async () => {

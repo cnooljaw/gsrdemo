@@ -36,7 +36,7 @@ function removeTile(hand: bigint[], tile: bigint): void {
   hand.splice(index, 1);
 }
 
-// 演示客户端只维护自动出牌所需的暗手、弃牌堆和操作权，公开事件直接输出。
+// 演示客户端维护暗手、弃牌堆、操作权及庄家和牌墙余量。
 function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
   const ownHand = [...view.hand];
   if (event.kind !== "turn") {
@@ -51,6 +51,8 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       view.hand = [...event.value.hand];
       view.players = event.value.playerIds.map((userId, seat) => create(DhmjPlayerSchema, { userId, seat: BigInt(seat), ready: true }));
       view.discards = view.players.map(() => create(DhmjDiscardsSchema));
+      view.dealerSeat = event.value.dealerSeat;
+      view.remaining = event.value.remaining;
       view.phase = "playing";
       break;
     case "discard":
@@ -63,6 +65,7 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
         if (event.value.tile === undefined) throw new Error("缺少本人摸牌");
         view.hand.push(event.value.tile);
       }
+      view.remaining = event.value.remaining;
       break;
     case "flower":
       if (event.value.seat === view.seat && !event.value.fromDraw) {
@@ -74,6 +77,7 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
         }
         view.hand = ownHand;
       }
+      view.remaining = event.value.remaining;
       break;
     case "meld": {
       const meld = event.value.meld;

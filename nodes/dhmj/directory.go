@@ -266,6 +266,7 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 		reply["settlement"] = view.Settlement
 	}
 	reply["hand"] = wireTiles(view.Hand)
+	reply["dealer_seat"], reply["remaining"] = int64(view.Dealer), int64(view.Remaining)
 	reply["active_seat"], reply["turn"], reply["window_id"] = int64(view.Active), view.Turn, view.WindowID
 	reply["revision"] = view.Revision
 	reply["server_ms"], reply["deadline_ms"] = time.Now().UnixMilli(), int64(0)
