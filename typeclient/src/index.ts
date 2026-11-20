@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { DemoClient } from "./client.js";
 import { runLandlord } from "./landlord.js";
+import { runDhmj } from "./dhmj.js";
 import {
   EnterRequestSchema, EnterResponseSchema, HitRequestSchema, HitResponseSchema,
   ActionAckSchema, LeaveRequestSchema, LoginRequestSchema, LoginResponseSchema,
@@ -32,7 +33,7 @@ function options(): { url: string; username: string; hits: number; timeout: numb
       default: throw new Error(`unknown argument ${args[index]}`);
     }
   }
-  if (parsed.game !== "mole" && parsed.game !== "landlord") throw new Error("--game must be mole or landlord");
+  if (!["mole", "landlord", "dhmj"].includes(parsed.game)) throw new Error("--game must be mole, landlord or dhmj");
   if (!Number.isSafeInteger(parsed.hits) || parsed.hits < 1 || parsed.hits > 100) throw new Error("--hits must be 1..100");
   if (!Number.isSafeInteger(parsed.timeout) || parsed.timeout < 1) throw new Error("--timeout-ms must be positive");
   if (parsed.tokenFile && parsed.saveTokenFile) throw new Error("choose --token-file or --save-token-file");
@@ -72,6 +73,10 @@ async function run(): Promise<void> {
       toBinary(LoginRequestSchema, create(LoginRequestSchema, { accessToken: token })),
       MsgId.S2C_LOGIN, LoginResponseSchema);
     print("login", login);
+    if (config.game === "dhmj") {
+      await runDhmj(client, print);
+      return;
+    }
     if (config.game === "landlord") {
       await runLandlord(client, print);
       return;

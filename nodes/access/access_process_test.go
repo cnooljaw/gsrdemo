@@ -186,8 +186,8 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 	loginDB, loginDSN := accessLiveDatabase(t, "login", "gsrdemo_login")
 	settlementDB, settlementDSN := accessLiveDatabase(t, "settlement", "gsrdemo_settlement")
 	budget := 45 * time.Second
-	if game == "landlord" {
-		// 多局恢复测试包含每次发牌和重新领出的服务器动画等待。
+	if game == "landlord" || game == "dhmj" {
+		// 牌桌验收可能经历重发、服务器动画、响应窗口或托管等待。
 		budget = 2 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
@@ -307,7 +307,7 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 		if node == "settlement" {
 			body += "mysql_dsn: " + strconv.Quote(settlementDSN) + "\n"
 		}
-		if node == "mole" || node == "landlord" {
+		if node == "mole" || node == "landlord" || node == "dhmj" {
 			body += "redis_url: redis://" + redisAddress + "/0\nredis_key: " + accessRedisKey + "\n"
 		}
 		if role == "access" {
@@ -376,6 +376,10 @@ func runAccessClientsLiveMySQL(t *testing.T, playerCount, accessCount int, game 
 	if game == "landlord" {
 		verifyLandlordCLI(t, ctx, players, clientErrors, settlementDB, &operationIDs)
 		verifyLandlordRecovery(t, ctx, gateAddresses, players, settlementDB, &operationIDs, processes["landlord"], processes["settlement"], redisAddress)
+		return
+	}
+	if game == "dhmj" {
+		verifyDhmjCLI(t, ctx, players, clientErrors, settlementDB, &operationIDs)
 		return
 	}
 	group := ""

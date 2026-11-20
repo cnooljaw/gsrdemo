@@ -4,6 +4,7 @@ import { type LandlordSnapshot, BalancePushSchema, BalanceSchema, MsgId, Snapsho
   LandlordSeatPushSchema, LandlordReadyPushSchema, LandlordDealPushSchema, LandlordBidPushSchema, LandlordPlayPushSchema, LandlordSettlementPushSchema, LandlordTrusteePushSchema, LandlordTurnPushSchema,
 } from "./gen/demo/v1/game_pb.js";
 import { applyLandlordEvent, type LandlordEvent } from "./landlord_state.js";
+import { decodeDhmjEvent, type DhmjEvent } from "./dhmj_state.js";
 import { authenticatedFrame, completeClientHandshake, createClientHandshake, type ClientAuthenticator } from "./secure_auth.js";
 
 interface Pending {
@@ -26,6 +27,9 @@ export class DemoClient {
   private landlordDiscardedThrough = 0n;
   private landlordWake?: () => void;
   private landlordClock = 0;
+  private readonly connectionClosed = new AbortController();
+  readonly closed = this.connectionClosed.signal;
+  onDhmjPush?: (event: DhmjEvent) => void;
   silver?: Balance;
   onPush: (kind: string, value: unknown) => void = () => {};
 
@@ -229,7 +233,10 @@ export class DemoClient {
       waiting.resolve(envelope);
       return;
     }
-    if (envelope.msgId === MsgId.S2C_LANDLORD_SEAT_PUSH) {
+    const dhmj = this.onDhmjPush && decodeDhmjEvent(envelope);
+    if (dhmj) {
+      this.onDhmjPush?.(dhmj);
+    } else if (envelope.msgId === MsgId.S2C_LANDLORD_SEAT_PUSH) {
       this.receiveLandlordEvent({ kind: "seat", value: fromBinary(LandlordSeatPushSchema, envelope.payload) });
     } else if (envelope.msgId === MsgId.S2C_LANDLORD_READY_PUSH) {
       this.receiveLandlordEvent({ kind: "ready", value: fromBinary(LandlordReadyPushSchema, envelope.payload) });
@@ -260,6 +267,7 @@ export class DemoClient {
   }
 
   private fail(error: Error): void {
+    this.connectionClosed.abort(error);
     this.handshake?.reject(error);
     this.handshake = undefined;
     for (const waiting of this.pending.values()) {

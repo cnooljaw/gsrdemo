@@ -2,7 +2,7 @@
 
 基于 **GSR v1.0.4** 的多节点打地鼠与三人斗地主示例，使用 TypeScript 命令行客户端演示登录、地鼠命中反馈、斗地主叫抢出牌和银子结算。
 
-调用链：客户端 → access → login / online / mole 或 landlord → settlement → MySQL。Redis 保存临时认证 Token、地鼠批次/统计检查点及斗地主待结算局末结果。
+调用链：客户端 → access → login / online / mole、landlord 或 dhmj → settlement → MySQL。Redis 保存临时认证 Token、地鼠批次和统计检查点，以及斗地主和麻将的待结算请求。
 
 了解节点设计和调用契约见 [DESIGN](docs/DESIGN.md) 与 [PROTOCOL](docs/PROTOCOL.md)；接入新游戏从 [接入顺序](docs/GO-CODE-STYLE.md#332-新增游戏的接入顺序) 开始，配合 [HTML 教程](docs/gsr-game-business.html) 第 12、16、20 页查看命令、组件组装和工作清单。
 
@@ -63,16 +63,16 @@ chmod 600 configs/login-01.local.yaml configs/settlement-01.local.yaml configs/m
 
 `.local.yaml` 不提交到 Git。节点地址统一在 [configs/nodes.yaml](configs/nodes.yaml)，相对文件路径以配置文件所在目录为基准。
 
-### 3. 创建三个演示账号并初始化银子
+### 3. 创建演示账号并初始化银子
 
 **执行位置：终端中的 zsh，当前目录为 gsrdemo 根目录。** 完成前两步后，将下面整块命令保留换行粘贴到终端执行；看到密码提示后输入密码并按回车，输入内容不会显示。
 
-这段 Shell 会依次调用已经构建的 `bin/login` 和 `bin/settlement`，创建 `demo1`、`demo2`、`demo3`，设置同一个演示密码，并使用返回的真实 UserID 初始化各自的钱包。
+这段 Shell 会依次调用已经构建的 `bin/login` 和 `bin/settlement`，创建 `demo1` 至 `demo4`，设置同一个演示密码，并使用返回的真实 UserID 初始化各自的钱包。
 
 ```shell
 # Shell（zsh），在 gsrdemo 根目录的终端执行
 read -rs 'demo_password?设置三个账号的演示密码: '
-for demo_user in demo1 demo2 demo3; do
+for demo_user in demo1 demo2 demo3 demo4; do
   account_result=$(printf '%s\n' "$demo_password" | ./bin/login \
     -config configs/login-01.local.yaml -create-user "$demo_user") || break
   demo_user_id=${account_result#UserID=}
@@ -189,9 +189,21 @@ unset demo_password
 
 斗地主底分 10，每次抢地主、炸弹/王炸各翻倍。输出包含 `authenticated → login → landlord_enter → landlord_bid → landlord_action / landlord_event_play → landlord_settlement → landlord_leave`；`landlord_settlement` 携带本人的扣返、最终余额、版本和共同 OperationID，客户端直接使用该回执，不再追加查询账务。局末不先广播 pending；每桌先保存待结算请求到 Redis，再 Call 结算池，收到有效回执后向三人各推送一次最终结果，随后删除待记录，清理失败单独重试。Redis 只保留待处理请求，不积累成功流水；结算服恢复或地主节点重启后，已保存请求按原 ID 补交，避免重复入账。不恢复进行中的手牌。
 
+#### 定海麻将四人演示
+
+启动 login、online、settlement、dhmj 和 access，分别用 `demo1` 至 `demo4` 在四个终端运行以下命令。
+
+```zsh
+read -rs 'demo_password?演示账号密码: '
+printf '%s\n' "$demo_password" | node typeclient/dist/index.js --game dhmj --username demo1
+unset demo_password
+```
+
+CLI 自动准备，按牌桌事件更新手牌。能胡就胡，其余响应选择过，再按服务端轮次出牌。事件缺号、等待更新超时或动作结果未知时恢复快照。同一轮次或响应窗口的自动动作只提交一次。收到 `dhmj_settlement` 时打印本人实扣手续费、实付、实收、余额和版本，接着离桌并输出 `dhmj_leave`。
+
 ### 7. 停止演示
 
-地鼠 CLI 的 `leave` 只表示玩法退出；停服前由受控验收或管理员集中确认本次操作已入账，斗地主等待 `landlord_settlement`。然后在各服务终端按 Ctrl-C，顺序为 **两个 access → mole / landlord → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中或局末结果不保证崩溃恢复。
+地鼠 CLI 的 `leave` 只表示玩法退出；停服前由受控验收或管理员集中确认本次操作已入账。斗地主和麻将分别等待 `landlord_settlement`、`dhmj_settlement`。然后在各服务终端按 Ctrl-C，顺序为 **access → mole / landlord / dhmj → settlement → online → login**，最后按需停止 Redis 和 MySQL。保留 Redis 持久化数据供下次恢复；尚未保存到 Redis 的内存命中或局末结果不保证崩溃恢复。
 
 ## 开发与验证
 
@@ -217,12 +229,12 @@ unset demo_password
 
 RPC 契约生成与客户端协议生成是两个入口，生成后仍需验证实际 Handler 与业务调用链。
 
-单/双接入的进程验收使用三个客户端、真实 MySQL 和临时 Redis。先安装依赖、建表并准备本机配置，确保 `redis-server` 和 `redis-cli` 可用。每次验收前构建节点和客户端，确保它们使用同一版协议。`-count=1` 确保实际启动进程。
+进程验收使用真实 MySQL 和临时 Redis。麻将验收启动四个客户端，地鼠与斗地主各用三个。先安装依赖、建表并准备本机配置，确保 `redis-server` 和 `redis-cli` 可用。每次验收前构建节点和客户端，确保同一版协议。`-count=1` 确保实际启动进程。
 
 ```shell
 ./scripts/dev.sh build
 GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
-  -run '^TestAccess(ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|CLITargetRefusalAndUnknownResult|CLITokenFileAuthentication)$' -v -timeout=3m
+  -run '^TestAccess(ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|FourDhmjClientsLiveMySQL|CLITargetRefusalAndUnknownResult|CLITokenFileAuthentication)$' -v -timeout=5m
 ```
 
 用例创建并清理自己的随机测试账号和钱包，只启动和回收自己的节点与 Redis 进程。双接入用例还覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例另验证三客户端叫抢出牌、三人唯一结算、结算服中断重试及已保存结果的地主节点重启恢复。地鼠验收程序在客户端结束后按本次操作 ID 集中核对 SQL 账务与钱包。测试覆盖入口与恢复边界见 [设计文档](docs/DESIGN.md#9-验证依据与设计取舍)。
