@@ -76,6 +76,10 @@ func (game *comDhmj) handleFlowerPush(_ gsr.CommandContext, login string, payloa
 		return errInvalidBackendReply
 	}
 	message := &demopb.DhmjFlowerPush{}
+	count, ok := payload["hand_count"].(int64)
+	if !ok || count < 0 || count > 14 {
+		return errInvalidBackendReply
+	}
 	if err := clientMessage(payload, message); err != nil {
 		return err
 	}

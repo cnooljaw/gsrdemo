@@ -14,6 +14,7 @@ function sceneSnapshot() {
   return create(DhmjSnapshotSchema, {
     tableName: "table", phase: "playing", seat: 0n, revision: 5n, hand: [1n, 2n],
     players: [{ userId: 7n, seat: 0n }], discards: [{}, {}, {}, {}], seatTiles: [{}, {}, {}, {}],
+    handCounts: [2n, 13n, 13n, 13n],
   });
 }
 
@@ -37,6 +38,7 @@ test("麻将等待区按序应用进桌、准备和离桌，发牌沿用同一�
   }) });
   assert.equal(scene.view?.phase, "playing");
   assert.equal(scene.view?.revision, 5n);
+  assert.deepEqual(scene.view?.handCounts, [2n, 2n, 2n, 2n]);
   assert.deepEqual(scene.view?.seatTiles.map(seat => [seat.flowers, seat.melds]), Array.from({ length: 4 }, () => [[], []]));
   assert.equal(scene.needsSync, false);
 });
@@ -66,29 +68,44 @@ test("麻将缺号时恢复快照并接续较新的摸牌和轮次", () => {
   scene.accept({ kind: "turn", value: create(DhmjTurnPushSchema, { tableName: "table", revision: 8n, seat: 0n, phase: "discard", canDiscard: true, turn: 4n }) });
   assert.equal(scene.needsSync, true);
   assert.deepEqual(scene.view?.hand, [1n, 2n]);
-  scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), revision: 6n, hand: [2n], dealerSeat: 0n, remaining: 41n }));
+  scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), revision: 6n, hand: [2n], handCounts: [1n, 13n, 13n, 13n], dealerSeat: 0n, remaining: 41n }));
   assert.equal(scene.needsSync, false);
   assert.equal(scene.view?.revision, 8n);
   assert.equal(scene.view?.canDiscard, true);
   assert.equal(scene.view?.dealerSeat, 0n);
   assert.equal(scene.view?.remaining, 40n);
   assert.deepEqual(scene.view?.hand, [2n, 3n]);
+  assert.deepEqual(scene.view?.handCounts, [2n, 13n, 13n, 13n]);
 });
 
 test("麻将补花更新各座位的公开花牌，替换牌只更新本人暗手", () => {
   const scene = new DhmjScene(() => {});
   scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), hand: [1n, 0x41n] }));
   scene.accept({ kind: "flower", value: create(DhmjFlowerPushSchema, {
-    tableName: "table", revision: 6n, seat: 0n, flowers: [0x41n, 0x42n], replacements: [0x42n, 5n], remaining: 26n,
+    tableName: "table", revision: 6n, seat: 0n, flowers: [0x41n, 0x42n], replacements: [0x42n, 5n], remaining: 26n, handCount: 2n,
   }) });
   scene.accept({ kind: "discard", value: create(DhmjDiscardPushSchema, { tableName: "table", revision: 7n, seat: 1n, tile: 1n }) });
   scene.accept({ kind: "flower", value: create(DhmjFlowerPushSchema, {
-    tableName: "table", revision: 8n, seat: 2n, flowers: [0x43n], fromDraw: true, remaining: 24n,
+    tableName: "table", revision: 8n, seat: 2n, flowers: [0x43n], fromDraw: true, remaining: 24n, handCount: 13n,
+  }) });
+  scene.accept({ kind: "draw", value: create(DhmjDrawPushSchema, {
+    tableName: "table", revision: 9n, seat: 2n, remaining: 24n,
   }) });
   assert.deepEqual(scene.view?.hand, [1n, 5n]);
   assert.deepEqual(scene.view?.seatTiles.map(seat => seat.flowers), [[0x41n, 0x42n], [], [0x43n], []]);
   assert.deepEqual(scene.view?.discards[1]?.tiles, [1n]);
   assert.equal(scene.view?.remaining, 24n);
+  assert.deepEqual(scene.view?.handCounts, [2n, 12n, 14n, 13n]);
+});
+
+test("麻将起手花未补回时，其他座位也能更新公开张数", () => {
+  const scene = new DhmjScene(() => {});
+  scene.restore(sceneSnapshot());
+  scene.accept({ kind: "flower", value: create(DhmjFlowerPushSchema, {
+    tableName: "table", revision: 6n, seat: 2n, flowers: [0x41n], handCount: 12n,
+  }) });
+  assert.deepEqual(scene.view?.handCounts, [2n, 13n, 12n, 13n]);
+  assert.deepEqual(scene.view?.hand, [1n, 2n]);
 });
 
 test("麻将补杠替换原碰位置，非本人副露保留本人的暗手", () => {
@@ -108,6 +125,7 @@ test("麻将补杠替换原碰位置，非本人副露保留本人的暗手", ()
   assert.deepEqual(scene.view?.seatTiles[1]?.melds, [kong, eat]);
   assert.deepEqual(scene.view?.discards.map(seat => seat.tiles), [[], [], [], []]);
   assert.deepEqual(scene.view?.hand, [1n, 2n]);
+  assert.deepEqual(scene.view?.handCounts, [2n, 8n, 13n, 13n]);
   assert.equal(scene.needsSync, false);
 });
 
@@ -125,6 +143,7 @@ test("麻将抢杠胡保留原碰并移除本人用于补杠的牌", () => {
   }) });
   assert.deepEqual(scene.view?.seatTiles[0]?.melds, [pong]);
   assert.deepEqual(scene.view?.hand, [1n]);
+  assert.deepEqual(scene.view?.handCounts, [1n, 13n, 13n, 13n]);
   assert.equal(scene.view?.phase, "finished");
 });
 

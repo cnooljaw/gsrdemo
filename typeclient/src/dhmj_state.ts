@@ -41,6 +41,15 @@ function removeTile(hand: bigint[], tile: bigint): void {
   hand.splice(index, 1);
 }
 
+function adjustHandCount(view: DhmjSnapshot, seat: bigint, delta: bigint): void {
+  const index = Number(seat);
+  const previous = view.handCounts[index];
+  if (previous === undefined || previous + delta < 0n || previous + delta > 14n) {
+    throw new Error("麻将手牌张数与事件不一致");
+  }
+  view.handCounts[index] = previous + delta;
+}
+
 // 演示客户端按序更新等待区座位、暗手、公开牌面和操作权。
 function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
   if (event.kind === "seat") {
@@ -72,6 +81,7 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       view.hand = [...event.value.hand];
       view.players = event.value.playerIds.map((userId, seat) => create(DhmjPlayerSchema, { userId, seat: BigInt(seat), ready: true }));
       view.discards = view.players.map(() => create(DhmjDiscardsSchema));
+      view.handCounts = view.players.map(() => BigInt(event.value.hand.length));
       view.seatTiles = view.players.map(() => create(DhmjSeatTilesSchema));
       view.trustees = view.players.map(() => false);
       view.dealerSeat = event.value.dealerSeat;
@@ -80,18 +90,21 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       break;
     case "discard":
       if (event.value.seat === view.seat) removeTile(ownHand, event.value.tile);
+      adjustHandCount(view, event.value.seat, -1n);
       view.discards[Number(event.value.seat)]!.tiles.push(event.value.tile);
       view.hand = ownHand;
       break;
     case "draw":
       if (event.value.seat === view.seat) {
         if (event.value.tile === undefined) throw new Error("缺少本人摸牌");
-        view.hand.push(event.value.tile);
+        ownHand.push(event.value.tile);
       }
+      adjustHandCount(view, event.value.seat, 1n);
+      view.hand = ownHand;
       view.remaining = event.value.remaining;
       break;
     case "flower": {
-      const { seat, flowers, replacements, fromDraw, remaining } = event.value;
+      const { seat, flowers, replacements, fromDraw, remaining, handCount } = event.value;
       const seatTiles = view.seatTiles[Number(seat)];
       if (!seatTiles) throw new Error("补花座位与场景不一致");
       if (seat === view.seat && !fromDraw) {
@@ -100,8 +113,10 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
           removeTile(ownHand, flower);
           if (replacements[index] !== 0n) ownHand.push(replacements[index]!);
         }
-        view.hand = ownHand;
       }
+      if (seat === view.seat && handCount !== BigInt(ownHand.length)) throw new Error("补花后的手牌张数不一致");
+      view.handCounts[Number(seat)] = handCount;
+      view.hand = ownHand;
       seatTiles.flowers.push(...flowers);
       view.remaining = remaining;
       break;
@@ -117,6 +132,7 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
           throw new Error("补杠找不到对应的原碰");
         }
         if (seat === view.seat) removeTile(ownHand, meld.tiles[3]!);
+        adjustHandCount(view, seat, -1n);
       } else {
         if (meldIndex !== BigInt(seatTiles.melds.length)) throw new Error("副露位置与场景不一致");
         if (meld.kind !== "concealed_kong") {
@@ -126,9 +142,11 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
           const tiles = [...meld.tiles];
           removeTile(tiles, taken);
           if (seat === view.seat) for (const tile of tiles) removeTile(ownHand, tile);
+          adjustHandCount(view, seat, -BigInt(tiles.length));
           discard.pop();
-        } else if (seat === view.seat) {
-          for (const tile of meld.tiles) removeTile(ownHand, tile);
+        } else {
+          if (seat === view.seat) for (const tile of meld.tiles) removeTile(ownHand, tile);
+          adjustHandCount(view, seat, -BigInt(meld.tiles.length));
         }
       }
       seatTiles.melds[index] = meld;
@@ -152,8 +170,9 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       break;
     case "round_end": {
       const end = event.value.roundEnd;
-      if (end?.robKong && end.sourceSeat === view.seat && end.tile !== undefined) {
-        removeTile(ownHand, end.tile);
+      if (end?.robKong && end.sourceSeat !== undefined && end.tile !== undefined) {
+        if (end.sourceSeat === view.seat) removeTile(ownHand, end.tile);
+        adjustHandCount(view, end.sourceSeat, -1n);
         view.hand = ownHand;
       }
       view.roundEnd = end;

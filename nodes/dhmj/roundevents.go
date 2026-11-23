@@ -41,6 +41,7 @@ type roundEvent struct {
 	seat, remaining int
 	tile            byte
 	flowers         []flowerReplacement
+	handCount       int
 	fromDraw        bool
 	trustee         bool
 	deal            *openingDeal
@@ -111,9 +112,14 @@ func (g *round) recordEvent(event roundEvent) {
 }
 
 func (g *round) recordFlowers(seat int, flowers []flowerReplacement, fromDraw bool) {
-	if len(flowers) != 0 {
-		g.recordEvent(roundEvent{kind: flowerEvent, seat: seat, flowers: flowers, fromDraw: fromDraw})
+	if len(flowers) == 0 {
+		return
 	}
+	count := len(g.hands[seat])
+	if fromDraw && g.end == nil {
+		count-- // 补到的普通牌由随后的摸牌事件计入。
+	}
+	g.recordEvent(roundEvent{kind: flowerEvent, seat: seat, flowers: flowers, fromDraw: fromDraw, handCount: count})
 }
 
 func (event roundEvent) wire(tableName string, recipient int) (runtime.CommandID, map[string]any) {
@@ -163,6 +169,7 @@ func (event roundEvent) wire(tableName string, recipient int) (runtime.CommandID
 			flowers = append(flowers, int64(pair.flower))
 		}
 		payload["flowers"], payload["remaining"], payload["from_draw"] = flowers, int64(event.remaining), event.fromDraw
+		payload["hand_count"] = int64(event.handCount)
 		if recipient == event.seat {
 			replacements := make([]any, 0, len(event.flowers))
 			for _, pair := range event.flowers {

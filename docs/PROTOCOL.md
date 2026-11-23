@@ -139,9 +139,9 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 | 推送 | 公开字段 | 本人字段 |
 | --- | --- | --- |
 | 1393 `DhmjDrawPush` | `turn uint64`，此次摸牌开启的轮次 | `tile int64`，补花后最终摸到的普通牌 |
-| 1394 `DhmjFlowerPush` | `flowers int64[]`、`from_draw bool`，按顺序列出花牌，标记是否来自本次摸牌 | `replacements int64[]`，逐项对应花牌，0 表示终局未补牌 |
+| 1394 `DhmjFlowerPush` | `flowers int64[]`、`from_draw bool`、`hand_count int64`，按顺序列出花牌，标记是否来自本次摸牌，并给出该座位应用本事件后的暗手张数 | `replacements int64[]`，逐项对应花牌，0 表示终局未补牌 |
 
-来自摸牌的补花链用 Flower 展示，用 Draw 将最终普通牌加入暗手一次。起手花替换按 Flower 更新本人暗手。
+来自摸牌的补花链用 Flower 展示，用 Draw 将最终普通牌加入暗手并增加一张。Flower 的张数已包含起手花未补回的扣减，后续 Draw 的牌另计。起手花替换按 Flower 更新本人暗手。
 
 四人准备后发送 `1395 DhmjDealPush`，字段为 `table_name string, revision uint64, seat/dealer_seat/remaining int64, player_ids uint64[], hand int64[]`，`request_id` 为 0。`player_ids` 按 0～3 号座位排列，`seat` 表示接收者，`hand` 为本人 13 张起手牌。发牌是牌桌首条事件，先于补花和首摸。
 

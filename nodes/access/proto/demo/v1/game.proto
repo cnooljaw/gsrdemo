@@ -697,6 +697,7 @@ message DhmjFlowerPush {
   repeated int64 flowers = 5;
   repeated int64 replacements = 6;
   bool from_draw = 7;
+  int64 hand_count = 8; // 此事件后的公开暗手张数，后续 Draw 的牌另计。
 }
 
 message DhmjDealPush {

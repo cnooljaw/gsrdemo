@@ -374,14 +374,14 @@ func TestAccessDhmjTilePushHidesOtherSeats(t *testing.T) {
 	for i, seat := range []int64{2, 0} {
 		revision := uint64(9 + i*2)
 		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjFlowerPushCommand), login, map[string]any{
-			"table_name": "dhmj-1", "revision": revision, "seat": seat, "remaining": int64(13), "from_draw": true,
+			"table_name": "dhmj-1", "revision": revision, "seat": seat, "remaining": int64(13), "from_draw": true, "hand_count": int64(13),
 			"flowers": []any{int64(0x41), int64(0x42)}, "replacements": []any{int64(0x42), int64(5)},
 		})
 		got := readAccessEnvelope(t, client)
 		var flower demopb.DhmjFlowerPush
 		if err := proto.Unmarshal(got.Payload, &flower); err != nil || got.MsgId != uint32(demopb.MsgId_S2C_DHMJ_FLOWER_PUSH) || got.RequestId != 0 ||
 			flower.GetSeat() != seat || flower.GetRevision() != revision || !flower.GetFromDraw() || flower.GetRemaining() != 13 ||
-			!reflect.DeepEqual(flower.GetFlowers(), []int64{0x41, 0x42}) {
+			flower.GetHandCount() != 13 || !reflect.DeepEqual(flower.GetFlowers(), []int64{0x41, 0x42}) {
 			t.Fatalf("补花公开信息错误：%v %v", got, err)
 		}
 		var wantReplacements []int64

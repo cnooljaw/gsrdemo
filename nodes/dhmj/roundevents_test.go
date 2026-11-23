@@ -33,7 +33,8 @@ func TestDrawEventsKeepFlowerOrderAndPrivateTiles(t *testing.T) {
 	if flowerCommand != accessagent.DhmjFlowerPushCommand || flower.revision != 2 ||
 		!reflect.DeepEqual(ownFlowers["flowers"], []any{int64(0x41), int64(0x42)}) ||
 		!reflect.DeepEqual(ownFlowers["replacements"], []any{int64(0x42), int64(0x37)}) ||
-		ownFlowers["from_draw"] != true || ownFlowers["remaining"] != int64(89) {
+		ownFlowers["from_draw"] != true || ownFlowers["remaining"] != int64(89) ||
+		ownFlowers["hand_count"] != int64(13) || len(g.hands[0]) != 14 {
 		t.Fatalf("错误的连续补花事件：%v", ownFlowers)
 	}
 	if drawCommand != accessagent.DhmjDrawPushCommand || draw.revision != 3 || ownDraw["tile"] != int64(0x37) ||
@@ -45,8 +46,42 @@ func TestDrawEventsKeepFlowerOrderAndPrivateTiles(t *testing.T) {
 	if _, ok := otherFlowers["replacements"]; ok {
 		t.Fatalf("向其他座位泄露替换牌：%v", otherFlowers)
 	}
+	if otherFlowers["hand_count"] != ownFlowers["hand_count"] {
+		t.Fatalf("补花手牌张数与接收者无关：%v", otherFlowers)
+	}
 	if _, ok := otherDraw["tile"]; ok {
 		t.Fatalf("向其他座位泄露摸牌：%v", otherDraw)
+	}
+}
+
+// TestTerminalFlowerPublishesHandCount 保护补花没有补回牌时公开实际张数。
+func TestTerminalFlowerPublishesHandCount(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		game round
+		draw bool
+		want endKind
+	}{
+		{name: "起手花耗尽牌墙", game: round{hands: [4][]byte{{5, 0x41}}}, want: draw},
+		{name: "摸到第八朵花", game: round{
+			hands: [4][]byte{{5}}, wall: []byte{0x48}, flowers: [4][]byte{{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47}},
+		}, draw: true, want: eightFlowers},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			g := tt.game
+			if tt.draw {
+				g.drawForTurn(time.Now(), false, 0)
+			} else {
+				g.replaceInitialFlowers(0)
+			}
+			if g.end == nil || g.end.kind != tt.want || len(g.events) != 1 || len(g.hands[0]) != 1 {
+				t.Fatalf("未在补花时终局：%+v，手牌 %v，事件 %v", g.end, g.hands[0], g.events)
+			}
+			_, payload := g.events[0].wire("table", 1)
+			if payload["hand_count"] != int64(1) || payload["from_draw"] != tt.draw {
+				t.Fatalf("终局补花张数错误：%v", payload)
+			}
+		})
 	}
 }
 
