@@ -340,9 +340,10 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 斗地主成员回收、重登隔离、Join 核对与慢目录退避 | [成员回收用例](../nodes/landlord/attackservice_test.go)、[牌桌通信及 Pulse 用例](../nodes/landlord/attackservice_cluster_test.go) |
 | 斗地主未入座预留到期、空桌退出及超时已入座保护 | [期限规则用例](../nodes/landlord/landlordreservation_test.go)、[真实 TCP 与 Pulse 用例](../nodes/landlord/landlordreservation_cluster_test.go) |
 | 斗地主规则、Call 终态、超时隔离、原请求重试、暂停与清理 | [attackgame_test.go](../nodes/landlord/attackgame_test.go)、[roundsettlement_test.go](../nodes/landlord/roundsettlement_test.go)、[Journal 故障用例](../nodes/landlord/landlordjournal_test.go)、[Call 集成用例](../nodes/landlord/roundsettlement_cluster_test.go) |
-| 定海麻将副露与轮次裁决、重登和原结算请求补交 | [牌桌事件用例](../nodes/dhmj/roundevents_test.go)、[重登与空桌回收](../nodes/dhmj/table_reclaim_test.go)、[Redis 重启恢复](../nodes/dhmj/roundsettlement_test.go) |
+| 定海麻将等待区、牌桌事件、重登和空桌回收 | [四人凑桌与重连](../nodes/dhmj/directory_cluster_test.go)、[牌桌事件用例](../nodes/dhmj/roundevents_test.go)、[重登与空桌回收](../nodes/dhmj/table_reclaim_test.go) |
 | 定海麻将 CLI 事件恢复与四人实际结算 | [客户端恢复用例](../typeclient/src/dhmj.test.ts)、[四人进程验收](../nodes/access/access_dhmj_cli_test.go) |
-| 定海麻将结算服中断期间重登、原请求唯一入账与清理 | [真实进程故障验收](../nodes/access/access_dhmj_recovery_test.go) |
+| 定海麻将运行时重启后，从真实 Redis 读取原请求，向模拟结算服务原样补交并清理待记录 | [麻将启动恢复用例](../nodes/dhmj/roundsettlement_test.go) |
+| 结算服停机期间重登原麻将桌，恢复后由原牌桌重试，核对 MySQL 唯一入账、四人钱包和 Redis 清理 | [结算服停机进程验收](../nodes/access/access_dhmj_recovery_test.go) |
 | 事务、全局幂等、锁冲突与读写 Call 池并行 | [SQL 用例](../nodes/settlement/settlement_mysql_test.go)、[Call 池用例](../nodes/settlement/settlement_cluster_test.go)、[真实并发用例](../nodes/settlement/settlement_concurrency_live_test.go) |
 | 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
 
