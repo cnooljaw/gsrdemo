@@ -2,7 +2,7 @@ import { create, fromBinary } from "@bufbuild/protobuf";
 import type { Envelope } from "./gen/gsr/common/v1/common_pb.js";
 import {
   DhmjDealPushSchema, DhmjDiscardPushSchema, DhmjDiscardsSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
-  DhmjMeldPushSchema, DhmjPlayerSchema, DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema,
+  DhmjMeldPushSchema, DhmjPlayerSchema, DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSeatTilesSchema, DhmjSettlementPushSchema,
   DhmjTrusteePushSchema, DhmjTurnPushSchema, MsgId,
   type DhmjDealPush, type DhmjDiscardPush, type DhmjDrawPush, type DhmjFlowerPush, type DhmjMeldPush,
   type DhmjRoundEndPush, type DhmjSeatPush, type DhmjSettlementPush, type DhmjSnapshot, type DhmjTrusteePush, type DhmjTurnPush,
@@ -41,7 +41,7 @@ function removeTile(hand: bigint[], tile: bigint): void {
   hand.splice(index, 1);
 }
 
-// 演示客户端按序更新等待区座位、暗手、弃牌堆和操作权。
+// 演示客户端按序更新等待区座位、暗手、公开牌面和操作权。
 function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
   if (event.kind === "seat") {
     const { revision, seat, userId, joined, ready } = event.value;
@@ -72,6 +72,7 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       view.hand = [...event.value.hand];
       view.players = event.value.playerIds.map((userId, seat) => create(DhmjPlayerSchema, { userId, seat: BigInt(seat), ready: true }));
       view.discards = view.players.map(() => create(DhmjDiscardsSchema));
+      view.seatTiles = view.players.map(() => create(DhmjSeatTilesSchema));
       view.trustees = view.players.map(() => false);
       view.dealerSeat = event.value.dealerSeat;
       view.remaining = event.value.remaining;
@@ -89,9 +90,11 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       }
       view.remaining = event.value.remaining;
       break;
-    case "flower":
-      if (event.value.seat === view.seat && !event.value.fromDraw) {
-        const { flowers, replacements } = event.value;
+    case "flower": {
+      const { seat, flowers, replacements, fromDraw, remaining } = event.value;
+      const seatTiles = view.seatTiles[Number(seat)];
+      if (!seatTiles) throw new Error("补花座位与场景不一致");
+      if (seat === view.seat && !fromDraw) {
         if (flowers.length !== replacements.length) throw new Error("补花牌张不完整");
         for (const [index, flower] of flowers.entries()) {
           removeTile(ownHand, flower);
@@ -99,26 +102,36 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
         }
         view.hand = ownHand;
       }
-      view.remaining = event.value.remaining;
+      seatTiles.flowers.push(...flowers);
+      view.remaining = remaining;
       break;
+    }
     case "meld": {
-      const meld = event.value.meld;
-      if (!meld) throw new Error("缺少副露");
+      const { seat, meld, meldIndex } = event.value;
+      const seatTiles = view.seatTiles[Number(seat)];
+      if (!meld || !seatTiles) throw new Error("副露座位与场景不一致");
+      const index = Number(meldIndex);
       if (meld.kind === "added_kong") {
-        if (event.value.seat === view.seat) removeTile(ownHand, meld.tiles[3]!);
+        const previous = seatTiles.melds[index];
+        if (previous?.kind !== "pong" || previous.sourceSeat !== meld.sourceSeat || previous.tiles[0] !== meld.tiles[0]) {
+          throw new Error("补杠找不到对应的原碰");
+        }
+        if (seat === view.seat) removeTile(ownHand, meld.tiles[3]!);
       } else {
-        const tiles = [...meld.tiles];
+        if (meldIndex !== BigInt(seatTiles.melds.length)) throw new Error("副露位置与场景不一致");
         if (meld.kind !== "concealed_kong") {
           const discard = view.discards[Number(meld.sourceSeat)]!.tiles;
           const taken = discard.at(-1);
           if (taken === undefined) throw new Error("找不到被取走的弃牌");
+          const tiles = [...meld.tiles];
           removeTile(tiles, taken);
-          if (event.value.seat === view.seat) for (const tile of tiles) removeTile(ownHand, tile);
+          if (seat === view.seat) for (const tile of tiles) removeTile(ownHand, tile);
           discard.pop();
-        } else if (event.value.seat === view.seat) {
-          for (const tile of tiles) removeTile(ownHand, tile);
+        } else if (seat === view.seat) {
+          for (const tile of meld.tiles) removeTile(ownHand, tile);
         }
       }
+      seatTiles.melds[index] = meld;
       view.hand = ownHand;
       break;
     }

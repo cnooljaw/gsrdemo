@@ -6,14 +6,14 @@ import { runDhmj } from "./dhmj.js";
 import { DhmjScene, type DhmjEvent } from "./dhmj_state.js";
 import {
   DhmjDealPushSchema, DhmjDiscardPushSchema, DhmjDiscardRequestSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
-  DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTrusteePushSchema,
+  DhmjMeldPushSchema, DhmjMeldSchema, DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTrusteePushSchema,
   DhmjTurnPushSchema, MsgId,
 } from "./gen/demo/v1/game_pb.js";
 
 function sceneSnapshot() {
   return create(DhmjSnapshotSchema, {
     tableName: "table", phase: "playing", seat: 0n, revision: 5n, hand: [1n, 2n],
-    players: [{ userId: 7n, seat: 0n }], discards: [{}, {}, {}, {}],
+    players: [{ userId: 7n, seat: 0n }], discards: [{}, {}, {}, {}], seatTiles: [{}, {}, {}, {}],
   });
 }
 
@@ -37,6 +37,7 @@ test("麻将等待区按序应用进桌、准备和离桌，发牌沿用同一�
   }) });
   assert.equal(scene.view?.phase, "playing");
   assert.equal(scene.view?.revision, 5n);
+  assert.deepEqual(scene.view?.seatTiles.map(seat => [seat.flowers, seat.melds]), Array.from({ length: 4 }, () => [[], []]));
   assert.equal(scene.needsSync, false);
 });
 
@@ -74,16 +75,57 @@ test("麻将缺号时恢复快照并接续较新的摸牌和轮次", () => {
   assert.deepEqual(scene.view?.hand, [2n, 3n]);
 });
 
-test("麻将补花和出牌事件只更新本人的暗手", () => {
+test("麻将补花更新各座位的公开花牌，替换牌只更新本人暗手", () => {
   const scene = new DhmjScene(() => {});
   scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), hand: [1n, 0x41n] }));
   scene.accept({ kind: "flower", value: create(DhmjFlowerPushSchema, {
     tableName: "table", revision: 6n, seat: 0n, flowers: [0x41n, 0x42n], replacements: [0x42n, 5n], remaining: 26n,
   }) });
   scene.accept({ kind: "discard", value: create(DhmjDiscardPushSchema, { tableName: "table", revision: 7n, seat: 1n, tile: 1n }) });
+  scene.accept({ kind: "flower", value: create(DhmjFlowerPushSchema, {
+    tableName: "table", revision: 8n, seat: 2n, flowers: [0x43n], fromDraw: true, remaining: 24n,
+  }) });
   assert.deepEqual(scene.view?.hand, [1n, 5n]);
+  assert.deepEqual(scene.view?.seatTiles.map(seat => seat.flowers), [[0x41n, 0x42n], [], [0x43n], []]);
   assert.deepEqual(scene.view?.discards[1]?.tiles, [1n]);
-  assert.equal(scene.view?.remaining, 26n);
+  assert.equal(scene.view?.remaining, 24n);
+});
+
+test("麻将补杠替换原碰位置，非本人副露保留本人的暗手", () => {
+  const scene = new DhmjScene(() => {});
+  const pong = create(DhmjMeldSchema, { kind: "pong", sourceSeat: 2n, tiles: [5n, 5n, 5n] });
+  const eat = create(DhmjMeldSchema, { kind: "eat", sourceSeat: 0n, tiles: [1n, 2n, 3n] });
+  const kong = create(DhmjMeldSchema, { ...pong, kind: "added_kong", tiles: [5n, 5n, 5n, 5n] });
+  const snapshot = sceneSnapshot();
+  snapshot.discards[0]!.tiles = [3n];
+  snapshot.discards[2]!.tiles = [5n];
+  scene.restore(snapshot);
+  for (const [revision, meldIndex, meld] of [[6n, 0n, pong], [7n, 1n, eat], [8n, 0n, kong]] as const) {
+    scene.accept({ kind: "meld", value: create(DhmjMeldPushSchema, {
+      tableName: "table", revision, seat: 1n, meldIndex, meld,
+    }) });
+  }
+  assert.deepEqual(scene.view?.seatTiles[1]?.melds, [kong, eat]);
+  assert.deepEqual(scene.view?.discards.map(seat => seat.tiles), [[], [], [], []]);
+  assert.deepEqual(scene.view?.hand, [1n, 2n]);
+  assert.equal(scene.needsSync, false);
+});
+
+test("麻将抢杠胡保留原碰并移除本人用于补杠的牌", () => {
+  const scene = new DhmjScene(() => {});
+  const pong = create(DhmjMeldSchema, { kind: "pong", sourceSeat: 2n, tiles: [5n, 5n, 5n] });
+  const snapshot = sceneSnapshot();
+  snapshot.hand = [1n, 5n];
+  snapshot.seatTiles[0]!.melds = [pong];
+  scene.restore(snapshot);
+  scene.accept({ kind: "round_end", value: create(DhmjRoundEndPushSchema, {
+    tableName: "table", revision: 6n, roundEnd: {
+      kind: "discard_hu", sourceSeat: 0n, tile: 5n, robKong: true, winners: [{ seat: 1n, point: 1n }],
+    },
+  }) });
+  assert.deepEqual(scene.view?.seatTiles[0]?.melds, [pong]);
+  assert.deepEqual(scene.view?.hand, [1n]);
+  assert.equal(scene.view?.phase, "finished");
 });
 
 test("麻将出牌结果未知时恢复同一轮次也只提交一次", async () => {
