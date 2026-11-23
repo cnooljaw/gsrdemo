@@ -96,13 +96,13 @@ GSR、nbgameserver、ServerLogic/hlddz 和 GoServerActorFsm 的相邻仓库只�
 
 ### 3.4 多游戏组合与客户端行为
 
-Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go) 和 [comLandlord](../nodes/access/comlandlord.go) 组件。组件与 Agent 同属 access 根目录的 `package main`，通过文件和类型组织职责；组件实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`，从同一清单完成注册、进入互斥和断线清理。一个连接不能同时进入两种游戏，`Entered` 从路由推导，不另存 activeGame。Join 已返回但客户端回包校验失败时，仍保留已知路由供断线清理；持有路由不表示客户端已收到进入成功。回包校验与离开确认见[游戏 RPC 契约](PROTOCOL.md#24-mole进入与组内操作)。
+Agent 通过唯一 `games` 清单组装 [comMole](../nodes/access/commole.go)、[comLandlord](../nodes/access/comlandlord.go) 和 [comDhmj](../nodes/access/comdhmj.go)。组件与 Agent 同属 access 根目录的 `package main`，各自实现 `Name / ProtocolHandlers / CommandHandlers / Entered / Disconnect`。Agent 用同一清单完成注册、进入互斥和断线清理。每条连接同一时间只进入一款游戏，`Entered` 由组件路由推导。已取得的路由会保留给断线清理，即使后续校验进入回包失败。各游戏回包校验和离开确认见[节点间 RPC](PROTOCOL.md#2-节点间-rpc-调用)。
 
-组件通过 [componentDependencies](../nodes/access/component.go) 读取当前身份快照、请求进入准入、有界 Call 和客户端 Push；不持有父 Agent 或保存 self。[组装器](../nodes/access/agent_handlers.go) 拒绝空白/重复游戏名、重复编号及占用 Gate 断线命令。推送直接绑定具体方法：地鼠快照 100、余额校正 102、斗地主座位、准备、发牌、叫抢、出牌、结算、托管及轮次开放事件 111～118；101 用于旧登录替换，不使用 kind 字符串二次分发。
+组件通过 [componentDependencies](../nodes/access/component.go) 读取当前身份快照、请求进入准入、执行有界 Call 和向客户端 Push。[组装器](../nodes/access/agent_handlers.go) 拒绝空白或重复的游戏名、重复编号及占用 Gate 断线命令。每条推送按命令编号直接绑定处理方法，完整列表见 [Access 回调协议](PROTOCOL.md#27-回调-access快照校正与旧登录替换)。
 
 这些业务命令同属一个 Agent Service，统一在 [agent.go](../nodes/access/agent.go) 定义；Agent 与游戏组件直接引用同包源常量，远端节点引用生成的 `accessagent` 契约。Agent 名称由连接启动时生成，契约不包含固定 ServiceName。Gate 断线事件使用框架命令。
 
-TypeScript CLI 完成密码认证再 Token 登录，也可显式保存 0600 Token 文件，后续直接 Token 登录。银子和身份使用 bigint；地鼠按绝对余额与 revision 接受更新。只有明确的 `target_unavailable` 拒绝会触发重新选目标；超时、繁忙、断线等未知结果停止操作并保留 ActionID，不自动重发命中。地鼠客户端收到 accepted 即继续玩法，斗地主按事件更新场景、等待结算事件；两者都不追加逐笔查账。
+TypeScript CLI 完成密码认证再 Token 登录，也可显式保存 0600 Token 文件。银子和身份使用 bigint。地鼠按绝对余额和 revision 接受更新，收到 accepted 后继续玩法。只有明确的 `target_unavailable` 拒绝会触发重新选目标，结果未知时停止操作并保留 ActionID。斗地主与定海麻将按事件更新场景，缺号时用快照恢复，局末等待本人结算回执。
 
 ## 4. Online 位置目录
 
