@@ -431,6 +431,7 @@ func TestLandlordSettlementCallTimeoutKeepsOtherTablesResponsive(t *testing.T) {
 	other.game.Name = "other-table"
 	for i := range other.game.Players {
 		other.game.Players[i].UserID += 10
+		other.game.Players[i].AccessNode, other.game.Players[i].AgentName = "access", "agent"
 	}
 	startLandlordTestNode(t, routes, "landlord", map[string]gsr.Service{
 		game.Name: &landlordSettlementProbe{service}, other.game.Name: &landlordSettlementProbe{other},

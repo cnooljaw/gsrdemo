@@ -9,30 +9,33 @@ import (
 // TestAnimationRejectsPlayerAction 保护发牌及新轮动画期间请求不能抢先修改牌桌，开放后仍可正常操作。
 func TestAnimationRejectsPlayerAction(t *testing.T) {
 	game, _ := testBidding(t)
+	game.Players[0].AccessNode, game.Players[0].AgentName = "access", "agent"
+	self := &tableCleanupContext{}
 	service := newAttackService(game.Name, landlordJournal{}, nil, "settlement")
 	service.game = *game
 	service.game.waitTurn(time.Now(), dealDelay)
-	if _, err := service.handleCallLandlord(nil, 1, "login", service.game.Turn, true); !errors.Is(err, errLandlordTurn) {
+	if _, err := service.handleCallLandlord(self, 1, "login", service.game.Turn, true); !errors.Is(err, errLandlordTurn) {
 		t.Fatalf("动画期间接受叫地主: %v", err)
 	}
 	if changed, err := service.game.timeout(service.game.WaitUntil); !changed || err != nil {
 		t.Fatal("未开放叫牌", err)
 	}
-	if accepted, err := service.handleCallLandlord(nil, 1, "login", service.game.Turn, true); !accepted || err != nil {
+	if accepted, err := service.handleCallLandlord(self, 1, "login", service.game.Turn, true); !accepted || err != nil {
 		t.Fatal("开放后不能叫牌", err)
 	}
 
 	playing := testLandlordGame(t)
 	playing.Players[0].Hand = []int64{3, 4}
+	playing.Players[0].AccessNode, playing.Players[0].AgentName = "access", "agent"
 	service.game = *playing
 	service.game.waitTurn(time.Now(), newRoundDelay)
-	if _, err := service.handlePlay(nil, 1, "login", service.game.Turn, []any{int64(3)}); !errors.Is(err, errLandlordTurn) {
+	if _, err := service.handlePlay(self, 1, "login", service.game.Turn, []any{int64(3)}); !errors.Is(err, errLandlordTurn) {
 		t.Fatalf("动画期间接受出牌: %v", err)
 	}
 	if changed, err := service.game.timeout(service.game.WaitUntil); !changed || err != nil {
 		t.Fatal("未开放出牌", err)
 	}
-	if accepted, err := service.handlePlay(nil, 1, "login", service.game.Turn, []any{int64(3)}); !accepted || err != nil {
+	if accepted, err := service.handlePlay(self, 1, "login", service.game.Turn, []any{int64(3)}); !accepted || err != nil {
 		t.Fatal("开放后不能出牌", err)
 	}
 }

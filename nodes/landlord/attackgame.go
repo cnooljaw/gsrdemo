@@ -60,9 +60,10 @@ func (game *attackGame) deal(deck []int64, first int, now time.Time) {
 	game.Turn++
 }
 
+// member 校验当前可操作的连接。离桌后保留的座位用于重登和结算。
 func (game *attackGame) member(uid uint64, login string) (int, error) {
 	for i, p := range game.Players {
-		if p.UserID == uid && p.LoginID == login && uid != 0 {
+		if p.UserID == uid && p.LoginID == login && uid != 0 && p.AccessNode != "" && p.AgentName != "" {
 			return i, nil
 		}
 	}

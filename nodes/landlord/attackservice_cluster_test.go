@@ -257,6 +257,7 @@ func TestReadyFailureKeepsTableAndRetryDealsOnce(t *testing.T) {
 func TestTrusteeControlAndIdentity(t *testing.T) {
 	game := testLandlordGame(t)
 	game.Players[0].Hand = []int64{3, 4}
+	game.Players[0].AccessNode, game.Players[0].AgentName = "access", "agent"
 	service := newAttackService(game.Name, landlordJournal{}, nil, "settlement")
 	service.game = *game
 	routes := map[cluster.NodeID]string{}
