@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	"github.com/cnooljaw/gsr"
@@ -300,11 +301,19 @@ func (service *attackService) handleReady(self gsr.CommandContext, uid uint64, l
 }
 
 func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, login string) (bool, error) {
-	seat, err := service.game.member(uid, login)
-	if err != nil {
-		return false, err
+	if uid == 0 || !validIdentity(login) {
+		return false, errLandlordStale
+	}
+	seat := slices.IndexFunc(service.game.Players[:], func(player landlordPlayer) bool {
+		return player.UserID == uid
+	})
+	if seat < 0 {
+		return true, nil
 	}
 	player := service.game.Players[seat]
+	if player.LoginID != login {
+		return false, errLandlordStale
+	}
 	service.game.detach(seat)
 	if player.Ready && service.game.Phase == "waiting" {
 		service.pushSeat(self, uid, seat, true, false)

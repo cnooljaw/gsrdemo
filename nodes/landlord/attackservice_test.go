@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -99,6 +100,38 @@ func detachedTable(t *testing.T) (*attackService, *tableCleanupContext) {
 		}
 	}
 	return service, self
+}
+
+// TestLeaveIsIdempotentForReleasedSeat 保护同桌仍在时重复离开成功，旧登录无法移除新登录。
+func TestLeaveIsIdempotentForReleasedSeat(t *testing.T) {
+	service, directory := occupiedLandlordTable()
+	self := &tableCleanupContext{directory: directory}
+	if left, err := service.handleLeave(self, 1, "login"); err != nil || !left {
+		t.Fatalf("首次离开失败：%v %v", left, err)
+	}
+	if service.game.Players[0].UserID != 0 || directory.tables[service.game.Name].Count != 2 {
+		t.Fatal("首次离开未释放原座位或影响了同桌玩家")
+	}
+	revision := service.revision
+	if left, err := service.handleLeave(self, 1, "login"); err != nil || !left {
+		t.Fatalf("原座位已释放，重复离开应成功：%v %v", left, err)
+	}
+	if self.releaseCalls != 1 || service.revision != revision {
+		t.Fatal("重复离开再次释放座位或生成事件")
+	}
+
+	if err := service.game.join(1, "new-login", "access", "new-agent", "new-member"); err != nil {
+		t.Fatal(err)
+	}
+	before := service.game.Players[0]
+	if left, err := service.handleLeave(self, 1, "login"); left || !errors.Is(err, errLandlordStale) {
+		t.Fatalf("旧登录离开应被拒绝：%v %v", left, err)
+	}
+	after := service.game.Players[0]
+	if after.LoginID != before.LoginID || after.AccessNode != before.AccessNode || after.AgentName != before.AgentName ||
+		self.releaseCalls != 1 || service.revision != revision {
+		t.Fatal("旧登录离开影响了新登录的座位")
+	}
 }
 
 // TestLeaveFailureIsRetriedByPulse 保护释放未执行或回执丢失时已接纳离开、停止推送与准备，Pulse 退避后回收原成员。
