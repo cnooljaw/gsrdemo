@@ -1,6 +1,6 @@
 # GSR Demo
 
-基于 **GSR v1.0.4** 的多节点打地鼠与三人斗地主示例，使用 TypeScript 命令行客户端演示登录、地鼠命中反馈、斗地主叫抢出牌和银子结算。
+基于 **GSR v1.0.4** 的多节点游戏示例，包含打地鼠、三人斗地主和四人定海麻将。TypeScript 命令行客户端演示登录、玩法事件和银子结算。
 
 调用链：客户端 → access → login / online / mole、landlord 或 dhmj → settlement → MySQL。Redis 保存临时认证 Token、地鼠批次和统计检查点，以及斗地主和麻将的待结算请求。
 
@@ -10,7 +10,7 @@
 
 打开系统终端（macOS Terminal、iTerm 或编辑器集成终端均可），使用 **zsh**，先用 `cd` 进入 **gsrdemo 根目录**。下面标为 **Shell** 的命令都在该终端执行，包括 `go`、`node`、`npm` 命令；标为 **SQL** 的语句在登录 MySQL 后的 `mysql>` 控制台执行。
 
-首次完成第 1～4 步；以后确认 MySQL、Redis 已运行，再从第 5 步启动。
+首次完成第 1～3 步，演示地鼠时再完成第 4 步。之后确认 MySQL、Redis 已运行，从第 5 步启动。
 
 ### 1. 准备环境
 
@@ -71,7 +71,7 @@ chmod 600 configs/login-01.local.yaml configs/settlement-01.local.yaml configs/m
 
 ```shell
 # Shell（zsh），在 gsrdemo 根目录的终端执行
-read -rs 'demo_password?设置三个账号的演示密码: '
+read -rs 'demo_password?设置四个账号的演示密码: '
 for demo_user in demo1 demo2 demo3 demo4; do
   account_result=$(printf '%s\n' "$demo_password" | ./bin/login \
     -config configs/login-01.local.yaml -create-user "$demo_user") || break
@@ -93,7 +93,7 @@ MySQL、Redis 可用后，在 mole 尚未启动时执行检查点初始化。
 ./bin/mole -config configs/mole-01.local.yaml -init-accounting
 ```
 
-该命令创建版本 2 的零统计检查点，重复执行不重置同一 key 中已有的新统计。以后重启沿用同一 Redis 数据和 key，无需重复初始化。斗地主跳过此步骤，使用 `configs/landlord-01.yaml` 中的独立 `redis_key`，不需要新增 SQL 表。
+该命令创建版本 2 的零统计检查点，重复执行不重置同一 key 中已有的新统计。以后重启沿用同一 Redis 数据和 key，无需重复初始化。斗地主和麻将直接使用各自配置中的 Redis 待结算键，可跳过此步骤。
 
 ### 5. 按顺序启动服务节点
 
@@ -110,7 +110,7 @@ MySQL、Redis 先保持运行。**每个节点各用一个终端**，按下表�
 | 5 | access-01：客户端接入和业务路由 | `./scripts/dev.sh run access` | Cluster `127.0.0.1:19001`；WS `127.0.0.1:7888` |
 | 6（可选） | access-02：第二个接入实例 | `./bin/access -config configs/access-02.yaml` | Cluster `127.0.0.1:19006`；WS `127.0.0.1:7889` |
 
-演示地鼠启动 mole，演示斗地主启动 landlord；同时演示两种游戏时均启动。联调麻将时启动 dhmj 与 access，客户端消息见[麻将协议](docs/PROTOCOL.md#15-定海麻将协议)。房间分值与 Redis 待结算键见 `configs/dhmj-01.yaml`。
+按要演示的游戏启动第 4 步对应的节点。多款游戏可同时运行，共用 login、online、settlement 和 access。麻将房间分值与 Redis 待结算键见 [dhmj-01.yaml](configs/dhmj-01.yaml)，客户端消息见[麻将协议](docs/PROTOCOL.md#15-定海麻将协议)。
 
 settlement 提供 `settlement-write` 与 `settlement-read` 两个 Call 服务池。各池由多个串行 Service 并行处理不同请求，调用方统一 Call 池名。通过 `write_workers/read_workers/mysql_connections/mailbox_capacity` 分别调整写成员数、读成员数、数据库连接数和每成员邮箱容量；默认值、游戏调用及超时处理见 [Settlement 设计](docs/DESIGN.md#7-settlement并行执行与权威账务)。mole、landlord 通过 `settlement_node` 选择结算节点，默认 `settlement`；access 不直接调用结算，无此配置。其他结算实例在 `nodes.yaml` 配置并由游戏节点显式选择，共用权威 MySQL，不自动切换。
 
@@ -191,7 +191,7 @@ unset demo_password
 
 #### 定海麻将四人演示
 
-启动 login、online、settlement、dhmj 和 access，分别用 `demo1` 至 `demo4` 在四个终端运行以下命令。
+按第 5 步启动 login、online、settlement、dhmj 和 access。另开四个客户端终端执行以下命令，把 `--username` 的值分别设为 `demo1`、`demo2`、`demo3`、`demo4`。
 
 ```zsh
 read -rs 'demo_password?演示账号密码: '
@@ -242,6 +242,10 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
 ## 源码与文档
 
 每个节点是 `nodes/<角色>` 下的独立 Go module；共享配置在 `common/model`，客户端在 `typeclient`；节点间直接使用 GSR Call/Send。构建依赖发布的 GSR v1.0.4。
+
+- 接入与身份：[Access](nodes/access/README.md)、[Login](nodes/login/README.md)、[Online](nodes/online/README.md)。
+- 游戏与账务：[打地鼠](nodes/mole/README.md)、[斗地主](nodes/landlord/README.md)、[定海麻将](nodes/dhmj/README.md)、[Settlement](nodes/settlement/README.md)。
+- 客户端：[TypeScript CLI](typeclient/README.md)。
 
 - 节点间 Call：见 [Agent 登录](nodes/access/agent_login.go)、[Mole 查询 Online](nodes/mole/moleentryservice.go)。
 - 结算与推送：见 [结算池组装](nodes/settlement/main_service.go)、[结算池成员](nodes/settlement/settlementwriteservice.go)、[地鼠批次提交](nodes/mole/molesubmissionservice.go)、[斗地主局末结算](nodes/landlord/roundsettlement.go)和[地鼠接入组件](nodes/access/commole.go)。
