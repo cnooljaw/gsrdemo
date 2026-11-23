@@ -50,6 +50,15 @@ function adjustHandCount(view: DhmjSnapshot, seat: bigint, delta: bigint): void 
   view.handCounts[index] = previous + delta;
 }
 
+function clearActionOptions(view: DhmjSnapshot): void {
+  view.canDiscard = false;
+  view.canSelfWin = false;
+  view.selfAction = false;
+  view.offers = [];
+  view.concealedKongs = [];
+  view.addedKongs = [];
+}
+
 // 演示客户端按序更新等待区座位、暗手、公开牌面和操作权。
 function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
   if (event.kind === "seat") {
@@ -64,17 +73,12 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
   if (event.kind === "trustee") {
     const { revision, seat, enabled } = event.value;
     view.trustees[Number(seat)] = enabled;
-    if (enabled && seat === view.seat) view.offers = [];
+    if (enabled && seat === view.seat) clearActionOptions(view);
     view.revision = revision;
     return;
   }
   const ownHand = [...view.hand];
-  if (event.kind !== "turn") {
-    view.canDiscard = false;
-    view.canSelfWin = false;
-    view.selfAction = false;
-    view.offers = [];
-  }
+  if (event.kind !== "turn") clearActionOptions(view);
   switch (event.kind) {
     case "deal":
       if (event.value.seat !== view.seat) throw new Error("起手牌座位不匹配");
@@ -160,13 +164,17 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       view.activeSeat = event.value.activeSeat;
       view.turn = event.value.turn;
       view.windowId = event.value.windowId;
+      view.windowTile = event.value.windowTile;
+      view.robKong = event.value.robKong;
       view.serverMs = event.value.serverMs;
       view.deadlineMs = event.value.deadlineMs;
       view.offers = event.value.offers;
       view.canDiscard = event.value.canDiscard;
       view.canSelfWin = event.value.canSelfWin;
-      view.selfAction = event.value.phase === "self" && (event.value.canSelfWin ||
-        event.value.concealedKongs.length > 0 || event.value.addedKongs.length > 0);
+      view.concealedKongs = event.value.concealedKongs;
+      view.addedKongs = event.value.addedKongs;
+      view.selfAction = view.operationPhase === "self" && (view.canSelfWin ||
+        view.concealedKongs.length > 0 || view.addedKongs.length > 0);
       break;
     case "round_end": {
       const end = event.value.roundEnd;
@@ -177,6 +185,11 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       }
       view.roundEnd = end;
       view.phase = "finished";
+      view.operationPhase = "finished";
+      view.windowId = 0n;
+      view.windowTile = 0n;
+      view.robKong = false;
+      view.deadlineMs = 0n;
       break;
     }
   }

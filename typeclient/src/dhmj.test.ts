@@ -78,6 +78,38 @@ test("麻将缺号时恢复快照并接续较新的摸牌和轮次", () => {
   assert.deepEqual(scene.view?.handCounts, [2n, 13n, 13n, 13n]);
 });
 
+test("麻将轮次事件更新抢杠窗口，并替换重连快照中的自选候选", () => {
+  const scene = new DhmjScene(() => {});
+  scene.restore(create(DhmjSnapshotSchema, {
+    ...sceneSnapshot(), operationPhase: "self", selfAction: true, concealedKongs: [3n], addedKongs: [5n],
+  }));
+  scene.accept({ kind: "turn", value: create(DhmjTurnPushSchema, {
+    tableName: "table", revision: 6n, seat: 0n, phase: "respond", windowId: 4n, windowTile: 5n, robKong: true, offers: [6n],
+  }) });
+  assert.equal(scene.view?.windowId, 4n);
+  assert.equal(scene.view?.windowTile, 5n);
+  assert.equal(scene.view?.robKong, true);
+  assert.deepEqual(scene.view?.offers, [6n]);
+  assert.deepEqual(scene.view?.concealedKongs, []);
+  assert.deepEqual(scene.view?.addedKongs, []);
+  scene.accept({ kind: "turn", value: create(DhmjTurnPushSchema, {
+    tableName: "table", revision: 7n, seat: 0n, phase: "self", concealedKongs: [8n], addedKongs: [9n],
+  }) });
+  assert.equal(scene.view?.windowId, 0n);
+  assert.equal(scene.view?.windowTile, 0n);
+  assert.equal(scene.view?.robKong, false);
+  assert.deepEqual(scene.view?.offers, []);
+  assert.deepEqual(scene.view?.concealedKongs, [8n]);
+  assert.deepEqual(scene.view?.addedKongs, [9n]);
+  assert.equal(scene.view?.selfAction, true);
+  scene.accept({ kind: "trustee", value: create(DhmjTrusteePushSchema, {
+    tableName: "table", revision: 8n, seat: 0n, enabled: true,
+  }) });
+  assert.equal(scene.view?.selfAction, false);
+  assert.deepEqual(scene.view?.concealedKongs, []);
+  assert.deepEqual(scene.view?.addedKongs, []);
+});
+
 test("麻将补花更新各座位的公开花牌，替换牌只更新本人暗手", () => {
   const scene = new DhmjScene(() => {});
   scene.restore(create(DhmjSnapshotSchema, { ...sceneSnapshot(), hand: [1n, 0x41n] }));
@@ -135,6 +167,10 @@ test("麻将抢杠胡保留原碰并移除本人用于补杠的牌", () => {
   const snapshot = sceneSnapshot();
   snapshot.hand = [1n, 5n];
   snapshot.seatTiles[0]!.melds = [pong];
+  snapshot.operationPhase = "respond";
+  snapshot.windowId = 4n;
+  snapshot.windowTile = 5n;
+  snapshot.robKong = true;
   scene.restore(snapshot);
   scene.accept({ kind: "round_end", value: create(DhmjRoundEndPushSchema, {
     tableName: "table", revision: 6n, roundEnd: {
@@ -145,6 +181,10 @@ test("麻将抢杠胡保留原碰并移除本人用于补杠的牌", () => {
   assert.deepEqual(scene.view?.hand, [1n]);
   assert.deepEqual(scene.view?.handCounts, [1n, 13n, 13n, 13n]);
   assert.equal(scene.view?.phase, "finished");
+  assert.equal(scene.view?.operationPhase, "finished");
+  assert.equal(scene.view?.windowId, 0n);
+  assert.equal(scene.view?.windowTile, 0n);
+  assert.equal(scene.view?.robKong, false);
 });
 
 test("麻将出牌结果未知时恢复同一轮次也只提交一次", async () => {
