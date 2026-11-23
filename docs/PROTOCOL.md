@@ -128,7 +128,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 
 等待区变化使用 `1401 DhmjSeatPush`，字段为 `table_name string, revision/user_id uint64, seat int64, joined/ready bool`，`request_id` 为 0。`seat` 是发生变化的座位，`joined=false` 表示离座且 `ready=false`。进桌者收到含本人座位的快照，其他在线玩家收到座位事件。首次准备的事件也发给本人，离桌事件发给仍在桌上的在线玩家。恢复原座或重复准备时沿用当前座位状态。
 
-Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应窗口和可选动作裁决。Respond 的动作编号见[麻将目录 RPC](#210-dhmj定海麻将凑桌与准备)。`ActionAck` 只确认当前请求，不附牌面或结算数据。请求超时后，可用 Snapshot 确认当前状态。
+Access 取当前连接的 UserID 和 LoginID，牌桌按服务器轮次、响应窗口和可选动作裁决。Respond 的动作编号见[麻将目录 RPC](#210-dhmj定海麻将凑桌与准备)。`ActionAck` 只确认当前请求，不附牌面或结算数据。收到 Respond 的成功回执后，客户端可清空原 `window_id` 的本人选项，窗口和截止时间由后续推送更新。若已进入新窗口，保留新窗口选项。请求超时后，可用 Snapshot 确认当前状态。
 
 Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人 `settlement`，`request_id` 为 0。麻将目录在结算确认后向各在线玩家发送本人回执。未收到推送时，可通过快照恢复结果。
 
