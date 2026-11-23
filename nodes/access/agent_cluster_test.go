@@ -559,8 +559,8 @@ func TestAccessDhmjRulingPushes(t *testing.T) {
 	}
 }
 
-// TestAccessDhmjSeatPush 保护等待区座位变化按当前路由转发，并过滤矛盾的离座状态。
-func TestAccessDhmjSeatPush(t *testing.T) {
+// TestAccessDhmjSeatAndTrusteePush 保护麻将座位和托管事件转发，并过滤无效的座位变化。
+func TestAccessDhmjSeatAndTrusteePush(t *testing.T) {
 	gateAddress, backend, _ := startAccessBusiness(t)
 	client := dialAccess(t, gateAddress)
 	if got := accessLogin(t, client, "alice", "password"); got.MsgId != uint32(demopb.MsgId_S2C_LOGIN) {
@@ -593,6 +593,19 @@ func TestAccessDhmjSeatPush(t *testing.T) {
 			event.GetTableName() != "dhmj-1" || event.GetRevision() != expected.revision || event.GetSeat() != 3 ||
 			event.GetUserId() != uid || event.GetJoined() != expected.joined || event.GetReady() != expected.joined {
 			t.Fatalf("错误的麻将座位推送：%v %v", &event, err)
+		}
+	}
+	for i, enabled := range []bool{true, false} {
+		revision := uint64(12 + i)
+		accessFixtureRPC(t, backend, 98, uint64(accessagent.DhmjTrusteePushCommand), login, map[string]any{
+			"table_name": "dhmj-1", "revision": revision, "seat": int64(3), "enabled": enabled,
+		})
+		envelope := readAccessEnvelope(t, client)
+		var event demopb.DhmjTrusteePush
+		err := proto.Unmarshal(envelope.Payload, &event)
+		if err != nil || envelope.MsgId != uint32(demopb.MsgId_S2C_DHMJ_TRUSTEE_PUSH) || envelope.RequestId != 0 ||
+			event.GetTableName() != "dhmj-1" || event.GetRevision() != revision || event.GetSeat() != 3 || event.GetEnabled() != enabled {
+			t.Fatalf("错误的麻将托管推送：%v %v", &event, err)
 		}
 	}
 }

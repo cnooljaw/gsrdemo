@@ -6,7 +6,8 @@ import { runDhmj } from "./dhmj.js";
 import { DhmjScene, type DhmjEvent } from "./dhmj_state.js";
 import {
   DhmjDealPushSchema, DhmjDiscardPushSchema, DhmjDiscardRequestSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
-  DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTurnPushSchema, MsgId,
+  DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTrusteePushSchema,
+  DhmjTurnPushSchema, MsgId,
 } from "./gen/demo/v1/game_pb.js";
 
 function sceneSnapshot() {
@@ -37,6 +38,24 @@ test("麻将等待区按序应用进桌、准备和离桌，发牌沿用同一�
   assert.equal(scene.view?.phase, "playing");
   assert.equal(scene.view?.revision, 5n);
   assert.equal(scene.needsSync, false);
+});
+
+test("麻将托管只更新变化的座位，本人开启时清除待响应选项", () => {
+  const scene = new DhmjScene(() => {});
+  scene.restore(create(DhmjSnapshotSchema, {
+    ...sceneSnapshot(), operationPhase: "respond", offers: [6n], trustees: [false, false, false, false],
+  }));
+  const pushTrustee = (revision: bigint, seat: bigint, enabled: boolean) => scene.accept({
+    kind: "trustee", value: create(DhmjTrusteePushSchema, { tableName: "table", revision, seat, enabled }),
+  });
+  pushTrustee(6n, 1n, true);
+  assert.deepEqual(scene.view?.trustees, [false, true, false, false]);
+  assert.deepEqual(scene.view?.offers, [6n]);
+  pushTrustee(7n, 0n, true);
+  pushTrustee(8n, 0n, false);
+  assert.deepEqual(scene.view?.trustees, [false, true, false, false]);
+  assert.deepEqual(scene.view?.offers, []);
+  assert.equal(scene.view?.revision, 8n);
 });
 
 test("麻将缺号时恢复快照并接续较新的摸牌和轮次", () => {

@@ -122,7 +122,7 @@ Enter 返回当前余额基线；即时 Hit 的 silver 可不含 confirmed。acc
 | SelfWin | 1361 → 1005 | `turn uint64` | `ActionAck`，牌桌确认自摸 |
 | Kong | 1371 → 1005 | `turn uint64, tile int64` | `ActionAck`，牌桌接受暗杠或补杠；补杠可能进入抢杠窗口 |
 | PassSelf | 1381 → 1005 | `turn uint64` | `ActionAck`，放弃当前自选动作，进入出牌轮次 |
-| Trustee | 1391 → 1005 | `enabled bool` | `ActionAck`，托管状态已设置 |
+| Trustee | 1391 → 1005 | `enabled bool` | `ActionAck`，已达到请求的托管状态，状态变化见 1402 |
 
 `DhmjSnapshot` 使用[麻将目录快照](#210-dhmj定海麻将凑桌与准备)的字段，`discards` 按座位组织，每座的牌放在 `tiles` 中。`hand` 只含本人暗手，`settlement` 也只带本人的资金结果。重登后通过 Enter 恢复原座，再使用 Snapshot 补场景。
 
@@ -153,6 +153,8 @@ Access 支持推送 `1396 DhmjSettlementPush`，字段为 `table_name` 和本人
 | `server_ms/deadline_ms int64` | 服务端当前时间与截止时间。终局截止时间为 0 |
 | `window_id uint64, window_tile int64, rob_kong bool` | 响应窗口编号、牌值及是否抢杠。窗口外为 0 或 false |
 | `offers/concealed_kongs/added_kongs int64[], can_self_win/can_discard bool` | 发给接收者本人的操作选项。响应用 `offers`，自摸和自杠候选仅在本人自选阶段提供 |
+
+`1402 DhmjTrusteePush` 向同桌在线玩家广播变化的托管状态，字段为 `table_name string, revision uint64, seat int64, enabled bool`，`request_id` 为 0。`seat` 是状态变化的座位。手动开启、取消和超时自动开启均使用此事件，重复设置相同状态沿用原序号。若自动开启伴随自动出牌，先发托管变化，再发出牌。操作权和截止时间仍由轮次事件或快照提供。
 
 同桌在线玩家收到以下裁决推送。两条消息都带 `table_name string, revision uint64`，`request_id` 为 0。
 
@@ -347,6 +349,7 @@ OperationID 是全局财务身份，BatchID 是提交身份。同身份同内容
 | dhmj / 125 DhmjMeldPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发生效的副露 | 1398 |
 | dhmj / 126 DhmjRoundEndPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发完整终局裁决 | 1399 |
 | dhmj / 127 DhmjSeatPush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发进桌、准备或离桌变化 | 1401 |
+| dhmj / 128 DhmjTrusteePush | `L, payload map`，字段同 C/S | 核对当前登录和牌桌，转发变更座位的托管状态 | 1402 |
 | 新登录 Agent / 101 Replaced | `oldLoginID string` | 仅匹配旧登录时清理游戏、条件 Unbind 并退出 | 关闭旧连接，无专用业务响应 |
 
 推送 Send 接纳不等于客户端送达，不以玩家确认收包作为结算幂等或 Redis 清理条件。结算 Call 的回执由游戏处理，再按各自协议返回或推送客户端结果。
@@ -427,7 +430,7 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 | --- | --- | --- | --- |
 | 牌桌 → 目录 | Send 11 | `tableName, operationID string, receipt [4]roundSilver` | 按发送者 ServiceID 核对牌桌，转发在线玩家的本人回执并开始计算离线座位的重登窗口 |
 | 目录 Pulse → 目录 | Send 12 | 无 | 回收到期离线座位，重试关闭已空牌桌 |
-| 牌桌 → 目录 | Send 13 | `tableName string, event roundEvent` | 目录核对来源，转发发牌、出牌、摸牌、补花、轮次和裁决；私有牌面和选项只随本人消息发送 |
+| 牌桌 → 目录 | Send 13 | `tableName string, event roundEvent` | 目录核对来源，转发发牌、出牌、摸牌、补花、托管、轮次和裁决；私有牌面和选项只随本人消息发送 |
 | 目录 → 牌桌 | Send 9 | 无 | 记录关闭意图，结算待记录清理完成后牌桌退出 |
 
 | 本人快照 | 字段 |

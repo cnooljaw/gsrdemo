@@ -12,6 +12,7 @@ const claimHu = 6n;
 const pass = 7n;
 
 function chooseAction(view: DhmjSnapshot): { key: string; id: MsgId; payload: Uint8Array } | undefined {
+  if (view.trustees[Number(view.seat)]) return;
   if (view.operationPhase === "respond" && view.offers.length !== 0) {
     const action = view.offers.includes(claimHu) ? claimHu : pass;
     return { key: `window:${view.windowId}`, id: MsgId.C2S_DHMJ_RESPOND,

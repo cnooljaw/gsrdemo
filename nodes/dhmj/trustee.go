@@ -15,7 +15,7 @@ func (g *round) setTrustee(seat int, enabled bool, now time.Time) bool {
 	if g.trustees[seat] == enabled {
 		return true
 	}
-	g.trustees[seat] = enabled
+	g.recordTrustee(seat, enabled)
 	if g.window != nil {
 		if enabled && now.Before(g.deadline) && g.window.submit(seat, pass) {
 			g.resolveResponse(now)
@@ -71,11 +71,16 @@ func (g *round) tick(now time.Time) bool {
 	if !g.trustees[seat] && g.afterClaim == unanswered {
 		g.discardTimeouts[seat]++
 		if g.discardTimeouts[seat] == 2 {
-			g.trustees[seat] = true
+			g.recordTrustee(seat, true)
 		}
 	}
 	g.applyDiscard(seat, index, now)
 	return true
+}
+
+func (g *round) recordTrustee(seat int, enabled bool) {
+	g.trustees[seat] = enabled
+	g.recordEvent(roundEvent{kind: trusteeEvent, seat: seat, trustee: enabled})
 }
 
 func (g *round) autoDiscardTile(hand []byte) byte {

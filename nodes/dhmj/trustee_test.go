@@ -23,6 +23,18 @@ func TestDiscardTimeoutEnablesTrustee(t *testing.T) {
 		!slices.Equal(g.out[0], []byte{5, 4}) {
 		t.Fatal("第二次摸牌超时未进入托管或打错牌")
 	}
+	var changes []roundEvent
+	for i, event := range g.events {
+		if event.kind == trusteeEvent {
+			changes = append(changes, event)
+			if i+1 == len(g.events) || g.events[i+1].kind != discardEvent {
+				t.Fatal("自动托管应先于自动出牌")
+			}
+		}
+	}
+	if len(changes) != 1 || changes[0].seat != 0 || !changes[0].trustee {
+		t.Fatalf("两次超时应只广播一次开启托管：%v", changes)
+	}
 }
 
 // TestCancelTrusteeCancelsAutoDiscard 保护取消托管后旧的自动出牌时间不能推进回合。
@@ -31,10 +43,17 @@ func TestCancelTrusteeCancelsAutoDiscard(t *testing.T) {
 	g := round{active: 0, hands: [4][]byte{{5, 9}}}
 	g.openDrawnTurn(now, 5, false, 0)
 	if !g.setTrustee(0, true, now) || g.discard(0, g.turn, 9, now) ||
+		!g.setTrustee(0, true, now.Add(time.Millisecond)) || g.revision != 1 ||
 		!g.setTrustee(0, false, now.Add(time.Millisecond)) ||
+		!g.setTrustee(0, false, now.Add(time.Millisecond)) || g.revision != 2 ||
 		g.tick(now.Add(trusteeDiscardDelay)) || len(g.out[0]) != 0 ||
 		!g.discard(0, g.turn, 9, now.Add(time.Second)) {
 		t.Fatal("取消托管后旧自动出牌仍生效或未恢复人工出牌")
+	}
+	first, second := g.events[0], g.events[1]
+	if first.kind != trusteeEvent || !first.trustee || second.kind != trusteeEvent || second.trustee ||
+		first.seat != 0 || second.seat != 0 {
+		t.Fatalf("手动开启和取消应各广播一次：%+v %+v", first, second)
 	}
 }
 

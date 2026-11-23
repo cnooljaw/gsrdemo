@@ -18,6 +18,7 @@ const (
 	turnEvent
 	meldEvent
 	roundEndEvent
+	trusteeEvent
 )
 
 type openingDeal struct {
@@ -41,6 +42,7 @@ type roundEvent struct {
 	tile            byte
 	flowers         []flowerReplacement
 	fromDraw        bool
+	trustee         bool
 	deal            *openingDeal
 	operation       *turnNotice
 	meld            *meldChange
@@ -117,6 +119,9 @@ func (g *round) recordFlowers(seat int, flowers []flowerReplacement, fromDraw bo
 func (event roundEvent) wire(tableName string, recipient int) (runtime.CommandID, map[string]any) {
 	payload := map[string]any{"table_name": tableName, "revision": event.revision, "seat": int64(event.seat)}
 	switch event.kind {
+	case trusteeEvent:
+		payload["enabled"] = event.trustee
+		return accessagent.DhmjTrusteePushCommand, payload
 	case meldEvent:
 		payload["meld_index"], payload["meld"] = int64(event.meld.index), event.meld.value.wire()
 		return accessagent.DhmjMeldPushCommand, payload

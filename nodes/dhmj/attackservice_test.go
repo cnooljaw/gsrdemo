@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -33,13 +34,17 @@ func TestTableSnapshotClonesSeatTiles(t *testing.T) {
 	}
 }
 
-const testObserveCommand runtime.CommandID = 1
+const (
+	testObserveCommand runtime.CommandID = iota + 1
+	testEnableTrusteeCommand
+)
 
 type tableTestMain struct {
 	table           *attackService
 	id              runtime.ServiceID
 	done            chan error
 	discard         roundEvent
+	trustee         roundEvent
 	initialRevision uint64
 	turnEvent       roundEvent
 	discardTurn     uint64
@@ -75,10 +80,7 @@ func (m *tableTestMain) OnStart(ctx context.Context, self gsr.ServiceContext) er
 	if second.(tableView).Hand[0] == 0xff {
 		return errors.New("快照泄漏暗手引用")
 	}
-	if _, err := self.Call(ctx, id, tableTrusteeCommand, 0, true); err != nil {
-		return err
-	}
-	_, err = self.After(100*time.Millisecond, testObserveCommand)
+	_, err = self.After(0, testEnableTrusteeCommand)
 	return err
 }
 
@@ -88,12 +90,23 @@ func (m *tableTestMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, a
 	if cmd == tableEventCommand && self.Source() == m.id {
 		event := args[1].(roundEvent)
 		switch event.kind {
+		case trusteeEvent:
+			m.trustee = event
 		case discardEvent:
 			m.discard = event
 		case turnEvent:
 			m.turnEvent = event
 		}
 		return nil, nil
+	}
+	if cmd == testEnableTrusteeCommand {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := self.Call(ctx, m.id, tableTrusteeCommand, 0, true); err != nil {
+			return nil, err
+		}
+		_, err := self.After(100*time.Millisecond, testObserveCommand)
+		return nil, err
 	}
 	if cmd != testObserveCommand {
 		return nil, runtime.ErrUnknownCommand
@@ -114,6 +127,9 @@ func (m *tableTestMain) Handle(self gsr.CommandContext, cmd runtime.CommandID, a
 		m.discard.revision <= m.initialRevision ||
 		m.discard.turn != m.discardTurn || m.discard.seat != 0 || m.discard.tile != 0x37 {
 		m.done <- errors.New("Pulse 未用托管推进，或快照含错误座位的手牌")
+	} else if m.trustee.revision != m.initialRevision+1 || m.trustee.revision >= m.discard.revision ||
+		m.trustee.seat != 0 || !m.trustee.trustee {
+		m.done <- fmt.Errorf("错误的托管事件：%+v，开局序号 %d，出牌序号 %d", m.trustee, m.initialRevision, m.discard.revision)
 	} else {
 		m.done <- nil
 	}

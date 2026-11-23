@@ -2,13 +2,15 @@ import { create, fromBinary } from "@bufbuild/protobuf";
 import type { Envelope } from "./gen/gsr/common/v1/common_pb.js";
 import {
   DhmjDealPushSchema, DhmjDiscardPushSchema, DhmjDiscardsSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
-  DhmjMeldPushSchema, DhmjPlayerSchema, DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjTurnPushSchema, MsgId,
+  DhmjMeldPushSchema, DhmjPlayerSchema, DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema,
+  DhmjTrusteePushSchema, DhmjTurnPushSchema, MsgId,
   type DhmjDealPush, type DhmjDiscardPush, type DhmjDrawPush, type DhmjFlowerPush, type DhmjMeldPush,
-  type DhmjRoundEndPush, type DhmjSeatPush, type DhmjSettlementPush, type DhmjSnapshot, type DhmjTurnPush,
+  type DhmjRoundEndPush, type DhmjSeatPush, type DhmjSettlementPush, type DhmjSnapshot, type DhmjTrusteePush, type DhmjTurnPush,
 } from "./gen/demo/v1/game_pb.js";
 
 type SequencedEvent =
   | { kind: "seat"; value: DhmjSeatPush }
+  | { kind: "trustee"; value: DhmjTrusteePush }
   | { kind: "deal"; value: DhmjDealPush }
   | { kind: "discard"; value: DhmjDiscardPush }
   | { kind: "draw"; value: DhmjDrawPush }
@@ -21,6 +23,7 @@ export type DhmjEvent = SequencedEvent | { kind: "settlement"; value: DhmjSettle
 export function decodeDhmjEvent(frame: Envelope): DhmjEvent | undefined {
   switch (frame.msgId) {
     case MsgId.S2C_DHMJ_SEAT_PUSH: return { kind: "seat", value: fromBinary(DhmjSeatPushSchema, frame.payload) };
+    case MsgId.S2C_DHMJ_TRUSTEE_PUSH: return { kind: "trustee", value: fromBinary(DhmjTrusteePushSchema, frame.payload) };
     case MsgId.S2C_DHMJ_DEAL_PUSH: return { kind: "deal", value: fromBinary(DhmjDealPushSchema, frame.payload) };
     case MsgId.S2C_DHMJ_DISCARD_PUSH: return { kind: "discard", value: fromBinary(DhmjDiscardPushSchema, frame.payload) };
     case MsgId.S2C_DHMJ_DRAW_PUSH: return { kind: "draw", value: fromBinary(DhmjDrawPushSchema, frame.payload) };
@@ -49,6 +52,13 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
     view.revision = revision;
     return;
   }
+  if (event.kind === "trustee") {
+    const { revision, seat, enabled } = event.value;
+    view.trustees[Number(seat)] = enabled;
+    if (enabled && seat === view.seat) view.offers = [];
+    view.revision = revision;
+    return;
+  }
   const ownHand = [...view.hand];
   if (event.kind !== "turn") {
     view.canDiscard = false;
@@ -62,6 +72,7 @@ function applyDhmjEvent(view: DhmjSnapshot, event: SequencedEvent): void {
       view.hand = [...event.value.hand];
       view.players = event.value.playerIds.map((userId, seat) => create(DhmjPlayerSchema, { userId, seat: BigInt(seat), ready: true }));
       view.discards = view.players.map(() => create(DhmjDiscardsSchema));
+      view.trustees = view.players.map(() => false);
       view.dealerSeat = event.value.dealerSeat;
       view.remaining = event.value.remaining;
       view.phase = "playing";

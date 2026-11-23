@@ -24,4 +24,5 @@ const (
 	DhmjMeldPushCommand              = 125
 	DhmjRoundEndPushCommand          = 126
 	DhmjSeatPushCommand              = 127
+	DhmjTrusteePushCommand           = 128
 )
