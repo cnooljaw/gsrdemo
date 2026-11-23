@@ -6,7 +6,8 @@ import { runDhmj } from "./dhmj.js";
 import { DhmjScene, type DhmjEvent } from "./dhmj_state.js";
 import {
   DhmjDealPushSchema, DhmjDiscardPushSchema, DhmjDiscardRequestSchema, DhmjDrawPushSchema, DhmjFlowerPushSchema,
-  DhmjMeldPushSchema, DhmjMeldSchema, DhmjRoundEndPushSchema, DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTrusteePushSchema,
+  DhmjMeldPushSchema, DhmjMeldSchema, DhmjRespondRequestSchema, DhmjRoundEndPushSchema,
+  DhmjSeatPushSchema, DhmjSettlementPushSchema, DhmjSnapshotSchema, DhmjTrusteePushSchema,
   DhmjTurnPushSchema, MsgId,
 } from "./gen/demo/v1/game_pb.js";
 
@@ -186,6 +187,52 @@ test("麻将抢杠胡保留原碰并移除本人用于补杠的牌", () => {
   assert.equal(scene.view?.windowTile, 0n);
   assert.equal(scene.view?.robKong, false);
 });
+
+for (const nextWindowFirst of [false, true]) {
+  test(nextWindowFirst ? "麻将旧窗口回执保留先到的新窗口选项" : "麻将响应成功只清除本人的选项", async () => {
+    const snapshot = create(DhmjSnapshotSchema, {
+      ...sceneSnapshot(), operationPhase: "respond", windowId: 4n, windowTile: 5n, offers: [6n],
+      serverMs: 100n, deadlineMs: 10_100n,
+    });
+    const windows: bigint[] = [];
+    let observed: { offers: bigint[]; windowId: bigint; deadlineMs: bigint } | undefined;
+    let push: ((event: DhmjEvent) => void) | undefined;
+    const finish = () => {
+      observed = { offers: [...snapshot.offers], windowId: snapshot.windowId, deadlineMs: snapshot.deadlineMs };
+      push?.({ kind: "round_end", value: create(DhmjRoundEndPushSchema, {
+        tableName: "table", revision: nextWindowFirst ? 7n : 6n, roundEnd: { kind: "draw" },
+      }) });
+      push?.({ kind: "settlement", value: create(DhmjSettlementPushSchema, {
+        tableName: "table", settlement: { userId: 7n, status: "committed", balance: 50n },
+      }) });
+    };
+    const client = {
+      closed: new AbortController().signal,
+      set onDhmjPush(handler: typeof push) { push = handler; },
+      async request(id: MsgId, payload: Uint8Array) {
+        if (id === MsgId.C2S_DHMJ_ENTER) return { snapshot };
+        if (id === MsgId.C2S_DHMJ_RESPOND) {
+          windows.push(fromBinary(DhmjRespondRequestSchema, payload).windowId);
+          if (windows.length === 1) {
+            if (nextWindowFirst) {
+              push?.({ kind: "turn", value: create(DhmjTurnPushSchema, {
+                tableName: "table", revision: 6n, phase: "respond", windowId: 5n, windowTile: 6n, offers: [6n],
+                serverMs: 200n, deadlineMs: 10_200n,
+              }) });
+            }
+            setImmediate(finish);
+          }
+        }
+        return {};
+      },
+    };
+    await runDhmj(client as unknown as DemoClient, () => {});
+    assert.deepEqual(windows, nextWindowFirst ? [4n, 5n] : [4n]);
+    assert.deepEqual(observed, nextWindowFirst
+      ? { offers: [], windowId: 5n, deadlineMs: 10_200n }
+      : { offers: [], windowId: 4n, deadlineMs: 10_100n });
+  });
+}
 
 test("麻将出牌结果未知时恢复同一轮次也只提交一次", async () => {
   const sent: MsgId[] = [];

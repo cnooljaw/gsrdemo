@@ -78,9 +78,15 @@ export async function runDhmj(client: DemoClient, print: (event: string, value: 
       const action = chooseAction(view);
       if (action && action.key !== lastAction) {
         lastAction = action.key;
-        print("dhmj_action", { id: action.id, turn: view.turn, windowId: view.windowId });
+        const windowId = view.windowId;
+        print("dhmj_action", { id: action.id, turn: view.turn, windowId });
         try {
           await sendAction(action.id, action.payload);
+          const current = scene.view;
+          if (action.id === MsgId.C2S_DHMJ_RESPOND &&
+              current?.operationPhase === "respond" && current.windowId === windowId) {
+            current.offers = [];
+          }
         } catch {
           await recover();
         }
