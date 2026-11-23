@@ -252,7 +252,7 @@ Node 为 `landlord`，正常调用者为 access Agent。入口见[目录](../nod
 | `RoomName / 3` Play | Call | `U, L, turn uint64, cards list`，元素为 int64 | true；空列表表示不出 |
 | `RoomName / 9` Trustee | Call | `U, L, enabled bool` | true 表示已达到请求的托管状态；状态变化时广播 Trustee |
 | `RoomName / 4` Snapshot | Call | `U, L` | 本人桌快照 |
-| `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开，Agent 随后清路由并返回 C/S `ActionAck`；回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
+| `RoomName / 5` Leave | Call | `U, L` | true 表示本桌已接纳离开。收到 true，或 GSR 明确返回原牌桌 Service 不存在时，Agent 清路由并返回 C/S `ActionAck`。回收边界见[设计](DESIGN.md#63-重试清理与恢复) |
 | `landlord / 5` Discard | Call | `roomName string` | 无业务结果；仅确认桌已消失时清理路由再重新 Resolve |
 
 快照 map 与 C/S LandlordSnapshot 字段对应。access 核对 Join、Snapshot 回包的 `room_name`，并将 Ready、Call、Rob、Play、Trustee、Leave 的 `true` 转为 `ActionAck`。异常回包走[非法回包流程](DESIGN.md#33-失败替换与断线)。Join 超时可能已加入，只有明确目标不存在、已关闭或已崩溃才走 Discard 并重新选桌。目录和牌桌之间的本地消息见[节点内协作](#29-节点内协作)。

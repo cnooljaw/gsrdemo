@@ -10,6 +10,7 @@ import (
 	"github.com/cnooljaw/gsr/protocol"
 	commonv1 "github.com/cnooljaw/gsr/protocol/gen/go/gsr/common/v1"
 	"github.com/cnooljaw/gsr/runtime"
+	"github.com/cnooljaw/gsrdemo/common/rpc/landlordattack"
 	molerpc "github.com/cnooljaw/gsrdemo/common/rpc/mole"
 	demopb "github.com/cnooljaw/gsrdemo/nodes/access/gen/demo/v1"
 	"google.golang.org/protobuf/proto"
@@ -78,6 +79,44 @@ func TestMoleLeaveRequiresConfirmation(t *testing.T) {
 				t.Fatalf("未确认离开却返回成功: %v", response)
 			}
 		})
+	}
+}
+
+// TestLandlordLeaveClearsMissingRoom 保护只在原桌明确不存在后解除离开超时留下的进入互斥。
+func TestLandlordLeaveClearsMissingRoom(t *testing.T) {
+	var callErr error
+	calls := 0
+	agent := &agent{session: agentSession{userID: 7, loginID: "current"}}
+	game := newComLandlord(componentDependencies{
+		Identity: agent.session.snapshot,
+		Call: func(_ gsr.ServiceContext, node cluster.NodeID, room cluster.ServiceName, cmd runtime.CommandID, args ...any) (any, error) {
+			if node != "landlord" || room != "old-room" || cmd != landlordattack.RoomLeaveCommand ||
+				len(args) != 2 || args[0] != uint64(7) || args[1] != "current" {
+				t.Fatalf("离开请求未使用原桌和当前登录：%s/%s/%d %v", node, room, cmd, args)
+			}
+			calls++
+			return nil, callErr
+		},
+	})
+	game.room = "old-room"
+	agent.games = []gameComponent{game}
+	for _, failure := range []error{
+		runtime.ErrCallTimeout,
+		errors.New("连接中断"),
+		runtime.NewStatusError(runtime.ErrorClassDomain, "landlord.stale_login", "当前登录无效"),
+	} {
+		callErr = failure
+		response, err := componentRequest(t, game, demopb.MsgId_C2S_LANDLORD_LEAVE)
+		if !errors.Is(err, failure) || !game.Entered() || !errors.Is(agent.allowEnter("mole"), errEnterRequired) ||
+			response.MsgId != uint32(commonv1.MsgId_S2C_ERROR_RESPONSE) {
+			t.Fatalf("离开未确认却解除互斥：%v %v", response, err)
+		}
+	}
+	callErr = runtime.ErrServiceNotFound
+	response, err := componentRequest(t, game, demopb.MsgId_C2S_LANDLORD_LEAVE)
+	if err != nil || response.MsgId != uint32(demopb.MsgId_S2C_ACTION_ACK) || response.RequestId != 1 ||
+		game.Entered() || agent.allowEnter("mole") != nil || calls != 4 {
+		t.Fatalf("原牌桌已回收却无法切换游戏：%v %v，调用次数 %d", response, err, calls)
 	}
 }
 

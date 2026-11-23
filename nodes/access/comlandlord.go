@@ -141,10 +141,10 @@ func (landlord *comLandlord) onLeave(self gsr.CommandContext, reply protocol.Con
 		return errEnterRequired
 	}
 	value, err := landlord.deps.Call(self, "landlord", landlord.room, landlordattack.RoomLeaveCommand, identity.UserID, identity.LoginID)
-	if err != nil {
+	if err != nil && !errors.Is(err, runtime.ErrServiceNotFound) {
 		return err
 	}
-	if value != true {
+	if err == nil && value != true {
 		return errInvalidBackendReply
 	}
 	landlord.room = ""
