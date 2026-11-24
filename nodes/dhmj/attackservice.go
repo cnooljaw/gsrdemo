@@ -192,7 +192,17 @@ func (service *attackService) handlePassSelf(self gsr.CommandContext, seat int, 
 }
 
 func (service *attackService) handleTrustee(self gsr.CommandContext, seat int, enabled bool) (bool, error) {
-	return service.actionResult(self, service.game.setTrustee(seat, enabled, time.Now()))
+	game := &service.game
+	if enabled {
+		return service.actionResult(self, game.setTrustee(seat, true, time.Now()))
+	}
+	if !validSeat(seat) || game.end != nil {
+		return false, errInvalidTableAction
+	}
+	if game.trustees[seat] {
+		game.resumeManualControl(seat, time.Now())
+	}
+	return service.actionResult(self, true)
 }
 
 func (service *attackService) handleOffline(self gsr.CommandContext, seat int) error {
@@ -212,16 +222,7 @@ func (service *attackService) handleRejoin(self gsr.CommandContext, seat int) (t
 		return tableView{}, runtime.ErrUnknownCommand
 	}
 	if service.game.end == nil {
-		game := &service.game
-		now := time.Now()
-		// 重登仍可接手未到期的人工轮次，即使托管的自动执行时间已到。
-		if !game.deadline.IsZero() && !now.Before(game.deadline) {
-			game.tick(now)
-		}
-		if game.end == nil {
-			game.discardTimeouts[seat] = 0
-			game.setTrustee(seat, false, now)
-		}
+		service.game.resumeManualControl(seat, time.Now())
 		service.sendEvents(self)
 	}
 	return service.handleSnapshot(self, seat)

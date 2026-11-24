@@ -46,36 +46,51 @@ func (rejoinTestContext) Send(runtime.ServiceID, runtime.CommandID, ...any) erro
 	return nil
 }
 
-// TestRejoinRespectsManualDeadline 保护重登保留未过期的人工轮次，或先按服务器规则推进已过期的轮次。
-func TestRejoinRespectsManualDeadline(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		period time.Duration
-	}{
-		{"原人工轮次仍有效", time.Minute},
-		{"原人工轮次已到期", -time.Minute},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			now := time.Now()
-			deadline := now.Add(tc.period)
-			table := &attackService{directory: 1, game: round{
-				turn: 1, deadline: deadline, lastDraw: 5, wall: []byte{8},
-				hands: [seatCount][]byte{{5, 9}, {0x31}},
-			}}
-			table.game.setTrustee(0, true, now.Add(-time.Second))
-			view, err := table.handleRejoin(rejoinTestContext{}, 0)
-			if err != nil || view.Trustees[0] || view.Finished {
-				t.Fatalf("重登未解除托管：%+v %v", view, err)
-			}
-			if tc.period > 0 {
-				if !view.CanDiscard || view.Turn != 1 || view.Active != 0 || !view.Deadline.Equal(deadline) || len(view.Out[0]) != 0 {
-					t.Fatalf("未到期时没有交回原轮次：%+v", view)
+// TestResumeManualControlRespectsDeadline 保护重登和主动取消托管都按人工截止时间恢复操作。
+func TestResumeManualControlRespectsDeadline(t *testing.T) {
+	for _, path := range []string{"重登", "主动取消"} {
+		for _, tc := range []struct {
+			name   string
+			period time.Duration
+		}{
+			{"原人工轮次仍有效", time.Minute},
+			{"原人工轮次已到期", -time.Minute},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				now := time.Now()
+				deadline := now.Add(tc.period)
+				table := &attackService{directory: 1, game: round{
+					turn: 1, deadline: deadline, lastDraw: 5, wall: []byte{8},
+					hands: [seatCount][]byte{{5, 9}, {0x31}},
+				}}
+				table.game.setTrustee(0, true, now.Add(-time.Second))
+				self := rejoinTestContext{}
+				var view tableView
+				var err error
+				if path == "重登" {
+					view, err = table.handleRejoin(self, 0)
+				} else {
+					if ok, err := table.handleTrustee(self, 0, false); !ok || err != nil {
+						t.Fatalf("主动取消未确认：%v %v", ok, err)
+					}
+					view, err = table.handleSnapshot(self, 0)
+					if ok, err := table.handleTrustee(self, 0, false); !ok || err != nil || table.game.revision != view.Revision {
+						t.Fatalf("重复取消未幂等：%v %v", ok, err)
+					}
 				}
-			} else if view.CanDiscard || view.Turn != 2 || view.Active != 1 || !slices.Equal(view.Out[0], []byte{5}) ||
-				!view.Deadline.After(now) {
-				t.Fatalf("已到期的轮次未在重登前推进：%+v", view)
-			}
-		})
+				if err != nil || view.Trustees[0] || view.Finished {
+					t.Fatalf("未解除托管：%+v %v", view, err)
+				}
+				if tc.period > 0 {
+					if !view.CanDiscard || view.Turn != 1 || view.Active != 0 || !view.Deadline.Equal(deadline) || len(view.Out[0]) != 0 {
+						t.Fatalf("未到期时没有交回原轮次：%+v", view)
+					}
+				} else if view.CanDiscard || view.Turn != 2 || view.Active != 1 || !slices.Equal(view.Out[0], []byte{5}) ||
+					!view.Deadline.After(now) {
+					t.Fatalf("已到期的轮次未在解除托管前推进：%+v", view)
+				}
+			})
+		}
 	}
 }
 

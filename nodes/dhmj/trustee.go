@@ -41,6 +41,17 @@ func (g *round) scheduleTrustee(now time.Time) {
 	g.trusteeAt = now.Add(delay)
 }
 
+// resumeManualControl 保留未到期的人工轮次，即使托管的自动执行时间已到。
+func (g *round) resumeManualControl(seat int, now time.Time) {
+	if !g.deadline.IsZero() && !now.Before(g.deadline) {
+		g.tick(now)
+	}
+	if g.end == nil {
+		g.discardTimeouts[seat] = 0
+		g.setTrustee(seat, false, now)
+	}
+}
+
 func (g *round) dueAt() time.Time {
 	if !g.trusteeAt.IsZero() && g.trusteeAt.Before(g.deadline) {
 		return g.trusteeAt
