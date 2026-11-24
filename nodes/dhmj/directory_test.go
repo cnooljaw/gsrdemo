@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,14 +12,15 @@ import (
 
 type directoryTrusteeContext struct {
 	gsr.CommandContext
-	sent []int
-	full bool
+	sent    []int
+	full    bool
+	callErr error
 }
 
 func (*directoryTrusteeContext) Source() runtime.ServiceID { return 1 }
 
 func (self *directoryTrusteeContext) Send(_ runtime.ServiceID, command runtime.CommandID, args ...any) error {
-	if command != tableConnectionTrusteeCommand || len(args) != 2 || args[1] != true {
+	if command != tableOfflineCommand || len(args) != 1 {
 		return runtime.ErrUnknownCommand
 	}
 	self.sent = append(self.sent, args[0].(int))
@@ -27,7 +30,14 @@ func (self *directoryTrusteeContext) Send(_ runtime.ServiceID, command runtime.C
 	return nil
 }
 
-// TestOfflineTrusteeRetriesOnlyUntilRejoin 保护满邮箱时重试离线托管，新登录可撤销尚未接纳的托管。
+func (self *directoryTrusteeContext) Call(_ context.Context, _ runtime.ServiceID, command runtime.CommandID, args ...any) (any, error) {
+	if (command != tableRejoinCommand && command != tableSnapshotCommand) || len(args) != 1 {
+		return nil, runtime.ErrUnknownCommand
+	}
+	return tableView{}, self.callErr
+}
+
+// TestOfflineTrusteeRetriesOnlyUntilRejoin 保护失败重登保留离线座位，确认重登后撤销待补发托管。
 func TestOfflineTrusteeRetriesOnlyUntilRejoin(t *testing.T) {
 	d := newDirectory(defaultRoomRules, settlementJournal{})
 	d.pulse = 1
@@ -43,14 +53,27 @@ func TestOfflineTrusteeRetriesOnlyUntilRejoin(t *testing.T) {
 	if !table.players[0].offlineTrusteePending || !table.players[1].offlineTrusteePending {
 		t.Fatal("邮箱满时未留下待补发托管")
 	}
-	if _, _, _, err := d.seatPlayer(1, "new"); err != nil {
+	offline := table.players[0]
+	self.callErr = runtime.ErrMailboxFull
+	if _, err := d.joinPlayer(self, 1, "new", "access", "agent"); !errors.Is(err, runtime.ErrMailboxFull) ||
+		table.players[0] != offline || len(self.sent) != 2 {
+		t.Fatalf("邮箱满时重登修改了原座位：%+v，%v", table.players[0], err)
+	}
+	self.callErr = context.DeadlineExceeded
+	if _, err := d.joinPlayer(self, 1, "new", "access", "agent"); !errors.Is(err, context.DeadlineExceeded) ||
+		table.players[0] != offline || len(self.sent) != 3 || self.sent[2] != 0 {
+		t.Fatalf("结果未知时未恢复原离线托管：%+v，%v", table.players[0], err)
+	}
+	self.callErr = nil
+	if _, err := d.joinPlayer(self, 1, "new", "access", "agent"); err != nil {
 		t.Fatal(err)
 	}
 	self.full = false
 	if err := d.handleSweepTables(self); err != nil {
 		t.Fatal(err)
 	}
-	if len(self.sent) != 3 || self.sent[2] != 1 || table.players[0].offlineTrusteePending || table.players[1].offlineTrusteePending {
+	if len(self.sent) != 4 || self.sent[3] != 1 || !table.players[0].connected || table.players[0].login != "new" ||
+		table.players[0].offlineTrusteePending || table.players[1].offlineTrusteePending {
 		t.Fatalf("重登后仍托管或离线补发未完成：%v", self.sent)
 	}
 }
@@ -67,8 +90,8 @@ func TestDirectoryKeepsSeatOnRejoin(t *testing.T) {
 		table = joined
 	}
 	table.players[1].ready = true
-	joined, seat, _, err := d.seatPlayer(2, "new")
-	if err != nil || joined != table || seat != 1 || !joined.players[1].ready {
+	view, err := d.joinPlayer(nil, 2, "new", "access", "agent")
+	if err != nil || view["table_name"] != table.name || view["seat"] != int64(1) || !table.players[1].ready {
 		t.Fatal("重登改变了座位或准备状态")
 	}
 	if _, _, err := d.currentSeat(2, "login"); err == nil {
@@ -83,7 +106,7 @@ func TestDirectoryKeepsSeatOnRejoin(t *testing.T) {
 func TestWaitingLeaveReleasesSeat(t *testing.T) {
 	d := newDirectory(defaultRoomRules, settlementJournal{})
 	table, _, _, _ := d.seatPlayer(1, "old")
-	if _, _, _, err := d.seatPlayer(1, "new"); err != nil {
+	if _, err := d.joinPlayer(nil, 1, "new", "access", "agent"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.handleLeave(nil, 1, "old"); err == nil {
@@ -118,7 +141,7 @@ func TestSettledTableKeepsDisconnectedSeatsUntilDeadline(t *testing.T) {
 	if d.routes[1] != table {
 		t.Fatal("重复离开缩短了重登窗口")
 	}
-	if joined, _, _, err := d.seatPlayer(1, "new"); err != nil || joined != table {
+	if view, err := d.joinPlayer(&directoryTrusteeContext{}, 1, "new", "access", "agent"); err != nil || view["table_name"] != table.name {
 		t.Fatalf("窗口内未回到原桌：%v", err)
 	}
 	if _, err := d.handleLeave(nil, 1, "old"); err == nil {

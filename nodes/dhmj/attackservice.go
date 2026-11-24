@@ -13,16 +13,17 @@ import (
 //
 //rpc:service dhmjattack private
 const (
-	tableSnapshotCommand          runtime.CommandID = 1
-	tableDiscardCommand           runtime.CommandID = 2
-	tableRespondCommand           runtime.CommandID = 3
-	tableSelfWinCommand           runtime.CommandID = 4
-	tableKongCommand              runtime.CommandID = 5
-	tablePassSelfCommand          runtime.CommandID = 6
-	tableTrusteeCommand           runtime.CommandID = 7
-	tableTickCommand              runtime.CommandID = 8
-	tableCloseCommand             runtime.CommandID = 9
-	tableConnectionTrusteeCommand runtime.CommandID = 10
+	tableSnapshotCommand runtime.CommandID = 1
+	tableDiscardCommand  runtime.CommandID = 2
+	tableRespondCommand  runtime.CommandID = 3
+	tableSelfWinCommand  runtime.CommandID = 4
+	tableKongCommand     runtime.CommandID = 5
+	tablePassSelfCommand runtime.CommandID = 6
+	tableTrusteeCommand  runtime.CommandID = 7
+	tableTickCommand     runtime.CommandID = 8
+	tableCloseCommand    runtime.CommandID = 9
+	tableOfflineCommand  runtime.CommandID = 10
+	tableRejoinCommand   runtime.CommandID = 11
 )
 
 var errInvalidTableAction = runtime.NewStatusError(runtime.ErrorClassDomain, "dhmj.invalid_turn", "定海麻将当前轮次或动作无效")
@@ -52,16 +53,17 @@ func newAttackService(wall []byte, dealer int, roundWind byte) (*attackService, 
 	}
 	service := &attackService{game: game}
 	service.dispatcher = gsr.MustDispatcher(map[runtime.CommandID]any{
-		tableSnapshotCommand:          service.handleSnapshot,
-		tableDiscardCommand:           service.handleDiscard,
-		tableRespondCommand:           service.handleRespond,
-		tableSelfWinCommand:           service.handleSelfWin,
-		tableKongCommand:              service.handleKong,
-		tablePassSelfCommand:          service.handlePassSelf,
-		tableTrusteeCommand:           service.handleTrustee,
-		tableTickCommand:              service.handleTick,
-		tableCloseCommand:             service.handleClose,
-		tableConnectionTrusteeCommand: service.handleConnectionTrustee,
+		tableSnapshotCommand: service.handleSnapshot,
+		tableDiscardCommand:  service.handleDiscard,
+		tableRespondCommand:  service.handleRespond,
+		tableSelfWinCommand:  service.handleSelfWin,
+		tableKongCommand:     service.handleKong,
+		tablePassSelfCommand: service.handlePassSelf,
+		tableTrusteeCommand:  service.handleTrustee,
+		tableTickCommand:     service.handleTick,
+		tableCloseCommand:    service.handleClose,
+		tableOfflineCommand:  service.handleOffline,
+		tableRejoinCommand:   service.handleRejoin,
 	})
 	return service, nil
 }
@@ -193,19 +195,28 @@ func (service *attackService) handleTrustee(self gsr.CommandContext, seat int, e
 	return service.actionResult(self, service.game.setTrustee(seat, enabled, time.Now()))
 }
 
-func (service *attackService) handleConnectionTrustee(self gsr.CommandContext, seat int, enabled bool) error {
+func (service *attackService) handleOffline(self gsr.CommandContext, seat int) error {
 	if self.Source() != service.directory || !validSeat(seat) {
 		return runtime.ErrUnknownCommand
 	}
 	if service.game.end != nil {
 		return nil
 	}
-	if !enabled {
-		service.game.discardTimeouts[seat] = 0
-	}
-	service.game.setTrustee(seat, enabled, time.Now())
+	service.game.setTrustee(seat, true, time.Now())
 	service.sendEvents(self)
 	return nil
+}
+
+func (service *attackService) handleRejoin(self gsr.CommandContext, seat int) (tableView, error) {
+	if self.Source() != service.directory || !validSeat(seat) {
+		return tableView{}, runtime.ErrUnknownCommand
+	}
+	if service.game.end == nil {
+		service.game.discardTimeouts[seat] = 0
+		service.game.setTrustee(seat, false, time.Now())
+		service.sendEvents(self)
+	}
+	return service.handleSnapshot(self, seat)
 }
 
 func (service *attackService) handleTick(self gsr.CommandContext) error {

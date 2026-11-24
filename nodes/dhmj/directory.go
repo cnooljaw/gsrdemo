@@ -121,23 +121,36 @@ func (d *directory) handleJoin(self gsr.CommandContext, uid uint64, login, acces
 	if !ok || location["login_id"] != login || location["access_node"] != access || location["agent_name"] != agent {
 		return nil, errStaleLogin
 	}
-	_, _, currentLoginErr := d.currentSeat(uid, login)
+	return d.joinPlayer(self, uid, login, cluster.NodeID(access), cluster.ServiceName(agent))
+}
+
+func (d *directory) joinPlayer(self gsr.CommandContext, uid uint64, login string, access cluster.NodeID, agent cluster.ServiceName) (map[string]any, error) {
 	table, seat, joined, err := d.seatPlayer(uid, login)
 	if err != nil {
 		return nil, err
 	}
-	table.players[seat].access, table.players[seat].agent = cluster.NodeID(access), cluster.ServiceName(agent)
-	if joined {
-		table.pushSeat(self, seat, uid, true, false, uid)
-	} else if currentLoginErr != nil && table.service != 0 && table.settledAt.IsZero() {
-		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-		_, err := self.Call(ctx, table.service, tableConnectionTrusteeCommand, seat, false)
-		cancel()
+	player := &table.players[seat]
+	var view *tableView
+	if table.service != 0 {
+		command := tableSnapshotCommand
+		if table.settledAt.IsZero() && (!player.connected || player.login != login) {
+			command = tableRejoinCommand
+		}
+		view, err = table.readView(self, command, seat)
 		if err != nil {
+			if command == tableRejoinCommand && !player.connected &&
+				(errors.Is(err, context.DeadlineExceeded) || errors.Is(err, runtime.ErrCallTimeout) || errors.Is(err, errInvalidReply)) {
+				table.sendOfflineTrustee(self, seat)
+			}
 			return nil, err
 		}
 	}
-	return d.snapshotFor(self, table, seat)
+	player.login, player.access, player.agent = login, access, agent
+	player.connected, player.offlineTrusteePending = true, false
+	if joined {
+		table.pushSeat(self, seat, uid, true, false, uid)
+	}
+	return table.snapshot(seat, view), nil
 }
 
 func (d *directory) seatPlayer(uid uint64, login string) (*table, int, bool, error) {
@@ -145,9 +158,6 @@ func (d *directory) seatPlayer(uid uint64, login string) (*table, int, bool, err
 		d.expireSeats(table, time.Now())
 		for seat, member := range table.players {
 			if member.uid == uid {
-				table.players[seat].login = login
-				table.players[seat].connected = true
-				table.players[seat].offlineTrusteePending = false
 				return table, seat, false, nil
 			}
 		}
@@ -250,10 +260,31 @@ func (d *directory) handleSnapshot(self gsr.CommandContext, uid uint64, login st
 	if err != nil {
 		return nil, err
 	}
-	return d.snapshotFor(self, table, seat)
+	if table.service == 0 {
+		return table.snapshot(seat, nil), nil
+	}
+	view, err := table.readView(self, tableSnapshotCommand, seat)
+	if err != nil {
+		return nil, err
+	}
+	return table.snapshot(seat, view), nil
 }
 
-func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int) (map[string]any, error) {
+func (table *table) readView(self gsr.ServiceContext, command runtime.CommandID, seat int) (*tableView, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	value, err := self.Call(ctx, table.service, command, seat)
+	if err != nil {
+		return nil, err
+	}
+	view, ok := value.(tableView)
+	if !ok {
+		return nil, errInvalidReply
+	}
+	return &view, nil
+}
+
+func (table *table) snapshot(seat int, view *tableView) map[string]any {
 	members := make([]any, 0, seatCount)
 	for i, player := range table.players {
 		if player.uid != 0 {
@@ -261,20 +292,10 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 		}
 	}
 	reply := map[string]any{"table_name": table.name, "seat": int64(seat), "players": members}
-	if table.service == 0 {
+	if view == nil {
 		reply["phase"] = "waiting"
 		reply["revision"] = table.revision
-		return reply, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	defer cancel()
-	value, err := self.Call(ctx, table.service, tableSnapshotCommand, seat)
-	if err != nil {
-		return nil, err
-	}
-	view, ok := value.(tableView)
-	if !ok {
-		return nil, errInvalidReply
+		return reply
 	}
 	reply["phase"] = "playing"
 	if view.Finished {
@@ -311,7 +332,7 @@ func (d *directory) snapshotFor(self gsr.ServiceContext, table *table, seat int)
 	reply["operation_phase"], reply["rob_kong"], reply["can_discard"] = view.OperationPhase, view.RobKong, view.CanDiscard
 	reply["self_action"], reply["can_self_win"] = view.SelfAction, view.CanSelfWin
 	reply["concealed_kongs"], reply["added_kongs"] = wireTiles(view.ConcealedKongs), wireTiles(view.AddedKongs)
-	return reply, nil
+	return reply
 }
 
 func (m meld) wire() map[string]any {
@@ -371,7 +392,7 @@ func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login strin
 }
 
 func (table *table) sendOfflineTrustee(self gsr.CommandContext, seat int) {
-	err := self.Send(table.service, tableConnectionTrusteeCommand, seat, true)
+	err := self.Send(table.service, tableOfflineCommand, seat)
 	table.players[seat].offlineTrusteePending = errors.Is(err, runtime.ErrMailboxFull)
 	if err != nil && !table.players[seat].offlineTrusteePending {
 		_ = self.Logger().Error("定海麻将离线托管未接纳", "table_name", table.name, "seat", seat, "error", err.Error())
