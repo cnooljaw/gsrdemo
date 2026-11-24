@@ -150,11 +150,18 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 	cfg := gsr.Config{Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: routes}}
 	err := gsr.Run(ctx, cfg, fixtureMain{onStart: func(ctx context.Context, self gsr.ServiceContext) error {
 		call := func(cmd runtime.CommandID, args ...any) (any, error) {
-			return self.Cluster().Call(ctx, "dhmj", dhmjrpc.ServiceName, cmd, args...)
+			value, err := self.Cluster().Call(ctx, "dhmj", dhmjrpc.ServiceName, cmd, args...)
+			if err != nil {
+				return nil, fmt.Errorf("麻将 RPC %d，玩家 %v：%w", cmd, args[0], err)
+			}
+			return value, nil
 		}
 		bind := func(uid uint64, login string) error {
 			_, err := self.Cluster().Call(ctx, "online", onlinerpc.ServiceName, onlinerpc.BindCommand, uid, login)
-			return err
+			if err != nil {
+				return fmt.Errorf("绑定在线位置，玩家 %d：%w", uid, err)
+			}
+			return nil
 		}
 		var tableName string
 		var revision uint64
@@ -164,14 +171,14 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 				"table_name": tableName, "revision": revision, "seat": int64(uid - 1),
 				"user_id": uid, "joined": joined, "ready": ready,
 			}
-			for range recipients {
+			for received := range recipients {
 				select {
 				case args := <-seats:
 					if !reflect.DeepEqual(args[1], want) {
 						return fmt.Errorf("座位推送=%v，期望 %v", args[1], want)
 					}
 				case <-ctx.Done():
-					return ctx.Err()
+					return fmt.Errorf("等待座位推送，期望 %v，已收到 %d/%d：%w", want, received, recipients, ctx.Err())
 				}
 			}
 			return nil
@@ -230,7 +237,7 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			case args := <-deals:
 				deal = args[1].(map[string]any)
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("等待发牌，已收到 %d/%d，期望序号 %d：%w", seat, seatCount, revision+1, ctx.Err())
 			}
 			hand, _ := deal["hand"].([]any)
 			wantUsers := []any{uint64(1), uint64(2), uint64(3), uint64(4)}
@@ -309,14 +316,14 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		}
 		discardRevision := scene["revision"].(uint64) + 1
 		event := map[string]any{"table_name": tableName, "revision": discardRevision, "seat": int64(0), "turn": turn, "tile": tile}
-		for _, login := range []string{"new-login", "login", "login", "login"} {
+		for received, login := range []string{"new-login", "login", "login", "login"} {
 			select {
 			case args := <-pushes:
 				if !reflect.DeepEqual(args, []any{login, event}) {
 					return fmt.Errorf("出牌推送没有使用当前路由与轮次：%v", args)
 				}
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("等待出牌广播，已收到 %d/%d，期望登录 %s 和序号 %d：%w", received, seatCount, login, discardRevision, ctx.Err())
 			}
 		}
 		result, err = call(dhmjrpc.SnapshotCommand, uint64(2), "login")
