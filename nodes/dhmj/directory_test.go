@@ -3,7 +3,57 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/cnooljaw/gsr"
+	"github.com/cnooljaw/gsr/runtime"
 )
+
+type directoryTrusteeContext struct {
+	gsr.CommandContext
+	sent []int
+	full bool
+}
+
+func (*directoryTrusteeContext) Source() runtime.ServiceID { return 1 }
+
+func (self *directoryTrusteeContext) Send(_ runtime.ServiceID, command runtime.CommandID, args ...any) error {
+	if command != tableConnectionTrusteeCommand || len(args) != 2 || args[1] != true {
+		return runtime.ErrUnknownCommand
+	}
+	self.sent = append(self.sent, args[0].(int))
+	if self.full {
+		return runtime.ErrMailboxFull
+	}
+	return nil
+}
+
+// TestOfflineTrusteeRetriesOnlyUntilRejoin 保护满邮箱时重试离线托管，新登录可撤销尚未接纳的托管。
+func TestOfflineTrusteeRetriesOnlyUntilRejoin(t *testing.T) {
+	d := newDirectory(defaultRoomRules, settlementJournal{})
+	d.pulse = 1
+	table, _, _, _ := d.seatPlayer(1, "old")
+	_, _, _, _ = d.seatPlayer(2, "second")
+	table.service = 42
+	self := &directoryTrusteeContext{full: true}
+	for uid, login := range map[uint64]string{1: "old", 2: "second"} {
+		if left, err := d.handleLeave(self, uid, login); !left || err != nil {
+			t.Fatalf("离开未确认：%v %v", left, err)
+		}
+	}
+	if !table.players[0].offlineTrusteePending || !table.players[1].offlineTrusteePending {
+		t.Fatal("邮箱满时未留下待补发托管")
+	}
+	if _, _, _, err := d.seatPlayer(1, "new"); err != nil {
+		t.Fatal(err)
+	}
+	self.full = false
+	if err := d.handleSweepTables(self); err != nil {
+		t.Fatal(err)
+	}
+	if len(self.sent) != 3 || self.sent[2] != 1 || table.players[0].offlineTrusteePending || table.players[1].offlineTrusteePending {
+		t.Fatalf("重登后仍托管或离线补发未完成：%v", self.sent)
+	}
+}
 
 // TestDirectoryKeepsSeatOnRejoin 保护四人同桌，重登更新身份但保留座位，旧登录不能再操作。
 func TestDirectoryKeepsSeatOnRejoin(t *testing.T) {
@@ -52,7 +102,7 @@ func TestSettledTableKeepsDisconnectedSeatsUntilDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	table.service = 42
-	if _, err := d.handleLeave(nil, 1, "old"); err != nil {
+	if _, err := d.handleLeave(&directoryTrusteeContext{}, 1, "old"); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

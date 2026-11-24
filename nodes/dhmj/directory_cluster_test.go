@@ -252,6 +252,13 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 		if _, err := call(dhmjrpc.LeaveCommand, uint64(1), "login"); err != nil {
 			return err
 		}
+		offline, err := call(dhmjrpc.SnapshotCommand, uint64(2), "login")
+		if err != nil {
+			return err
+		}
+		if offline.(map[string]any)["trustees"].([]any)[0] != true {
+			return errors.New("离桌未触发托管")
+		}
 		if err := bind(1, "new-login"); err != nil {
 			return err
 		}
@@ -263,6 +270,9 @@ func TestDirectoryClusterJoinReadyAndReconnect(t *testing.T) {
 			return err
 		}
 		scene := result.(map[string]any)
+		if scene["trustees"].([]any)[0] != false {
+			return errors.New("重登的快照仍为托管")
+		}
 		hand, ok := scene["hand"].([]any)
 		if scene["table_name"] != tableName || scene["seat"] != int64(0) || scene["phase"] != "playing" || !ok || len(hand) != 14 {
 			return errors.New("重连未恢复原牌桌和本人暗手")

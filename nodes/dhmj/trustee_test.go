@@ -35,6 +35,9 @@ func TestDiscardTimeoutEnablesTrustee(t *testing.T) {
 	if len(changes) != 1 || changes[0].seat != 0 || !changes[0].trustee {
 		t.Fatalf("两次超时应只广播一次开启托管：%v", changes)
 	}
+	if !g.setTrustee(0, false, now.Add(2*discardPeriod)) || g.discardTimeouts[0] != 0 {
+		t.Fatal("取消托管后未重新开始累计超时")
+	}
 }
 
 // TestCancelTrusteeCancelsAutoDiscard 保护取消托管后旧的自动出牌时间不能推进回合。

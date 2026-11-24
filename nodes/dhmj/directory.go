@@ -52,12 +52,13 @@ var (
 )
 
 type tablePlayer struct {
-	uid       uint64
-	login     string
-	access    cluster.NodeID
-	agent     cluster.ServiceName
-	ready     bool
-	connected bool
+	uid                   uint64
+	login                 string
+	access                cluster.NodeID
+	agent                 cluster.ServiceName
+	ready                 bool
+	connected             bool
+	offlineTrusteePending bool
 }
 
 type table struct {
@@ -120,6 +121,7 @@ func (d *directory) handleJoin(self gsr.CommandContext, uid uint64, login, acces
 	if !ok || location["login_id"] != login || location["access_node"] != access || location["agent_name"] != agent {
 		return nil, errStaleLogin
 	}
+	_, _, currentLoginErr := d.currentSeat(uid, login)
 	table, seat, joined, err := d.seatPlayer(uid, login)
 	if err != nil {
 		return nil, err
@@ -127,6 +129,13 @@ func (d *directory) handleJoin(self gsr.CommandContext, uid uint64, login, acces
 	table.players[seat].access, table.players[seat].agent = cluster.NodeID(access), cluster.ServiceName(agent)
 	if joined {
 		table.pushSeat(self, seat, uid, true, false, uid)
+	} else if currentLoginErr != nil && table.service != 0 && table.settledAt.IsZero() {
+		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		_, err := self.Call(ctx, table.service, tableConnectionTrusteeCommand, seat, false)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return d.snapshotFor(self, table, seat)
 }
@@ -138,6 +147,7 @@ func (d *directory) seatPlayer(uid uint64, login string) (*table, int, bool, err
 			if member.uid == uid {
 				table.players[seat].login = login
 				table.players[seat].connected = true
+				table.players[seat].offlineTrusteePending = false
 				return table, seat, false, nil
 			}
 		}
@@ -347,6 +357,7 @@ func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login strin
 		if table.service != 0 && table.settledAt.IsZero() {
 			table.players[seat].connected = false
 			table.players[seat].access, table.players[seat].agent = "", ""
+			table.sendOfflineTrustee(self, seat)
 		} else {
 			d.releaseSeat(table, seat)
 			if table.service == 0 {
@@ -357,6 +368,14 @@ func (d *directory) handleLeave(self gsr.CommandContext, uid uint64, login strin
 		return true, nil
 	}
 	return false, errStaleLogin
+}
+
+func (table *table) sendOfflineTrustee(self gsr.CommandContext, seat int) {
+	err := self.Send(table.service, tableConnectionTrusteeCommand, seat, true)
+	table.players[seat].offlineTrusteePending = errors.Is(err, runtime.ErrMailboxFull)
+	if err != nil && !table.players[seat].offlineTrusteePending {
+		_ = self.Logger().Error("定海麻将离线托管未接纳", "table_name", table.name, "seat", seat, "error", err.Error())
+	}
 }
 
 func (table *table) pushSeat(self gsr.CommandContext, seat int, uid uint64, joined, ready bool, skipUID uint64) {
@@ -432,6 +451,12 @@ func (d *directory) handleSweepTables(self gsr.CommandContext) error {
 		if !table.settledAt.IsZero() {
 			d.expireSeats(table, now)
 			d.closeEmptyTable(self, table)
+			continue
+		}
+		for seat, player := range table.players {
+			if player.offlineTrusteePending {
+				table.sendOfflineTrustee(self, seat)
+			}
 		}
 	}
 	return nil

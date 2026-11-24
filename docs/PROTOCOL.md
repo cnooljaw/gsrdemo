@@ -415,7 +415,7 @@ Node 和 Service 均为 `dhmj`。目录持有座位、准备和登录路由，�
 | 1 Join | Call | `U, L, N, A` | 校验 Online 后分配座位，重登恢复原座并更新当前登录。返回本人快照 |
 | 2 Ready | Call | `U, L` | true。钱包至少 3000，四人准备后创建牌桌 |
 | 3 Snapshot | Call | `U, L` | 本人快照，字段见下方 |
-| 4 Leave | Call | `U, L` | true。等待中或结算已确认时释放在线座位。开局后至结算确认前，断开当前登录并保留座位；重登期限见[麻将设计](DESIGN.md#10-定海麻将随机房与局末结算) |
+| 4 Leave | Call | `U, L` | true。等待中或结算已确认时释放在线座位。局中离开标记离线、保留座位并请求托管。重登期限见[麻将设计](DESIGN.md#10-定海麻将随机房与局末结算) |
 | 5 Discard | Call | `U, L, turn uint64, tile int64` | true。当前座位出牌 |
 | 6 Respond | Call | `U, L, windowID uint64, action int64` | true。提交对当前窗口的选择，裁决可能仍在等待其他座位 |
 | 7 SelfWin | Call | `U, L, turn uint64` | true。确认自摸 |
@@ -430,9 +430,10 @@ Respond 动作编号为 1 右吃、2 中吃、3 左吃、4 直杠、5 碰、6 �
 | 调用方 → 目标 | 命令 | 顺序参数 | 行为 |
 | --- | --- | --- | --- |
 | 牌桌 → 目录 | Send 11 | `tableName, operationID string, receipt [4]roundSilver` | 按发送者 ServiceID 核对牌桌，转发在线玩家的本人回执并开始计算离线座位的重登窗口 |
-| 目录 Pulse → 目录 | Send 12 | 无 | 回收到期离线座位，重试关闭已空牌桌 |
+| 目录 Pulse → 目录 | Send 12 | 无 | 补发未接纳的离线托管，回收到期离线座位，重试关闭已空牌桌 |
 | 牌桌 → 目录 | Send 13 | `tableName string, event roundEvent` | 目录核对来源，转发发牌、出牌、摸牌、补花、托管、轮次和裁决；私有牌面和选项只随本人消息发送 |
 | 目录 → 牌桌 | Send 9 | 无 | 记录关闭意图，结算待记录清理完成后牌桌退出 |
+| 目录 → 牌桌 | Send / Call 10 | `seat int, enabled bool` | 局中离线用 Send 开启托管，重登首个快照前用 Call 解除托管。牌桌已终局时幂等成功 |
 
 | 本人快照 | 字段 |
 | --- | --- |

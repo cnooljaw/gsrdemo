@@ -15,6 +15,9 @@ func (g *round) setTrustee(seat int, enabled bool, now time.Time) bool {
 	if g.trustees[seat] == enabled {
 		return true
 	}
+	if !enabled {
+		g.discardTimeouts[seat] = 0
+	}
 	g.recordTrustee(seat, enabled)
 	if g.window != nil {
 		if enabled && now.Before(g.deadline) && g.window.submit(seat, pass) {
