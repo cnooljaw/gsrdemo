@@ -39,6 +39,46 @@ const (
 	testEnableTrusteeCommand
 )
 
+type rejoinTestContext struct{ gsr.CommandContext }
+
+func (rejoinTestContext) Source() runtime.ServiceID { return 1 }
+func (rejoinTestContext) Send(runtime.ServiceID, runtime.CommandID, ...any) error {
+	return nil
+}
+
+// TestRejoinRespectsManualDeadline 保护重登保留未过期的人工轮次，或先按服务器规则推进已过期的轮次。
+func TestRejoinRespectsManualDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		period time.Duration
+	}{
+		{"原人工轮次仍有效", time.Minute},
+		{"原人工轮次已到期", -time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			deadline := now.Add(tc.period)
+			table := &attackService{directory: 1, game: round{
+				turn: 1, deadline: deadline, lastDraw: 5, wall: []byte{8},
+				hands: [seatCount][]byte{{5, 9}, {0x31}},
+			}}
+			table.game.setTrustee(0, true, now.Add(-time.Second))
+			view, err := table.handleRejoin(rejoinTestContext{}, 0)
+			if err != nil || view.Trustees[0] || view.Finished {
+				t.Fatalf("重登未解除托管：%+v %v", view, err)
+			}
+			if tc.period > 0 {
+				if !view.CanDiscard || view.Turn != 1 || view.Active != 0 || !view.Deadline.Equal(deadline) || len(view.Out[0]) != 0 {
+					t.Fatalf("未到期时没有交回原轮次：%+v", view)
+				}
+			} else if view.CanDiscard || view.Turn != 2 || view.Active != 1 || !slices.Equal(view.Out[0], []byte{5}) ||
+				!view.Deadline.After(now) {
+				t.Fatalf("已到期的轮次未在重登前推进：%+v", view)
+			}
+		})
+	}
+}
+
 type tableTestMain struct {
 	table           *attackService
 	id              runtime.ServiceID

@@ -212,8 +212,16 @@ func (service *attackService) handleRejoin(self gsr.CommandContext, seat int) (t
 		return tableView{}, runtime.ErrUnknownCommand
 	}
 	if service.game.end == nil {
-		service.game.discardTimeouts[seat] = 0
-		service.game.setTrustee(seat, false, time.Now())
+		game := &service.game
+		now := time.Now()
+		// 重登仍可接手未到期的人工轮次，即使托管的自动执行时间已到。
+		if !game.deadline.IsZero() && !now.Before(game.deadline) {
+			game.tick(now)
+		}
+		if game.end == nil {
+			game.discardTimeouts[seat] = 0
+			game.setTrustee(seat, false, now)
+		}
 		service.sendEvents(self)
 	}
 	return service.handleSnapshot(self, seat)
