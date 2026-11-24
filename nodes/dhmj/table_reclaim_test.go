@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -39,6 +40,89 @@ func (f *reclaimFixture) Handle(self gsr.CommandContext, cmd runtime.CommandID, 
 		close(f.settled)
 	}
 	return value, err
+}
+
+// TestAllOfflineTableContinuesToRoundEnd 保护四人局中离开后牌桌仍由 Pulse 推进，并保留原桌成员。
+func TestAllOfflineTableContinuesToRoundEnd(t *testing.T) {
+	routes := make(map[cluster.NodeID]string)
+	startDirectoryFixture(t, routes, "online", onlinerpc.ServiceName, directoryBackend{
+		logins: map[uint64]string{1: "new"},
+	})
+	d := newDirectory(defaultRoomRules, settlementJournal{})
+	var original *table
+	for uid := uint64(1); uid <= seatCount; uid++ {
+		joined, _, _, err := d.seatPlayer(uid, "old")
+		if err != nil {
+			t.Fatal(err)
+		}
+		original = joined
+	}
+	attack, err := newAttackService(wallWith(t, nil), 0, 0x31)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 下一次摸牌耗尽牌墙，终局必须由离线后的自动出牌触发。
+	attack.game = round{
+		turn: 1, deadline: time.Now().Add(discardPeriod), lastDraw: 5,
+		hands: [seatCount][]byte{{5, 9}, {0x31}, {0x32}, {0x33}},
+	}
+	f := &reclaimFixture{directory: d, table: original, attack: attack, settled: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := gsr.Config{Logging: logging.Config{Directory: t.TempDir()}, Cluster: gsr.ClusterConfig{Nodes: routes}}
+	verified := false
+	err = gsr.Run(ctx, cfg, fixtureMain{onStart: func(ctx context.Context, self gsr.ServiceContext) error {
+		id, err := self.CreateService(ctx, f)
+		if err != nil {
+			return err
+		}
+		if _, err := self.Call(ctx, id, testStartReclaimTableCommand); err != nil {
+			return err
+		}
+		for uid := uint64(1); uid <= seatCount; uid++ {
+			if left, err := self.Call(ctx, id, leaveCommand, uid, "old"); err != nil || left != true {
+				return fmt.Errorf("玩家 %d 离开未确认：%v %v", uid, left, err)
+			}
+		}
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			value, err := self.Call(ctx, original.service, tableSnapshotCommand, 0)
+			if err != nil {
+				return err
+			}
+			view := value.(tableView)
+			if view.Trustees != [seatCount]bool{true, true, true, true} {
+				return fmt.Errorf("四个离线座位未进入托管：%v", view.Trustees)
+			}
+			if view.Finished {
+				if view.RoundEnd["kind"] != "draw" || !slices.Equal(view.Out[0], []byte{5}) {
+					return fmt.Errorf("未由托管出牌推进至流局：%+v", view)
+				}
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		result, err := self.Call(ctx, id, joinCommand, uint64(1), "new", "access-01", "agent")
+		if err != nil {
+			return err
+		}
+		scene := result.(map[string]any)
+		if scene["table_name"] != original.name || scene["phase"] != "finished" || len(scene["players"].([]any)) != seatCount {
+			return fmt.Errorf("全员离线后丢失原桌成员：%v", scene)
+		}
+		verified = true
+		self.Exit()
+		cancel()
+		return nil
+	}})
+	if !verified || (err != nil && !errors.Is(err, context.Canceled)) {
+		t.Fatalf("全员离线联调未通过：%v", err)
+	}
 }
 
 // TestSettledTableClosesAfterRejoinAndLeave 保护在线玩家收到本人回执、离线玩家重登恢复及空桌退出。
