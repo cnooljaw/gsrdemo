@@ -169,10 +169,12 @@ func TestTrusteeActsOnItsOwnTurn(t *testing.T) {
 	}
 }
 
-// TestRedealResetsTrustee 保护无人叫地主重新发牌时按参考规则清除托管。
-func TestRedealResetsTrustee(t *testing.T) {
+// TestRedealKeepsOfflineTrustee 保护重发牌只清在线托管，离线玩家继续由服务端代打。
+func TestRedealKeepsOfflineTrustee(t *testing.T) {
 	game, _ := testBidding(t)
 	game.Players[0].Trustee = true
+	game.Players[0].AccessNode, game.Players[0].AgentName = "access", "agent"
+	game.Players[1].Trustee = true
 	for range 3 {
 		if err := game.applyBid(game.Players[game.Seat].UserID, game.Turn, false, time.Now()); err != nil {
 			t.Fatal(err)
@@ -181,9 +183,7 @@ func TestRedealResetsTrustee(t *testing.T) {
 	if game.Redeals != 1 || game.Phase != "calling" {
 		t.Fatal("无人叫地主没有重发")
 	}
-	for _, player := range game.Players {
-		if player.Trustee {
-			t.Fatal("重发后仍保留托管")
-		}
+	if game.Players[0].Trustee || !game.Players[1].Trustee || game.Players[2].Trustee {
+		t.Fatal("重发后在线或离线托管状态不正确")
 	}
 }

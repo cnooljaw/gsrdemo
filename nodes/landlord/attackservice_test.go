@@ -102,14 +102,20 @@ func detachedTable(t *testing.T) (*attackService, *tableCleanupContext) {
 	return service, self
 }
 
-// TestDetachedPlayerRequiresJoinToAct 保护保留手牌的离桌玩家须重新 Join 才能操作。
+// TestDetachedPlayerRequiresJoinToAct 保护离桌立即托管、旧连接失去操作权和重复离开幂等。
 func TestDetachedPlayerRequiresJoinToAct(t *testing.T) {
 	service, directory := occupiedLandlordTable()
 	self := &tableCleanupContext{directory: directory}
 	service.game.Phase = "playing"
 	service.game.Players[0].Hand = []int64{3, 4}
+	service.game.startTurn(time.Now())
+	manualDeadline := service.game.Deadline
 	if left, err := service.handleLeave(self, 1, "login"); err != nil || !left {
 		t.Fatalf("离开失败：%v %v", left, err)
+	}
+	autoAt, revision := service.game.AutoAt, service.revision
+	if !service.game.Players[0].Trustee || autoAt.IsZero() || !autoAt.Before(manualDeadline) || revision == 0 || self.releaseCalls != 0 {
+		t.Fatal("离桌应立即托管并保留原座位")
 	}
 	if ok, err := service.handlePlay(self, 1, "login", service.game.Turn, []any{int64(3)}); ok || !errors.Is(err, errLandlordStale) {
 		t.Fatalf("离桌后仍可出牌：%v %v", ok, err)
@@ -123,11 +129,8 @@ func TestDetachedPlayerRequiresJoinToAct(t *testing.T) {
 	if left, err := service.handleLeave(self, 1, "login"); err != nil || !left {
 		t.Fatalf("离桌后重试失败：%v %v", left, err)
 	}
-	if err := service.game.join(1, "new-login", "access", "new-agent", "new-member"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.handleSnapshot(self, 1, "new-login"); err != nil || len(service.game.Players[0].Hand) != 2 {
-		t.Fatalf("重登未恢复原手牌及操作权限：%v", err)
+	if service.game.AutoAt != autoAt || service.revision != revision {
+		t.Fatal("重复离开刷新了托管时间或重复推送事件")
 	}
 }
 

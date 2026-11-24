@@ -657,9 +657,22 @@ func TestAttackRejoinAndPulse(t *testing.T) {
 	initialTurn := first["turn"].(uint64)
 	initialSeat := first["turn_seat"].(int64)
 	own := landlordTestValue(t, routes, "landlord", name, landlordattack.RoomSnapshotCommand, uint64(1), "login").(map[string]any)
+	seat := int(own["seat"].(int64))
+	isTrustee := func(view map[string]any) bool {
+		return view["players"].([]any)[seat].(map[string]any)["trustee"] == true
+	}
+	if landlordTestValue(t, routes, "landlord", name, landlordattack.RoomTrusteeCommand, uint64(1), "login", true) != true {
+		t.Fatal("在线玩家未能开启托管")
+	}
+	if repeated := joinLandlordTest(t, routes, 1, "login"); !isTrustee(repeated) {
+		t.Fatal("同一连接重复入桌清除了托管")
+	}
+	if landlordTestValue(t, routes, "landlord", name, landlordattack.RoomLeaveCommand, uint64(1), "login") != true {
+		t.Fatal("局中离开未确认")
+	}
 	rejoined := joinLandlordTest(t, routes, 1, "new-login")
-	if rejoined["room_name"] != name || !reflect.DeepEqual(own["hand"], rejoined["hand"]) {
-		t.Fatal("重连未保留原桌和手牌")
+	if rejoined["room_name"] != name || !reflect.DeepEqual(own["hand"], rejoined["hand"]) || isTrustee(rejoined) {
+		t.Fatal("重连未保留原桌、手牌或未解除托管")
 	}
 	if _, err := landlordTestRPC(t, routes, "landlord", name, landlordattack.RoomLeaveCommand, uint64(1), "login"); err == nil {
 		t.Fatal("旧身份仍可离开新成员")

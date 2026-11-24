@@ -73,6 +73,12 @@ func (service *attackService) pushBid(self gsr.ServiceContext, before attackGame
 	})
 	if redealt {
 		service.pushDeal(self)
+		// 客户端应用发牌时清除托管，接着同步仍在托管的离线座位。
+		for _, player := range game.Players {
+			if player.Trustee {
+				service.pushTrustee(self, player.UserID, true)
+			}
+		}
 	}
 }
 

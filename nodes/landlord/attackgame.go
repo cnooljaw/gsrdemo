@@ -47,7 +47,10 @@ func newAttackGame(name string) attackGame {
 func (game *attackGame) deal(deck []int64, first int, now time.Time) {
 	for i := range game.Players {
 		game.Players[i].Hand = slices.Clone(deck[i*17 : (i+1)*17])
-		game.Players[i].Trustee = false
+		// 重发只清除在线玩家的托管。离线玩家仍由服务器操作。
+		if game.Players[i].AccessNode != "" {
+			game.Players[i].Trustee = false
+		}
 		sortHand(game.Players[i].Hand)
 	}
 	game.Bottom = slices.Clone(deck[51:])

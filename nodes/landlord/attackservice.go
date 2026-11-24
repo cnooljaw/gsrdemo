@@ -252,11 +252,15 @@ func (service *attackService) handleJoin(self gsr.CommandContext, uid uint64, lo
 			return nil, err
 		}
 	}
+	_, currentLoginErr := service.game.member(uid, login)
 	if err := service.game.join(uid, login, node, agent, membership); err != nil {
 		return nil, err
 	}
 	seat, _ := service.game.member(uid, login)
 	service.pushSeat(self, uid, seat, true, service.game.Players[seat].Ready)
+	if currentLoginErr != nil {
+		service.setSeatTrustee(self, seat, false)
+	}
 	return service.snapshotFor(uid), nil
 }
 
@@ -318,7 +322,11 @@ func (service *attackService) handleLeave(self gsr.CommandContext, uid uint64, l
 	if player.Ready && service.game.Phase == "waiting" {
 		service.pushSeat(self, uid, seat, true, false)
 	}
-	if (service.game.Phase != "waiting" && service.game.Phase != "finished") || service.settlement.pending() {
+	if service.game.Phase != "waiting" && service.game.Phase != "finished" {
+		service.setSeatTrustee(self, seat, true)
+		return true, nil
+	}
+	if service.settlement.pending() {
 		return true, nil
 	}
 	released, err := service.releaseRoute(self, player)
@@ -409,11 +417,16 @@ func (service *attackService) handleTrustee(self gsr.CommandContext, uid uint64,
 	if service.game.Phase != "calling" && service.game.Phase != "robbing" && service.game.Phase != "playing" {
 		return false, errLandlordBusy
 	}
-	if service.game.Players[seat].Trustee != enabled {
-		service.game.setTrustee(seat, enabled, time.Now())
-		service.pushTrustee(self, uid, enabled)
-	}
+	service.setSeatTrustee(self, seat, enabled)
 	return true, nil
+}
+
+func (service *attackService) setSeatTrustee(self gsr.ServiceContext, seat int, enabled bool) {
+	player := service.game.Players[seat]
+	if player.Trustee != enabled {
+		service.game.setTrustee(seat, enabled, time.Now())
+		service.pushTrustee(self, player.UserID, enabled)
+	}
 }
 
 func (service *attackService) handleSnapshot(_ gsr.CommandContext, uid uint64, login string) (map[string]any, error) {
