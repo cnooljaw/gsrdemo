@@ -237,7 +237,9 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
   -run '^TestAccess(ThreeClientsLiveMySQL|TwoNodesReconnectLiveMySQL|LandlordThreeClientsLiveMySQL|FourDhmjClientsLiveMySQL|DhmjSettlementOutageLiveMySQL|CLITargetRefusalAndUnknownResult|CLITokenFileAuthentication)$' -v -timeout=5m
 ```
 
-用例创建并清理自己的随机测试账号和钱包，只启动和回收自己的节点与 Redis 进程。双接入用例覆盖跨接入故障恢复、原 HitID 唯一入账、Redis 批次恢复、余额校正，以及 Online 中断隔离和重启后显式重登恢复。斗地主用例验证三客户端叫抢出牌、三人唯一结算、结算服中断重试及地主节点重启补交。麻将另有结算服停机期间重登的用例，核对原请求的唯一流水、四人钱包及 Redis 待记录清理。测试覆盖入口与恢复边界见[设计文档](docs/DESIGN.md#9-验证依据与设计取舍)。
+只跑某款游戏时，可替换上面的 `-run`。斗地主使用 `'^TestAccessLandlordThreeClientsLiveMySQL$'`，包含三人全离线后由托管打完并结算的场景。麻将使用 `'^TestAccess(FourDhmjClients|DhmjSettlementOutage)LiveMySQL$'`。
+
+用例创建并清理自己的随机测试账号和钱包，只启动和回收自己的节点与 Redis 进程。各用例的覆盖范围见[设计文档](docs/DESIGN.md#91-行为覆盖入口)。
 
 ## 源码与文档
 
