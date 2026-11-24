@@ -103,8 +103,8 @@ func landlordDemoRank(card int64) int64 {
 	return rank
 }
 
-// playAccessLandlordRound 通过真实 MAC 客户端跑完一局；结算中断前先完成准入和叫抢。
-func playAccessLandlordRound(t *testing.T, gates []string, players []accessDemoPlayer, settlement accessNodeProcess) ([]*accessClient, *demopb.LandlordSnapshot) {
+// playAccessLandlordRound 完成叫抢后停止结算服，再由客户端出完牌或在最后一次领出前全部断开。
+func playAccessLandlordRound(t *testing.T, gates []string, players []accessDemoPlayer, settlement accessNodeProcess, allOffline bool) ([]*accessClient, *demopb.LandlordSnapshot) {
 	t.Helper()
 	clients := make([]*accessClient, 3)
 	bySeat := map[int64]*accessClient{}
@@ -154,14 +154,34 @@ func playAccessLandlordRound(t *testing.T, gates []string, players []accessDemoP
 	for actions := 0; view.Phase == "playing" && actions < 400; actions++ {
 		client := bySeat[view.TurnSeat]
 		view = landlordProcessView(t, client, demopb.MsgId_C2S_LANDLORD_SNAPSHOT, &demopb.LandlordSnapshotRequest{})
+		if allOffline && len(view.LastCards) == 0 && len(view.Hand) == 1 {
+			for _, member := range clients {
+				if member != client {
+					if err := member.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return nil, view
+		}
 		cards := []int64{}
 		for _, card := range view.Hand {
+			// 全离线用例先用单张领出和不出，将领出者留到最后一张。
+			if allOffline && len(view.LastCards) != 0 {
+				break
+			}
 			if len(view.LastCards) == 0 || len(view.LastCards) == 1 && landlordDemoRank(card) > landlordDemoRank(view.LastCards[0]) {
 				cards = []int64{card}
 				break
 			}
 		}
 		view = landlordProcessView(t, client, demopb.MsgId_C2S_LANDLORD_PLAY, &demopb.LandlordPlayRequest{Turn: view.Turn, Cards: cards})
+	}
+	if allOffline {
+		t.Fatal("未能在最后一次领出前断开全部客户端")
 	}
 	if view.Phase != "finished" || view.GetSettlement().GetStatus() != "pending" {
 		t.Fatalf("round did not reach pending settlement: %v", view)
@@ -174,13 +194,14 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 	ids *[]string, landlord, settlement accessNodeProcess, redisAddress string) {
 	t.Helper()
 	for _, scenario := range []struct {
-		name                                           string
-		restartLandlord, alreadyCommitted, capBalances bool
+		name                                                       string
+		restartLandlord, alreadyCommitted, capBalances, allOffline bool
 	}{
-		{"结算节点中断后恢复", false, false, false},
-		{"地主节点重启补交", true, false, false},
-		{"已入账未确认后地主重启", true, true, false},
-		{"余额不足封顶并向客户端返回实际扣返", false, false, true},
+		{name: "结算节点中断后恢复"},
+		{name: "地主节点重启补交", restartLandlord: true},
+		{name: "已入账未确认后地主重启", restartLandlord: true, alreadyCommitted: true},
+		{name: "三人离线后托管打完最后一手", allOffline: true},
+		{name: "余额不足封顶并向客户端返回实际扣返", capBalances: true},
 	} {
 		before := map[uint64]struct {
 			amount  int64
@@ -196,12 +217,15 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 			}
 			before[p.id] = b
 		}
-		clients, view := playAccessLandlordRound(t, gates, players, settlement)
-		operationID := view.Settlement.OperationId
-		*ids = append(*ids, operationID)
+		clients, view := playAccessLandlordRound(t, gates, players, settlement, scenario.allOffline)
+		operationID := view.GetSettlement().GetOperationId()
 		var saved landlordSavedResult
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
+			if operationID == "" && scenario.allOffline &&
+				string(accessProcessRedis(t, ctx, redisAddress, "HLEN", accessRedisKey)) == "1" {
+				operationID = string(accessProcessRedis(t, ctx, redisAddress, "HKEYS", accessRedisKey))
+			}
 			data := accessProcessRedis(t, ctx, redisAddress, "HGET", accessRedisKey, operationID)
 			if len(data) > 0 {
 				if err := json.Unmarshal(data, &saved); err != nil {
@@ -211,8 +235,14 @@ func verifyLandlordRecovery(t *testing.T, ctx context.Context, gates []string, p
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+		if operationID != "" {
+			*ids = append(*ids, operationID)
+		}
 		if saved.ID != operationID || len(saved.Changes) != 3 || saved.Multiplier != 8 {
 			t.Fatalf("pending result not saved: %+v", saved)
+		}
+		if scenario.allOffline && saved.Winner != int(view.GetTurnSeat()) {
+			t.Fatalf("离线领出者未由托管打完最后一张：%+v", saved)
 		}
 		if scenario.capBalances {
 			// 等结算服停止且原请求已保存后，模拟其他业务扣款，构造局末余额不足。

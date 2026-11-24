@@ -345,7 +345,7 @@ Redis 与 MySQL 之间没有跨库事务。恢复依赖 Redis 中已经保存的
 | 定海麻将运行时重启后，从真实 Redis 读取原请求，向模拟结算服务原样补交并清理待记录 | [麻将启动恢复用例](../nodes/dhmj/roundsettlement_test.go) |
 | 结算服停机期间重登原麻将桌，恢复后由原牌桌重试，核对 MySQL 唯一入账、四人钱包和 Redis 清理 | [结算服停机进程验收](../nodes/access/access_dhmj_recovery_test.go) |
 | 事务、全局幂等、锁冲突与读写 Call 池并行 | [SQL 用例](../nodes/settlement/settlement_mysql_test.go)、[Call 池用例](../nodes/settlement/settlement_cluster_test.go)、[真实并发用例](../nodes/settlement/settlement_concurrency_live_test.go) |
-| 真实客户端、跨接入、结算中断和已保存请求恢复 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[地主恢复用例](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
+| 真实客户端、跨接入、结算中断和已保存请求恢复，含斗地主全员离线托管至入账 | [地鼠进程用例](../nodes/access/access_process_test.go)、[跨接入用例](../nodes/access/access_reconnect_test.go)、[斗地主托管与恢复](../nodes/access/access_landlord_recovery_test.go)、[结算恢复用例](../nodes/access/access_settlement_test.go) |
 
 ### 9.2 并行与容量取舍
 
