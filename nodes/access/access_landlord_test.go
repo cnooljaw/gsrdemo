@@ -11,7 +11,7 @@ import (
 
 // TestAccessLandlordThreeClientsLiveMySQL 保护三个真实 TS 客户端跨接入随机同桌，完成叫抢、出牌及一次原子三人入账。
 func TestAccessLandlordThreeClientsLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 3, 2, "landlord", false)
+	runAccessClientsLiveMySQL(t, 3, 2, "landlord", dhmjOutageNone)
 }
 
 type landlordCLIEvent struct {

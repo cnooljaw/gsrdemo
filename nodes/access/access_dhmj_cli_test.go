@@ -11,7 +11,7 @@ import (
 
 // TestAccessFourDhmjClientsLiveMySQL 保护四个真实 CLI 从发牌到本人结算，核对实际钱包和唯一账务。
 func TestAccessFourDhmjClientsLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 4, 1, "dhmj", false)
+	runAccessClientsLiveMySQL(t, 4, 1, "dhmj", dhmjOutageNone)
 }
 
 func verifyDhmjCLI(t *testing.T, ctx context.Context, players []accessDemoPlayer, clientErrors []error, db *sql.DB, operations *[]string) {

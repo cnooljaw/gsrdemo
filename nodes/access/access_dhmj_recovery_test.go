@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,9 +12,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// TestAccessDhmjSettlementOutageLiveMySQL 保护结算服中断期间重登，恢复后按同一 OperationID 向四人交付一次入账。
+type dhmjOutageMode uint8
+
+const (
+	dhmjOutageNone dhmjOutageMode = iota
+	dhmjOutageRejoin
+	dhmjOutageAllOffline
+)
+
+// TestAccessDhmjSettlementOutageLiveMySQL 保护结算服中断期间重登与全员离线托管，两者均按原 OperationID 唯一入账。
 func TestAccessDhmjSettlementOutageLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 4, 1, "dhmj", true)
+	t.Run("停机期间重登", func(t *testing.T) {
+		runAccessClientsLiveMySQL(t, 4, 1, "dhmj", dhmjOutageRejoin)
+	})
+	t.Run("全员离线托管结算", func(t *testing.T) {
+		runAccessClientsLiveMySQL(t, 4, 1, "dhmj", dhmjOutageAllOffline)
+	})
 }
 
 func joinDhmjProcessTable(t *testing.T, gate string, player accessDemoPlayer) (*accessClient, *demopb.DhmjSnapshot) {
@@ -106,7 +120,7 @@ func finishDhmjWithSettlementOffline(t *testing.T, ctx context.Context, seats [4
 }
 
 func verifyDhmjSettlementOutage(t *testing.T, ctx context.Context, gate string, players []accessDemoPlayer, db *sql.DB,
-	ids *[]string, settlement accessNodeProcess, redisAddress string) {
+	ids *[]string, settlement accessNodeProcess, redisAddress string, mode dhmjOutageMode) {
 	t.Helper()
 	var seats [4]*accessClient
 	var members [4]accessDemoPlayer
@@ -128,13 +142,31 @@ func verifyDhmjSettlementOutage(t *testing.T, ctx context.Context, gate string, 
 		t.Fatal(err)
 	}
 	waitAccessProcessListenerClosed(t, settlement.address)
-	finished := finishDhmjWithSettlementOffline(t, ctx, seats)
-	if finished.GetRoundEnd() == nil {
-		t.Fatal("结算服停机影响了麻将裁决")
+	var finished *demopb.DhmjSnapshot
+	if mode == dhmjOutageAllOffline {
+		view := dhmjProcessSnapshot(t, seats[0])
+		if view.GetPhase() != "playing" {
+			t.Fatalf("全员断开前牌局未开始：%v", view)
+		}
+		for _, client := range seats {
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	} else {
+		finished = finishDhmjWithSettlementOffline(t, ctx, seats)
+		if finished.GetRoundEnd() == nil {
+			t.Fatal("结算服停机影响了麻将裁决")
+		}
 	}
 
 	var originalID string
 	deadline := time.Now().Add(5 * time.Second)
+	pollInterval := 20 * time.Millisecond
+	if mode == dhmjOutageAllOffline {
+		deadline = time.Now().Add(time.Minute)
+		pollInterval = 250 * time.Millisecond
+	}
 	for originalID == "" {
 		originalID = string(accessProcessRedis(t, ctx, redisAddress, "HKEYS", accessRedisKey))
 		if originalID != "" {
@@ -143,7 +175,7 @@ func verifyDhmjSettlementOutage(t *testing.T, ctx context.Context, gate string, 
 		if time.Now().After(deadline) {
 			t.Fatal("结算服离线时未保存原请求")
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 	if count := accessProcessRedis(t, ctx, redisAddress, "HLEN", accessRedisKey); string(count) != "1" {
 		t.Fatalf("预期只有一笔麻将待结算，实际 %s", count)
@@ -155,24 +187,49 @@ func verifyDhmjSettlementOutage(t *testing.T, ctx context.Context, gate string, 
 		t.Fatalf("结算服离线时已有账务记录：%d %v", operations, err)
 	}
 
-	// 同一账号换连接。停机期间只恢复牌桌、终局和待确认状态。
-	const seat = 0
-	if err := seats[seat].Close(); err != nil {
-		t.Fatal(err)
-	}
-	rejoined, restored := joinDhmjProcessTable(t, gate, members[seat])
-	seats[seat] = rejoined
-	if restored.GetTableName() != table || restored.GetSeat() != seat || !proto.Equal(finished.GetRoundEnd(), restored.GetRoundEnd()) ||
-		restored.GetSettlement().GetStatus() != "pending" || restored.GetSettlement().GetOperationId() != originalID {
-		t.Fatalf("重登没有恢复原局待结算：%v", restored)
+	if mode == dhmjOutageRejoin {
+		// 同一账号换连接。停机期间只恢复牌桌、终局和待确认状态。
+		const seat = 0
+		if err := seats[seat].Close(); err != nil {
+			t.Fatal(err)
+		}
+		rejoined, restored := joinDhmjProcessTable(t, gate, members[seat])
+		seats[seat] = rejoined
+		if restored.GetTableName() != table || restored.GetSeat() != seat || !proto.Equal(finished.GetRoundEnd(), restored.GetRoundEnd()) ||
+			restored.GetSettlement().GetStatus() != "pending" || restored.GetSettlement().GetOperationId() != originalID {
+			t.Fatalf("重登没有恢复原局待结算：%v", restored)
+		}
 	}
 	if again := accessProcessRedis(t, ctx, redisAddress, "HGET", accessRedisKey, originalID); !bytes.Equal(saved, again) || len(saved) == 0 {
-		t.Fatal("重登改变了原结算请求")
+		t.Fatal("恢复前的原结算请求丢失或变化")
 	}
 
 	startAccessProcess(t, settlement.binary, []string{"-config", settlement.config}, settlement.address)
+	accessWaitCommitted(t, ctx, db, originalID)
+	deadline = time.Now().Add(5 * time.Second)
+	for string(accessProcessRedis(t, ctx, redisAddress, "HLEN", accessRedisKey)) != "0" {
+		if time.Now().After(deadline) {
+			t.Fatal("确认入账后 Redis 待记录未清理")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	receipts := make(map[uint64]*demopb.DhmjSettlement, len(players))
 	for seat, client := range seats {
+		if mode == dhmjOutageAllOffline {
+			rejoined, restored := joinDhmjProcessTable(t, gate, members[seat])
+			seats[seat] = rejoined
+			item := restored.GetSettlement()
+			if restored.GetTableName() != table || restored.GetSeat() != int64(seat) || restored.GetPhase() != "finished" ||
+				restored.GetRoundEnd() == nil || item.GetOperationId() != originalID || item.GetStatus() != "committed" ||
+				item.GetUserId() != members[seat].id {
+				t.Fatalf("全员离线入账后未恢复原桌和本人结果：%v", restored)
+			}
+			if seat == 0 && (len(restored.GetTrustees()) != len(seats) || slices.Contains(restored.GetTrustees(), false)) {
+				t.Fatalf("终局缺少四人托管状态：%v", restored.GetTrustees())
+			}
+			receipts[item.GetUserId()] = item
+			continue
+		}
 		for {
 			envelope := readAccessEnvelope(t, client)
 			if envelope.MsgId != uint32(demopb.MsgId_S2C_DHMJ_SETTLEMENT_PUSH) {
@@ -207,13 +264,6 @@ func verifyDhmjSettlementOutage(t *testing.T, ctx context.Context, gate string, 
 		Scan(&operations, &recordedDebit, &recordedCredit)
 	if err != nil || operations != 1 || paid != received || recordedDebit != paid+fee || recordedCredit != received {
 		t.Fatalf("原操作入账不唯一或实际扣返不符：%d %d/%d %v", operations, recordedDebit, recordedCredit, err)
-	}
-	deadline = time.Now().Add(5 * time.Second)
-	for string(accessProcessRedis(t, ctx, redisAddress, "HLEN", accessRedisKey)) != "0" {
-		if time.Now().After(deadline) {
-			t.Fatal("确认入账后 Redis 待记录未清理")
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	for _, client := range seats {
 		dhmjProcessAction(t, client, demopb.MsgId_C2S_DHMJ_LEAVE, &demopb.DhmjLeaveRequest{})

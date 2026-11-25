@@ -22,7 +22,7 @@ import (
 
 // TestAccessTwoNodesReconnectLiveMySQL 保护双接入重连、依赖节点故障隔离及结算恢复后的唯一入账。
 func TestAccessTwoNodesReconnectLiveMySQL(t *testing.T) {
-	runAccessClientsLiveMySQL(t, 3, 2, "mole", false)
+	runAccessClientsLiveMySQL(t, 3, 2, "mole", dhmjOutageNone)
 }
 
 func accessProcessResponse(t *testing.T, client *accessClient, id, expected demopb.MsgId, request, response proto.Message) {
