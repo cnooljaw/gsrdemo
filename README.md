@@ -239,6 +239,8 @@ GOWORK=off GSRDEMO_ACCESS_PROCESSES=1 go -C nodes/access test -count=1 \
 
 只跑某款游戏时，可替换上面的 `-run`。斗地主使用 `'^TestAccessLandlordThreeClientsLiveMySQL$'`，包含三人全离线后由托管打完并结算的场景。麻将使用 `'^TestAccess(FourDhmjClients|DhmjSettlementOutage)LiveMySQL$'`。
 
+只复跑麻将四人全离线到入账时，使用 `-run '^TestAccessDhmjSettlementOutageLiveMySQL$/^全员离线托管结算$'`。
+
 用例创建并清理自己的随机测试账号和钱包，只启动和回收自己的节点与 Redis 进程。各用例的覆盖范围见[设计文档](docs/DESIGN.md#91-行为覆盖入口)。
 
 ## 源码与文档
